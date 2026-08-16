@@ -134,7 +134,11 @@ fun ChatScreen(
             }
         }
         loading = false
-        if (scrollToEnd && messages.isNotEmpty()) {
+        // Прокручиваем вниз только если пользователь и так был у конца ленты:
+        // иначе новое сообщение выдёргивало бы его из середины истории.
+        val atBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()
+            ?.index?.let { it >= listState.layoutInfo.totalItemsCount - 3 } ?: true
+        if (scrollToEnd && messages.isNotEmpty() && atBottom) {
             listState.scrollToItem(messages.lastIndex)
         }
     }

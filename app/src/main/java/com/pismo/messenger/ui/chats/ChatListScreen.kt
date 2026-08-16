@@ -95,11 +95,27 @@ fun ChatListScreen(
     LaunchedEffect(Unit) { reload() }
 
     // Опрос как на ПК (2.5 с) + мгновенное обновление по событию ws-сервера.
+    //
+    // Полный список диалогов тянет тяжёлый запрос с подзапросами на каждого
+    // пользователя, поэтому по таймеру спрашиваем только дешёвую сводку
+    // непрочитанного и максимальные id по группам — и перезагружаем список
+    // целиком, лишь когда сводка изменилась. ПК устроен так же: PollTick
+    // обновляет бейджи, а не пересобирает сайдбар каждый тик.
+    var lastSignature by remember { mutableStateOf("") }
     LaunchedEffect(Unit) {
         while (isActive) {
             delay(2500)
             runCatching { PresenceRepository.heartbeat(active = true) }
-            reload()
+            runCatching {
+                val unread = ChatRepository.unreadBySender()
+                val groupMax = ChatRepository.groupMaxIncoming()
+                val signature = unread.toSortedMap().toString() +
+                        groupMax.mapValues { it.value.first }.toSortedMap().toString()
+                if (signature != lastSignature) {
+                    lastSignature = signature
+                    reload()
+                }
+            }
         }
     }
 
