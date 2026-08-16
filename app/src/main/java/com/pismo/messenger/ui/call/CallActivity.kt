@@ -62,6 +62,7 @@ import com.pismo.messenger.data.repo.CallRepository
 import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.components.LetterAvatar
+import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.theme.PismoColors
 import com.pismo.messenger.ui.theme.PismoTheme
 import io.livekit.android.renderer.TextureViewRenderer
@@ -316,7 +317,7 @@ private fun ParticipantTile(engine: CallEngine, p: CallEngine.ParticipantState) 
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
-            LetterAvatar(p.userId, p.name, 64.dp)
+            UserAvatar(p.userId, p.name, 64.dp)
         }
 
         Row(

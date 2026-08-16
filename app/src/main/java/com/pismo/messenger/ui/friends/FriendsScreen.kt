@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.sp
 import com.pismo.messenger.data.model.FriendEntry
 import com.pismo.messenger.data.repo.FriendsRepository
 import com.pismo.messenger.ui.components.LetterAvatar
+import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.components.UnreadBadge
 import com.pismo.messenger.ui.login.PismoField
 import com.pismo.messenger.ui.theme.PismoColors
@@ -214,7 +215,7 @@ private fun PersonRow(f: FriendEntry, actions: @Composable RowScope.() -> Unit) 
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        LetterAvatar(f.userId, f.name, 40.dp)
+        UserAvatar(f.userId, f.name, 40.dp)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(f.name, color = PismoColors.TextPrimary, fontSize = 15.sp)

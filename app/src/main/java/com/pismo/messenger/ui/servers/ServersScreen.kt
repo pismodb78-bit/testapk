@@ -55,6 +55,7 @@ import com.pismo.messenger.data.model.VoiceParticipant
 import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.ui.components.LetterAvatar
+import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.components.Pill
 import com.pismo.messenger.ui.components.UnreadBadge
 import com.pismo.messenger.ui.login.PismoField
@@ -453,7 +454,7 @@ private fun VoiceChannelRow(
                 Modifier.padding(start = 44.dp, end = 14.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                LetterAvatar(p.userId, p.name, 22.dp)
+                UserAvatar(p.userId, p.name, 22.dp)
                 Spacer(Modifier.width(8.dp))
                 Text(
                     p.name,

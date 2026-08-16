@@ -46,6 +46,7 @@ import com.pismo.messenger.data.model.ServerPermissions
 import com.pismo.messenger.data.model.ServerRole
 import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.ui.components.LetterAvatar
+import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.components.Pill
 import com.pismo.messenger.ui.login.PismoField
 import com.pismo.messenger.ui.theme.PismoColors
@@ -189,7 +190,7 @@ fun ServerMembersScreen(serverId: Int, onBack: () -> Unit) {
                             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            LetterAvatar(b.userId, b.name, 36.dp)
+                            UserAvatar(b.userId, b.name, 36.dp)
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(b.name, color = PismoColors.TextPrimary, fontSize = 14.sp)
@@ -259,7 +260,7 @@ private fun MemberRow(
                 .padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            LetterAvatar(m.userId, m.name, 38.dp)
+            UserAvatar(m.userId, m.name, 38.dp)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(

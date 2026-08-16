@@ -35,6 +35,7 @@ import com.pismo.messenger.data.model.GroupMember
 import com.pismo.messenger.data.model.UserBrief
 import com.pismo.messenger.data.repo.GroupRepository
 import com.pismo.messenger.ui.components.LetterAvatar
+import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.login.PismoField
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.launch
@@ -171,7 +172,7 @@ fun GroupMembersDialog(
                             Modifier.fillMaxWidth().padding(vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            LetterAvatar(m.userId, m.name, 34.dp)
+                            UserAvatar(m.userId, m.name, 34.dp)
                             Spacer(Modifier.width(10.dp))
                             Text(
                                 m.name + if (m.isAdmin) "  ⭐" else "",
@@ -254,7 +255,7 @@ private fun PickRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Checkbox(checked = checked, onCheckedChange = { onToggle() })
-        LetterAvatar(id, name, 30.dp)
+        UserAvatar(id, name, 30.dp)
         Spacer(Modifier.width(8.dp))
         Column {
             Text(name, color = PismoColors.TextPrimary, fontSize = 14.sp)

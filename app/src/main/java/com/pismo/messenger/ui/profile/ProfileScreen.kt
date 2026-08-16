@@ -1,5 +1,14 @@
 package com.pismo.messenger.ui.profile
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.key
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -41,6 +50,7 @@ import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.data.repo.ProfileRepository
 import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.components.LetterAvatar
+import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.login.PismoField
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.launch
@@ -68,6 +78,39 @@ fun ProfileScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit) {
     var status by remember { mutableStateOf("") }
     var isError by remember { mutableStateOf(false) }
 
+    fun report(message: String, error: Boolean) {
+        status = message
+        isError = error
+    }
+
+    var avatarVersion by remember { mutableStateOf(0) }
+    val context = LocalContext.current
+
+    val avatarPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val data = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                }.getOrNull()
+            }
+            when {
+                data == null -> report("Не удалось прочитать изображение.", true)
+                // Аватар лежит в БД как BLOB и тянется при каждом показе списка,
+                // поэтому крупные файлы бьют по скорости всем участникам.
+                data.size > 2 * 1024 * 1024 ->
+                    report("Файл больше 2 МБ — выберите изображение поменьше.", true)
+                ProfileRepository.setAvatar(data) -> {
+                    avatarVersion++
+                    report("Аватар обновлён.", false)
+                }
+                else -> report("Не удалось сохранить аватар.", true)
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
         runCatching {
             val p = ProfileRepository.load(UserSession.effectiveId)
@@ -81,11 +124,6 @@ fun ProfileScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit) {
         }
     }
 
-    fun report(message: String, error: Boolean) {
-        status = message
-        isError = error
-    }
-
     Column(
         Modifier
             .fillMaxSize()
@@ -94,7 +132,11 @@ fun ProfileScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit) {
             .padding(16.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            LetterAvatar(UserSession.effectiveId, UserSession.effectiveName, 64.dp)
+            Box(Modifier.clickable { avatarPicker.launch("image/*") }) {
+                key(avatarVersion) {
+                    UserAvatar(UserSession.effectiveId, UserSession.effectiveName, 64.dp)
+                }
+            }
             Spacer(Modifier.height(12.dp))
             Column(Modifier.padding(start = 14.dp)) {
                 Text(
@@ -110,6 +152,21 @@ fun ProfileScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit) {
                         "Режим «войти за пользователя»",
                         color = PismoColors.Yellow, fontSize = 12.sp,
                     )
+                }
+                Row {
+                    TextButton(onClick = { avatarPicker.launch("image/*") }) {
+                        Text("Сменить аватар", color = PismoColors.Cyan, fontSize = 13.sp)
+                    }
+                    TextButton(onClick = {
+                        scope.launch {
+                            if (ProfileRepository.setAvatar(null)) {
+                                avatarVersion++
+                                report("Аватар удалён.", false)
+                            }
+                        }
+                    }) {
+                        Text("Убрать", color = PismoColors.TextMuted, fontSize = 13.sp)
+                    }
                 }
             }
         }

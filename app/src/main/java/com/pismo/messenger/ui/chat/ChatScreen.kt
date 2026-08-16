@@ -80,6 +80,8 @@ import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.components.DateSeparator
 import com.pismo.messenger.ui.components.FileBadge
 import com.pismo.messenger.ui.components.LetterAvatar
+import com.pismo.messenger.ui.components.GroupAvatar
+import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -244,7 +246,8 @@ fun ChatScreen(
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        LetterAvatar(targetId, title, 32.dp)
+                        if (isGroup) GroupAvatar(targetId, title, "#5865F2", 32.dp)
+                        else UserAvatar(targetId, title, 32.dp)
                         Spacer(Modifier.width(10.dp))
                         Text(
                             if (isGroup) "👥 $title" else title,

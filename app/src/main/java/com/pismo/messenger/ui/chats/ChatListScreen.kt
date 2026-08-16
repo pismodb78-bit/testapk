@@ -52,8 +52,11 @@ import com.pismo.messenger.data.model.Conversation
 import com.pismo.messenger.data.model.GroupSummary
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.PresenceRepository
+import com.pismo.messenger.data.repo.ProfileRepository
 import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.components.LetterAvatar
+import com.pismo.messenger.ui.components.GroupAvatar
+import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.group.CreateGroupDialog
 import com.pismo.messenger.ui.group.GroupMembersDialog
 import com.pismo.messenger.ui.components.UnreadBadge
@@ -87,6 +90,8 @@ fun ChatListScreen(
             } else {
                 ChatRepository.loadConversations()
             }
+            // Аватарки списка тянем одним запросом, а не по одной на строку.
+            ProfileRepository.prefetchAvatars(conversations.map { it.userId })
             error = ""
         }.onFailure { error = it.message ?: "ошибка загрузки" }
         loading = false
@@ -273,7 +278,7 @@ private fun ConversationRow(c: Conversation, onClick: () -> Unit, onLongClick: (
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        LetterAvatar(c.userId, c.name, 44.dp)
+        UserAvatar(c.userId, c.name, 44.dp)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -318,7 +323,7 @@ private fun GroupRow(g: GroupSummary, onClick: () -> Unit, onLongClick: () -> Un
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        LetterAvatar(g.id, g.name, 44.dp, color = parseHexColor(g.avatarColorHex))
+        GroupAvatar(g.id, g.name, g.avatarColorHex, 44.dp)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(

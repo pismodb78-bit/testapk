@@ -69,6 +69,38 @@ object ProfileRepository {
         return data
     }
 
+    /**
+     * Пакетная загрузка аватарок одним запросом.
+     *
+     * Без неё список из полусотни диалогов давал бы полсотни отдельных
+     * обращений к удалённой базе — на мобильной сети это секунды ожидания
+     * вместо одного round-trip.
+     */
+    suspend fun prefetchAvatars(userIds: Collection<Int>) {
+        val missing = userIds.distinct().filter { !avatarCache.containsKey(it) }
+        if (missing.isEmpty()) return
+
+        runCatching {
+            Db.use { conn ->
+                conn.createStatement().use { st ->
+                    st.executeQuery(
+                        "SELECT id, avatar_data FROM users WHERE id IN (${missing.joinToString(",")})"
+                    ).use { rs ->
+                        while (rs.next()) {
+                            avatarCache[rs.getInt("id")] = rs.getBytes("avatar_data")
+                        }
+                    }
+                }
+            }
+        }
+        // Тем, у кого колонки нет или строка не вернулась, ставим null —
+        // иначе на каждый кадр отрисовки уходил бы повторный запрос.
+        missing.forEach { avatarCache.putIfAbsent(it, null) }
+    }
+
+    /** Синхронное чтение из памяти — для отрисовки без обращения к БД. */
+    fun cachedAvatar(userId: Int): ByteArray? = avatarCache[userId]
+
     suspend fun setAvatar(data: ByteArray?): Boolean {
         val id = UserSession.effectiveId
         val ok = runCatching {

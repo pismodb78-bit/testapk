@@ -39,6 +39,7 @@ import com.pismo.messenger.data.model.CallSessionRow
 import com.pismo.messenger.data.repo.CallRepository
 import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.components.LetterAvatar
+import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -98,7 +99,7 @@ fun IncomingCallWatcher() {
         title = {
             Column(horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth()) {
-                LetterAvatar(call.callerId, call.callerName, 72.dp)
+                UserAvatar(call.callerId, call.callerName, 72.dp)
                 Spacer(Modifier.height(12.dp))
                 Text(call.callerName, color = Color.White, fontSize = 20.sp,
                     fontWeight = FontWeight.Bold)
