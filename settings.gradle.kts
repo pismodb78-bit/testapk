@@ -17,6 +17,11 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // Обязателен для звонков: livekit-android зависит от
+        // com.github.davidliu:audioswitch, который публикуется только на
+        // JitPack и версионируется хешем коммита. Без этой строки сборка
+        // падает на «Could not find com.github.davidliu:audioswitch».
+        maven { url = uri("https://jitpack.io") }
     }
 }
 
