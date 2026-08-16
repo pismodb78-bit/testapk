@@ -2,6 +2,7 @@ package com.pismo.messenger.ui.chats
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,7 @@ import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -52,6 +54,8 @@ import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.components.LetterAvatar
+import com.pismo.messenger.ui.group.CreateGroupDialog
+import com.pismo.messenger.ui.group.GroupMembersDialog
 import com.pismo.messenger.ui.components.UnreadBadge
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.delay
@@ -71,6 +75,8 @@ fun ChatListScreen(
     var groups by remember { mutableStateOf<List<GroupSummary>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
+    var showCreateGroup by remember { mutableStateOf(false) }
+    var manageGroup by remember { mutableStateOf<GroupSummary?>(null) }
 
     suspend fun reload() {
         runCatching {
@@ -137,6 +143,14 @@ fun ChatListScreen(
                 ),
             )
         },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { showCreateGroup = true },
+                containerColor = PismoColors.Blurple,
+            ) {
+                Icon(Icons.Default.GroupAdd, "Новая группа", tint = Color.White)
+            }
+        },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             if (loading && conversations.isEmpty() && groups.isEmpty()) {
@@ -160,7 +174,11 @@ fun ChatListScreen(
                     if (groups.isNotEmpty()) {
                         item { SectionHeader("ГРУППЫ") }
                         items(groups, key = { "g${it.id}" }) { g ->
-                            GroupRow(g) { onOpenGroup(g.id, g.name) }
+                            GroupRow(
+                                g = g,
+                                onClick = { onOpenGroup(g.id, g.name) },
+                                onLongClick = { manageGroup = g },
+                            )
                         }
                     }
 
@@ -178,6 +196,29 @@ fun ChatListScreen(
                 }
             }
         }
+    }
+
+    if (showCreateGroup) {
+        CreateGroupDialog(
+            onDismiss = { showCreateGroup = false },
+            onCreated = { id, name ->
+                showCreateGroup = false
+                scope.launch { reload() }
+                onOpenGroup(id, name)
+            },
+        )
+    }
+
+    manageGroup?.let { g ->
+        GroupMembersDialog(
+            groupId = g.id,
+            groupName = g.name,
+            onDismiss = { manageGroup = null },
+            onLeft = {
+                manageGroup = null
+                scope.launch { reload() }
+            },
+        )
     }
 }
 
@@ -236,12 +277,13 @@ private fun ConversationRow(c: Conversation, onClick: () -> Unit) {
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun GroupRow(g: GroupSummary, onClick: () -> Unit) {
+private fun GroupRow(g: GroupSummary, onClick: () -> Unit, onLongClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
