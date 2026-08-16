@@ -114,6 +114,7 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val recorder = remember { WavRecorder(scope) }
     var recording by remember { mutableStateOf(false) }
+    var showCircleRecorder by remember { mutableStateOf(false) }
 
     suspend fun reload(scrollToEnd: Boolean = false) {
         runCatching {
@@ -382,6 +383,10 @@ fun ChatScreen(
                         Icon(Icons.Default.AttachFile, "Прикрепить", tint = PismoColors.TextMuted)
                     }
 
+                    IconButton(onClick = { showCircleRecorder = true }, enabled = !sending) {
+                        Icon(Icons.Default.Videocam, "Видео-кружочек", tint = PismoColors.TextMuted)
+                    }
+
                     TextField(
                         value = input,
                         onValueChange = { input = it },
@@ -444,6 +449,37 @@ fun ChatScreen(
             }
         }
     }
+
+    CircleRecorderHost(
+        visible = showCircleRecorder,
+        onDismiss = { showCircleRecorder = false },
+        onRecorded = { data ->
+            showCircleRecorder = false
+            scope.launch {
+                runCatching {
+                    ChatRepository.sendMessage(
+                        scope = scopeKind,
+                        target = targetId,
+                        text = "",
+                        video = data,
+                        replyToId = replyTo?.id ?: 0,
+                    )
+                    notifyPeers(isGroup, targetId)
+                }
+                replyTo = null
+                reload(scrollToEnd = true)
+            }
+        },
+    )
+}
+
+@Composable
+private fun CircleRecorderHost(
+    visible: Boolean,
+    onDismiss: () -> Unit,
+    onRecorded: (ByteArray) -> Unit,
+) {
+    if (visible) VideoCircleRecorderDialog(onDismiss = onDismiss, onRecorded = onRecorded)
 }
 
 /** Сообщаем собеседнику о новом сообщении — событие ws-сервера, как на ПК. */

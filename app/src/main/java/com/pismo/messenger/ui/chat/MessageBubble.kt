@@ -181,16 +181,7 @@ fun MessageBubble(
                         }
 
                         if (msg.hasVideo) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Default.PlayArrow,
-                                    null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(20.dp),
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text("Видео-кружочек", color = Color.White, fontSize = 14.sp)
-                            }
+                            VideoCirclePlayerBubble(msg.id, scopeKind)
                             Spacer(Modifier.height(6.dp))
                         }
 
