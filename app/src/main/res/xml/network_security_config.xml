@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    ПК-версия ходит в MySQL и на LiveKit без TLS (ws://5.181.23.167:7880),
+    поэтому открытый трафик здесь разрешён намеренно. Если сервер переедет
+    на wss:// и TLS — cleartextTrafficPermitted можно выключить.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

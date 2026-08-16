@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Pismo" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/pismo_bg</item>
+        <item name="android:statusBarColor">@color/pismo_darkest</item>
+        <item name="android:navigationBarColor">@color/pismo_darkest</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
