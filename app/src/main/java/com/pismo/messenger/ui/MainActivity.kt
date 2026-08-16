@@ -18,7 +18,9 @@ import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.chat.ChatScreen
-import com.pismo.messenger.ui.chats.ChatListScreen
+import com.pismo.messenger.ui.home.HomeScreen
+import com.pismo.messenger.ui.servers.ChannelChatScreen
+import com.pismo.messenger.ui.servers.ServerMembersScreen
 import com.pismo.messenger.ui.login.LoginScreen
 import com.pismo.messenger.ui.login.RegisterScreen
 import com.pismo.messenger.ui.settings.SettingsScreen
@@ -71,12 +73,35 @@ class MainActivity : ComponentActivity() {
                     }
 
                     composable(Routes.CHATS) {
-                        ChatListScreen(
+                        HomeScreen(
                             onOpenChat = { id, name ->
                                 navController.navigate(Routes.chat(id, name, false))
                             },
                             onOpenGroup = { id, name ->
                                 navController.navigate(Routes.chat(id, name, true))
+                            },
+                            onOpenChannel = { serverId, channelId, channelName ->
+                                navController.navigate(Routes.channel(serverId, channelId, channelName))
+                            },
+                            onJoinVoice = { channelId, channelName ->
+                                startActivity(
+                                    android.content.Intent(
+                                        this@MainActivity,
+                                        com.pismo.messenger.ui.call.CallActivity::class.java
+                                    ).apply {
+                                        putExtra(
+                                            com.pismo.messenger.ui.call.CallActivity.EXTRA_CHANNEL_ID,
+                                            channelId
+                                        )
+                                        putExtra(
+                                            com.pismo.messenger.ui.call.CallActivity.EXTRA_PEER_NAME,
+                                            channelName
+                                        )
+                                    }
+                                )
+                            },
+                            onOpenMembers = { serverId ->
+                                navController.navigate(Routes.members(serverId))
                             },
                             onSettings = { navController.navigate(Routes.SETTINGS) },
                             onLoggedOut = {
@@ -84,6 +109,29 @@ class MainActivity : ComponentActivity() {
                                     popUpTo(Routes.CHATS) { inclusive = true }
                                 }
                             },
+                        )
+                    }
+
+                    composable(Routes.CHANNEL_PATTERN) { entry ->
+                        val serverId = entry.arguments?.getString("server")?.toIntOrNull()
+                            ?: return@composable
+                        val channelId = entry.arguments?.getString("channel")?.toIntOrNull()
+                            ?: return@composable
+                        val name = entry.arguments?.getString("name").orEmpty()
+                        ChannelChatScreen(
+                            serverId = serverId,
+                            channelId = channelId,
+                            channelName = name,
+                            onBack = { navController.popBackStack() },
+                        )
+                    }
+
+                    composable(Routes.MEMBERS_PATTERN) { entry ->
+                        val serverId = entry.arguments?.getString("server")?.toIntOrNull()
+                            ?: return@composable
+                        ServerMembersScreen(
+                            serverId = serverId,
+                            onBack = { navController.popBackStack() },
                         )
                     }
 
@@ -130,9 +178,18 @@ object Routes {
     const val CHATS = "chats"
     const val SETTINGS = "settings"
     const val CHAT_PATTERN = "chat/{id}/{group}/{name}"
+    const val CHANNEL_PATTERN = "channel/{server}/{channel}/{name}"
+    const val MEMBERS_PATTERN = "members/{server}"
 
     fun chat(id: Int, name: String, isGroup: Boolean): String {
         val safe = android.net.Uri.encode(name.ifBlank { "Чат" })
         return "chat/$id/${if (isGroup) 1 else 0}/$safe"
     }
+
+    fun channel(serverId: Int, channelId: Int, name: String): String {
+        val safe = android.net.Uri.encode(name.ifBlank { "канал" })
+        return "channel/$serverId/$channelId/$safe"
+    }
+
+    fun members(serverId: Int): String = "members/$serverId"
 }
