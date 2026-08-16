@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Videocam
@@ -119,6 +120,7 @@ fun ChatScreen(
     var recording by remember { mutableStateOf(false) }
     var showCircleRecorder by remember { mutableStateOf(false) }
     var showPins by remember { mutableStateOf(false) }
+    var showSearch by remember { mutableStateOf(false) }
 
     suspend fun reload(scrollToEnd: Boolean = false) {
         runCatching {
@@ -263,6 +265,9 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showSearch = true }) {
+                        Icon(Icons.Default.Search, "Поиск", tint = PismoColors.TextSecondary)
+                    }
                     IconButton(onClick = { showPins = true }) {
                         Icon(Icons.Default.PushPin, "Закреплённые", tint = PismoColors.TextSecondary)
                     }
@@ -460,6 +465,22 @@ fun ChatScreen(
                 }
             }
         }
+    }
+
+    if (showSearch) {
+        ChatSearchDialog(
+            scopeKind = scopeKind,
+            targetId = targetId,
+            onDismiss = { showSearch = false },
+            onJump = { found ->
+                showSearch = false
+                // Прыгаем к сообщению, если оно есть на текущей странице;
+                // иначе просто закрываем — подгрузка вглубь истории пока
+                // не реализована.
+                val idx = messages.indexOfFirst { it.id == found.id }
+                if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
+            },
+        )
     }
 
     if (showPins) {

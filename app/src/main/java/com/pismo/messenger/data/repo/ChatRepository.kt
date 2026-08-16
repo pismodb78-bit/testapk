@@ -519,6 +519,29 @@ object ChatRepository {
     suspend fun fileSize(msgId: Int, scope: Scope): Long =
         Db.scalarLong("SELECT OCTET_LENGTH(file_data) FROM ${scope.table} WHERE id=?", msgId)
 
+    /**
+     * Поиск по переписке.
+     *
+     * LIKE по колонке text бесполезен: в БД лежит шифртекст. Поэтому
+     * берём последние [depth] сообщений и фильтруем уже расшифрованные на
+     * клиенте — единственный способ, пока текст зашифрован общим ключом.
+     */
+    suspend fun searchInChat(
+        scope: Scope,
+        target: Int,
+        query: String,
+        depth: Int = 500,
+    ): List<ChatMessage> {
+        val q = query.trim().lowercase()
+        if (q.isEmpty()) return emptyList()
+
+        val recent = when (scope) {
+            Scope.GROUP -> loadGroupMessages(target, limit = depth)
+            else -> loadDirectMessages(target, limit = depth)
+        }
+        return recent.filter { !it.isDeleted && it.text.lowercase().contains(q) }
+    }
+
     /** Стоит ли показать встроенный плеер сразу (видео-файл до 30 МБ). */
     fun isInlineVideo(fileName: String?, sizeBytes: Long): Boolean {
         val ext = fileName?.substringAfterLast('.', "")?.lowercase() ?: return false
