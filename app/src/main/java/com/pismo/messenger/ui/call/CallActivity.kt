@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.lifecycleScope
+import com.pismo.messenger.call.ActiveCall
 import com.pismo.messenger.call.CallEngine
 import com.pismo.messenger.call.LiveKitToken
 import com.pismo.messenger.core.UserSession
@@ -142,7 +143,31 @@ class CallActivity : ComponentActivity() {
             }
 
             if (sessionId > 0) CallRepository.join(sessionId)
+
+            // Док активного звонка на остальных экранах узнаёт о звонке отсюда.
+            ActiveCall.start(
+                ActiveCall.Info(
+                    title = peerName,
+                    sessionId = sessionId,
+                    channelId = channelId,
+                    peerId = peerId,
+                    groupId = groupId,
+                    withVideo = withVideo,
+                )
+            )
+
             engine.join(room, withVideo)
+        }
+
+        // Состояние микрофона и подключения для дока.
+        lifecycleScope.launch {
+            while (isActive) {
+                ActiveCall.updateState(
+                    micMuted = engine.micMuted.value,
+                    connected = engine.state.value == CallEngine.State.CONNECTED,
+                )
+                delay(1000)
+            }
         }
 
         // Присутствие в голосовом канале — heartbeat, как на ПК.
@@ -168,13 +193,19 @@ class CallActivity : ComponentActivity() {
                 if (sessionId > 0) CallRepository.leave(sessionId)
             }
             engine.leave()
+            ActiveCall.clear()
             finish()
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        engine.leave()
+        // Активити могла быть снята системой — звонок при этом заканчивается,
+        // и док не должен остаться висеть.
+        if (isFinishing) {
+            engine.leave()
+            ActiveCall.clear()
+        }
     }
 }
 

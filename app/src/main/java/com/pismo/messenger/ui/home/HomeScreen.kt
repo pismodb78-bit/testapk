@@ -1,6 +1,7 @@
 package com.pismo.messenger.ui.home
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -25,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.sp
 import com.pismo.messenger.data.repo.FriendsRepository
 import com.pismo.messenger.ui.call.IncomingCallWatcher
+import com.pismo.messenger.ui.call.VoiceDock
 import com.pismo.messenger.ui.chats.ChatListScreen
 import com.pismo.messenger.ui.components.UnreadBadge
 import com.pismo.messenger.ui.friends.FriendsScreen
@@ -65,6 +67,9 @@ fun HomeScreen(
     Scaffold(
         containerColor = PismoColors.BgSidebar,
         bottomBar = {
+            Column {
+                VoiceDock()
+
             NavigationBar(containerColor = PismoColors.BgDarkest) {
                 val colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = Color.White,
@@ -107,6 +112,7 @@ fun HomeScreen(
                     label = { Text("Профиль", fontSize = 11.sp) },
                     colors = colors,
                 )
+            }
             }
         },
     ) { padding ->
