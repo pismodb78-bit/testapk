@@ -78,6 +78,10 @@ fun MessageBubble(
     var quote by remember(msg.id) { mutableStateOf<ReplyQuote?>(null) }
     var image by remember(msg.id) { mutableStateOf<ByteArray?>(null) }
     var audio by remember(msg.id) { mutableStateOf<ByteArray?>(null) }
+    var viewerBytes by remember(msg.id) { mutableStateOf<ByteArray?>(null) }
+    var showForward by remember(msg.id) { mutableStateOf(false) }
+    var fileStatus by remember(msg.id) { mutableStateOf("") }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     LaunchedEffect(msg.id) {
         if (msg.replyToId > 0 && !msg.isDeleted) {
@@ -165,7 +169,8 @@ fun MessageBubble(
                                 contentDescription = null,
                                 modifier = Modifier
                                     .widthIn(max = 260.dp)
-                                    .clip(RoundedCornerShape(8.dp)),
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { viewerBytes = bytes },
                             )
                             Spacer(Modifier.height(6.dp))
                         }
@@ -195,6 +200,17 @@ fun MessageBubble(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(Color(0x22000000))
+                                    .clickable {
+                                        scope.launch {
+                                            fileStatus = "Загрузка с сервера…"
+                                            val data = runCatching {
+                                                ChatRepository.loadFile(msg.id, scopeKind, msg.fileName)
+                                            }.getOrNull()
+                                            fileStatus = if (data == null) "Не удалось загрузить"
+                                            else if (saveAndOpenFile(context, msg.fileName!!, data)) ""
+                                            else "Нет приложения для этого типа файла"
+                                        }
+                                    }
                                     .padding(8.dp),
                             ) {
                                 FileBadge(fileBadge(msg.fileName), fileColor(msg.fileName), 36.dp)
@@ -208,7 +224,7 @@ fun MessageBubble(
                                         maxLines = 1,
                                     )
                                     Text(
-                                        "Нажмите и удерживайте → Сохранить",
+                                        fileStatus.ifBlank { "Нажмите, чтобы открыть" },
                                         color = PismoColors.TextMuted,
                                         fontSize = 11.sp,
                                     )
@@ -249,6 +265,10 @@ fun MessageBubble(
                     DropdownMenuItem(
                         text = { Text("↩  Ответить") },
                         onClick = { onReply(); menuOpen = false },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("↪  Переслать") },
+                        onClick = { showForward = true; menuOpen = false },
                     )
                     if (msg.text.isNotBlank()) {
                         DropdownMenuItem(
@@ -298,6 +318,21 @@ fun MessageBubble(
                 }
             }
         }
+    }
+
+    viewerBytes?.let { bytes ->
+        FullscreenImageViewer(bytes) { viewerBytes = null }
+    }
+
+    if (showForward) {
+        ForwardDialog(
+            srcScope = scopeKind,
+            srcMessageId = msg.id,
+            srcText = msg.text,
+            srcSender = msg.senderName,
+            onDismiss = { showForward = false },
+            onDone = { showForward = false },
+        )
     }
 }
 

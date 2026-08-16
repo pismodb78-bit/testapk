@@ -77,6 +77,7 @@ fun ChatListScreen(
     var error by remember { mutableStateOf("") }
     var showCreateGroup by remember { mutableStateOf(false) }
     var manageGroup by remember { mutableStateOf<GroupSummary?>(null) }
+    var userActions by remember { mutableStateOf<Conversation?>(null) }
 
     suspend fun reload() {
         runCatching {
@@ -189,7 +190,11 @@ fun ChatListScreen(
                         )
                     }
                     items(conversations, key = { "u${it.userId}" }) { c ->
-                        ConversationRow(c) { onOpenChat(c.userId, c.name) }
+                        ConversationRow(
+                            c = c,
+                            onClick = { onOpenChat(c.userId, c.name) },
+                            onLongClick = { userActions = c },
+                        )
                     }
 
                     item { Spacer(Modifier.height(24.dp)) }
@@ -206,6 +211,15 @@ fun ChatListScreen(
                 scope.launch { reload() }
                 onOpenGroup(id, name)
             },
+        )
+    }
+
+    userActions?.let { c ->
+        UserActionsDialog(
+            conversation = c,
+            onDismiss = { userActions = null },
+            onChanged = { userActions = null; scope.launch { reload() } },
+            onOpenChat = { userActions = null; onOpenChat(c.userId, c.name) },
         )
     }
 
@@ -233,12 +247,13 @@ private fun SectionHeader(text: String) {
     )
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun ConversationRow(c: Conversation, onClick: () -> Unit) {
+private fun ConversationRow(c: Conversation, onClick: () -> Unit, onLongClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
