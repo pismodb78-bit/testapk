@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Videocam
@@ -115,6 +116,7 @@ fun ChatScreen(
     val recorder = remember { WavRecorder(scope) }
     var recording by remember { mutableStateOf(false) }
     var showCircleRecorder by remember { mutableStateOf(false) }
+    var showPins by remember { mutableStateOf(false) }
 
     suspend fun reload(scrollToEnd: Boolean = false) {
         runCatching {
@@ -254,6 +256,9 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showPins = true }) {
+                        Icon(Icons.Default.PushPin, "Закреплённые", tint = PismoColors.TextSecondary)
+                    }
                     IconButton(onClick = { startCall(context, targetId, title, isGroup, false) }) {
                         Icon(Icons.Default.Call, "Позвонить", tint = PismoColors.Green)
                     }
@@ -448,6 +453,14 @@ fun ChatScreen(
                 }
             }
         }
+    }
+
+    if (showPins) {
+        PinnedMessagesDialog(
+            scopeKind = scopeKind,
+            targetId = targetId,
+            onDismiss = { showPins = false },
+        )
     }
 
     CircleRecorderHost(

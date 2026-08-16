@@ -49,6 +49,7 @@ import com.pismo.messenger.data.model.ReactionSummary
 import com.pismo.messenger.data.model.ReplyQuote
 import com.pismo.messenger.data.model.Scope
 import com.pismo.messenger.data.repo.ChatRepository
+import com.pismo.messenger.data.repo.PinsRepository
 import com.pismo.messenger.data.repo.ReactionsRepository
 import com.pismo.messenger.media.WavPlayer
 import com.pismo.messenger.ui.components.FileBadge
@@ -81,6 +82,8 @@ fun MessageBubble(
     var viewerBytes by remember(msg.id) { mutableStateOf<ByteArray?>(null) }
     var showForward by remember(msg.id) { mutableStateOf(false) }
     var fileStatus by remember(msg.id) { mutableStateOf("") }
+    var showEmojiPicker by remember(msg.id) { mutableStateOf(false) }
+    var showHistory by remember(msg.id) { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
 
     LaunchedEffect(msg.id) {
@@ -261,10 +264,27 @@ fun MessageBubble(
                         text = { Text("↪  Переслать") },
                         onClick = { showForward = true; menuOpen = false },
                     )
+                    DropdownMenuItem(
+                        text = { Text("😀  Ещё реакции…") },
+                        onClick = { showEmojiPicker = true; menuOpen = false },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("📌  Закрепить / открепить") },
+                        onClick = {
+                            scope.launch { PinsRepository.toggle(msg.id, scopeKind) }
+                            menuOpen = false
+                        },
+                    )
                     if (msg.text.isNotBlank()) {
                         DropdownMenuItem(
                             text = { Text("📋  Копировать текст") },
                             onClick = { menuOpen = false },
+                        )
+                    }
+                    if (msg.isEdited) {
+                        DropdownMenuItem(
+                            text = { Text("🕓  История изменений") },
+                            onClick = { showHistory = true; menuOpen = false },
                         )
                     }
                     if (isMine && msg.text.isNotBlank() && !msg.isDeleted) {
@@ -313,6 +333,21 @@ fun MessageBubble(
 
     viewerBytes?.let { bytes ->
         FullscreenImageViewer(bytes) { viewerBytes = null }
+    }
+
+    if (showEmojiPicker) {
+        EmojiPickerDialog(
+            onDismiss = { showEmojiPicker = false },
+            onPick = { emoji -> onReact(emoji); showEmojiPicker = false },
+        )
+    }
+
+    if (showHistory) {
+        EditHistoryDialog(
+            messageId = msg.id,
+            scopeKind = scopeKind,
+            onDismiss = { showHistory = false },
+        )
     }
 
     if (showForward) {
