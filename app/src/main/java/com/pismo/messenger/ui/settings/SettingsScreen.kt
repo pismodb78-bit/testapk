@@ -19,12 +19,15 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,7 +45,9 @@ import com.pismo.messenger.data.MediaCache
 import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.ui.login.PismoField
 import com.pismo.messenger.ui.theme.PismoColors
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,9 +67,17 @@ fun SettingsScreen(onBack: () -> Unit) {
     var wsUrl by remember { mutableStateOf(Prefs.wsUrlOverride) }
     var wsEnabled by remember { mutableStateOf(Prefs.wsEnabled) }
     var notifications by remember { mutableStateOf(Prefs.notificationsEnabled) }
+    var micGain by remember { mutableStateOf(Prefs.micGain) }
+    var frontCamera by remember { mutableStateOf(Prefs.frontCamera) }
+    var bgPolling by remember { mutableStateOf(Prefs.backgroundPolling) }
 
     var status by remember { mutableStateOf("") }
-    var cacheSize by remember { mutableStateOf(MediaCache.sizeBytes() / 1024 / 1024) }
+    var cacheSize by remember { mutableStateOf(0L) }
+
+    // Обход кеша — это работа с файловой системой, в композиции ей не место.
+    LaunchedEffect(Unit) {
+        cacheSize = withContext(Dispatchers.IO) { MediaCache.sizeBytes() / 1024 / 1024 }
+    }
 
     fun save() {
         Prefs.dbHost = host.trim()
@@ -78,6 +91,9 @@ fun SettingsScreen(onBack: () -> Unit) {
         Prefs.wsUrlOverride = wsUrl.trim()
         Prefs.wsEnabled = wsEnabled
         Prefs.notificationsEnabled = notifications
+        Prefs.micGain = micGain
+        Prefs.frontCamera = frontCamera
+        Prefs.backgroundPolling = bgPolling
         scope.launch { Db.closeAll() }
         status = "Настройки сохранены."
     }
@@ -164,6 +180,31 @@ fun SettingsScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             SwitchRow("Мгновенные события через WebSocket", wsEnabled) { wsEnabled = it }
             SwitchRow("Уведомления о новых сообщениях", notifications) { notifications = it }
+
+            Spacer(Modifier.height(20.dp))
+            Section("Устройства")
+            Text(
+                "Усиление микрофона: ${(micGain * 100).toInt()}%",
+                color = PismoColors.TextSecondary, fontSize = 14.sp,
+            )
+            Slider(
+                value = micGain,
+                onValueChange = { micGain = it },
+                valueRange = 0.5f..2.0f,
+                steps = 14,
+                colors = SliderDefaults.colors(
+                    thumbColor = PismoColors.Blurple,
+                    activeTrackColor = PismoColors.Blurple,
+                ),
+            )
+            Text(
+                "Применяется к голосовым сообщениям и видео-кружочкам — тот же " +
+                        "множитель, что MicrophoneGain в devices.ini на ПК.",
+                color = PismoColors.TextMuted, fontSize = 12.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            SwitchRow("Фронтальная камера по умолчанию", frontCamera) { frontCamera = it }
+            SwitchRow("Фоновая проверка сообщений", bgPolling) { bgPolling = it }
 
             Spacer(Modifier.height(20.dp))
             Section("Кеш медиа")

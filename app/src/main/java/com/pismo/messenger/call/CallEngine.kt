@@ -6,7 +6,6 @@ import android.util.Log
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
 import io.livekit.android.LiveKit
-import io.livekit.android.events.RoomEvent
 import io.livekit.android.events.collect
 import io.livekit.android.room.Room
 import io.livekit.android.room.participant.Participant
@@ -134,7 +133,6 @@ class CallEngine(
     fun leave() {
         runCatching { eventJob?.cancel() }
         runCatching { room?.disconnect() }
-        runCatching { room?.release() }
         room = null
         eventJob = null
         currentRoom = ""
@@ -246,32 +244,29 @@ class CallEngine(
     //  СОБЫТИЯ КОМНАТЫ
     // ════════════════════════════════════════════════════════════════
 
+    /**
+     * Подписка на события комнаты.
+     *
+     * Намеренно не перечисляем конкретные подклассы RoomEvent: их набор и
+     * имена меняются между версиями livekit-android, и ссылка на класс,
+     * которого в текущей версии нет, ломает сборку целиком. Здесь любое
+     * событие просто пересобирает список участников — это дешёвая
+     * операция над уже загруженным состоянием комнаты, а разбор конца
+     * звонка идёт по имени класса, без ссылки на него.
+     */
     private fun observe(r: Room) {
         eventJob = scope.launch {
             r.events.collect { event ->
-                when (event) {
-                    is RoomEvent.ParticipantConnected,
-                    is RoomEvent.ParticipantDisconnected,
-                    is RoomEvent.TrackSubscribed,
-                    is RoomEvent.TrackUnsubscribed,
-                    is RoomEvent.TrackPublished,
-                    is RoomEvent.TrackUnpublished,
-                    is RoomEvent.TrackMuted,
-                    is RoomEvent.TrackUnmuted,
-                    is RoomEvent.ActiveSpeakersChanged,
-                    is RoomEvent.ParticipantAttributesChanged -> refreshParticipants()
-
-                    is RoomEvent.Disconnected -> {
+                when (event.javaClass.simpleName) {
+                    "Disconnected" -> {
                         _state.value = State.DISCONNECTED
                         _participants.value = emptyList()
                     }
-
-                    is RoomEvent.FailedToConnect -> {
+                    "FailedToConnect" -> {
                         _state.value = State.FAILED
-                        _error.value = event.error.message
+                        if (_error.value == null) _error.value = "не удалось подключиться к звонку"
                     }
-
-                    else -> Unit
+                    else -> refreshParticipants()
                 }
             }
         }
