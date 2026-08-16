@@ -28,14 +28,46 @@ object ServerRepository {
 
     @Volatile private var hasReplyCol: Boolean? = null
     @Volatile private var hasDeletedCol: Boolean? = null
+    @Volatile private var hasMentionsTbl: Boolean? = null
 
-    private suspend fun columnExists(table: String, col: String): Boolean = runCatching {
-        Db.scalarInt(
-            "SELECT COUNT(*) FROM information_schema.columns " +
-                    "WHERE table_schema = DATABASE() AND table_name=? AND column_name=?",
-            table, col
-        ) > 0
-    }.getOrDefault(false)
+    /**
+     * На этом хостинге доступ к information_schema закрыт даже
+     * администратору (#1044). Без фолбэка на SHOW проверка возвращала бы
+     * false, и мы бы молча решили, что колонки reply_to_id нет: ответы в
+     * каналах перестали бы сохраняться, а половина условий бейджа —
+     * считаться. Та же ошибка была на ПК и чинилась там же.
+     */
+    private suspend fun columnExists(table: String, col: String): Boolean {
+        runCatching {
+            return Db.scalarInt(
+                "SELECT COUNT(*) FROM information_schema.columns " +
+                        "WHERE table_schema = DATABASE() AND table_name=? AND column_name=?",
+                table, col
+            ) > 0
+        }
+        if (!isPlainIdentifier(table)) return false
+        return runCatching {
+            Db.query("SHOW COLUMNS FROM `$table`") { rs -> rs.getString(1) }
+                .any { it.equals(col, ignoreCase = true) }
+        }.getOrDefault(false)
+    }
+
+    private suspend fun tableExists(table: String): Boolean {
+        runCatching {
+            return Db.scalarInt(
+                "SELECT COUNT(*) FROM information_schema.tables " +
+                        "WHERE table_schema = DATABASE() AND table_name=?",
+                table
+            ) > 0
+        }
+        return runCatching {
+            Db.query("SHOW TABLES") { rs -> rs.getString(1) }
+                .any { it.equals(table, ignoreCase = true) }
+        }.getOrDefault(false)
+    }
+
+    private fun isPlainIdentifier(s: String): Boolean =
+        s.isNotEmpty() && s.all { it.isLetterOrDigit() || it == '_' }
 
     // ════════════════════════════════════════════════════════════════
     //  СЕРВЕРЫ
@@ -255,7 +287,7 @@ object ServerRepository {
         if (hasReplyCol == null) hasReplyCol = columnExists("server_messages", "reply_to_id")
 
         val hasMedia = image != null || audio != null || video != null || file != null
-        return if (hasMedia) {
+        val newId = if (hasMedia) {
             val id = Db.insert(
                 "INSERT INTO server_messages (channel_id, sender_id, text, image_data, audio_data, " +
                         "video_data, file_data, file_name" +
@@ -282,6 +314,13 @@ object ServerRepository {
                 channelId, me, enc
             )
         }
+
+        // Адресатов «@…» вычисляем ЗДЕСЬ, пока текст открытый: в БД он ляжет
+        // зашифрованным, и после этого разобрать упоминания уже невозможно.
+        // Подпись к вложению разбирается тем же вызовом.
+        ServerMentions.record(newId, channelId, me, text)
+
+        return newId
     }
 
     suspend fun editChannelMessage(msgId: Int, newText: String) {
@@ -478,30 +517,45 @@ object ServerRepository {
         val me = UserSession.effectiveId
         if (hasReplyCol == null) hasReplyCol = columnExists("server_messages", "reply_to_id")
         if (hasDeletedCol == null) hasDeletedCol = columnExists("server_messages", "is_deleted")
+        if (hasMentionsTbl == null) hasMentionsTbl = tableExists("server_mentions")
 
-        val replyClause = if (hasReplyCol == true)
-            "  OR EXISTS(SELECT 1 FROM server_messages p WHERE p.id = sm.reply_to_id AND p.sender_id = ?) "
-        else ""
+        // Слагаемые «что считать упоминанием» собираем списком: части
+        // необязательные, а склейка строк с ручной обрезкой «OR» слишком
+        // легко даёт битый SQL.
+        val mentionParts = buildList {
+            if (hasReplyCol == true) {
+                add("EXISTS(SELECT 1 FROM server_messages p WHERE p.id = sm.reply_to_id AND p.sender_id = ?)")
+            }
+            // Упоминания берём из server_mentions (миграция 15). Прежний
+            // вариант искал «@логин» через LIKE по sm.text — а текст в БД
+            // зашифрован, символа «@» там нет вовсе, и условие не
+            // выполнялось никогда.
+            if (hasMentionsTbl == true) {
+                add("EXISTS(SELECT 1 FROM server_mentions mn WHERE mn.message_id = sm.id AND mn.user_id = ?)")
+            }
+        }
+
+        // Нет ни таблицы, ни колонки ответов — считать нечего, но SQL обязан
+        // остаться валидным: подставляем заведомо ложное условие.
+        val mentionExpr = if (mentionParts.isEmpty()) "0=1 "
+        else mentionParts.joinToString(" OR ") + " "
+
         val notDeleted = if (hasDeletedCol == true) "AND sm.is_deleted = 0 " else ""
 
         val sql = "SELECT sc.server_id, sm.channel_id, mm.muted_notifs, COUNT(*) AS unread, " +
-                "SUM(CASE WHEN LOWER(sm.text) LIKE CONCAT('%@', ?, '%') " +
-                "  OR (rr.name IS NOT NULL AND rr.name <> '' AND LOWER(sm.text) LIKE CONCAT('%@', LOWER(rr.name), '%')) " +
-                "  OR LOWER(sm.text) LIKE '%@все%' OR LOWER(sm.text) LIKE '%@all%' " +
-                "  OR LOWER(sm.text) LIKE '%@everyone%' " + replyClause +
-                "  THEN 1 ELSE 0 END) AS mentions " +
+                "SUM(CASE WHEN " + mentionExpr + "THEN 1 ELSE 0 END) AS mentions " +
                 "FROM server_messages sm " +
                 "JOIN server_channels sc ON sc.id = sm.channel_id " +
                 "JOIN server_members mm ON mm.server_id = sc.server_id AND mm.user_id = ? " +
-                "LEFT JOIN server_roles rr ON rr.id = mm.role_id " +
                 "LEFT JOIN server_reads r ON r.user_id = ? AND r.channel_id = sm.channel_id " +
                 "WHERE sm.sender_id <> ? " + notDeleted +
                 "  AND sm.id > COALESCE(r.last_read_id, 0) " +
                 "GROUP BY sc.server_id, sm.channel_id, mm.muted_notifs"
 
+        // Порядок подстановок: сначала параметры выражения упоминаний (в том
+        // же порядке, что и части списка), затем три @me из JOIN и WHERE.
         val params = buildList {
-            add(myLogin.lowercase())
-            if (hasReplyCol == true) add(me)   // подзапрос «ответ на моё» идёт до JOIN-параметров
+            repeat(mentionParts.size) { add(me) }
             add(me); add(me); add(me)
         }
 

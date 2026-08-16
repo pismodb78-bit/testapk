@@ -128,6 +128,18 @@ object DbMigrator {
             if (tableExists(c, "server_channels") && !columnExists(c, "server_channels", "user_limit"))
                 exec(c, "ALTER TABLE server_channels ADD COLUMN user_limit INT NOT NULL DEFAULT 0")
         },
+        Migration(15, "server_mentions: упоминания в каналах (текст в БД зашифрован)") { c ->
+            // Считать упоминания запросом LIKE по server_messages.text нельзя:
+            // текст хранится зашифрованным (AES-GCM в Base64), и «@логин» там не
+            // встретится никогда. Адресаты вычисляются при отправке и лежат тут.
+            exec(c, "CREATE TABLE IF NOT EXISTS server_mentions (" +
+                    "message_id BIGINT NOT NULL, " +
+                    "channel_id INT NOT NULL, " +
+                    "user_id INT NOT NULL, " +
+                    "PRIMARY KEY (message_id, user_id), " +
+                    "KEY idx_mention_lookup (user_id, channel_id, message_id)" +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+        },
     )
 
     /**
