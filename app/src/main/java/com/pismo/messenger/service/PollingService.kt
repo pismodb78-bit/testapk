@@ -39,7 +39,6 @@ class PollingService : LifecycleService() {
             while (isActive) {
                 if (UserSession.effectiveId > 0 && Prefs.backgroundPolling) {
                     runCatching { pollOnce() }
-                    runCatching { PresenceRepository.heartbeat(active = false) }
                 }
                 delay(10_000)
             }

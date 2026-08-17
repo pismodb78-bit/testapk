@@ -41,15 +41,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pismo.messenger.core.parseHexColor
+import com.pismo.messenger.data.model.Presence
 import com.pismo.messenger.data.model.ServerMemberRow
 import com.pismo.messenger.data.model.ServerPermissions
 import com.pismo.messenger.data.model.ServerRole
+import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.ui.components.LetterAvatar
 import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.components.Pill
 import com.pismo.messenger.ui.login.PismoField
 import com.pismo.messenger.ui.theme.PismoColors
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -70,6 +74,8 @@ fun ServerMembersScreen(serverId: Int, onBack: () -> Unit) {
     var serverName by remember { mutableStateOf("") }
     var editRole by remember { mutableStateOf<ServerRole?>(null) }
     var creatingRole by remember { mutableStateOf(false) }
+    // Точки статуса у участников — то же присутствие, что в списке чатов.
+    var presence by remember { mutableStateOf<Map<Int, Presence>>(emptyMap()) }
 
     suspend fun reload() {
         runCatching {
@@ -82,6 +88,16 @@ fun ServerMembersScreen(serverId: Int, onBack: () -> Unit) {
     }
 
     LaunchedEffect(serverId) { reload() }
+
+    LaunchedEffect(serverId) {
+        while (isActive) {
+            val ids = members.map { it.userId }
+            if (ids.isNotEmpty()) {
+                runCatching { presence = PresenceRepository.presenceFor(ids) }
+            }
+            delay(6000)
+        }
+    }
 
     Scaffold(
         containerColor = PismoColors.BgSidebar,
@@ -122,7 +138,7 @@ fun ServerMembersScreen(serverId: Int, onBack: () -> Unit) {
             when (tab) {
                 0 -> LazyColumn(Modifier.fillMaxSize()) {
                     items(members, key = { it.userId }) { m ->
-                        MemberRow(m, roles, perms) { action ->
+                        MemberRow(m, presence[m.userId], roles, perms) { action ->
                             scope.launch {
                                 when (action) {
                                     is MemberAction.SetRole ->
@@ -245,6 +261,7 @@ private sealed interface MemberAction {
 @Composable
 private fun MemberRow(
     m: ServerMemberRow,
+    presence: Presence?,
     roles: List<ServerRole>,
     perms: ServerPermissions,
     onAction: (MemberAction) -> Unit,
@@ -260,7 +277,7 @@ private fun MemberRow(
                 .padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            UserAvatar(m.userId, m.name, 38.dp)
+            UserAvatar(m.userId, m.name, 38.dp, presence = presence)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(

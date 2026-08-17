@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Build
 import android.util.Log
 import com.pismo.messenger.core.Prefs
+import com.pismo.messenger.core.PresenceReporter
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.service.CallForegroundService
 import com.pismo.messenger.service.Notifications
@@ -145,6 +146,10 @@ class CallEngine(
         // приложение уходит с экрана: собеседник перестаёт тебя слышать
         // ровно в момент сворачивания, без всякой ошибки.
         IncomingCallMonitor.inCall = true
+        // Разговор — это активность, даже если экран телефона погас или
+        // приложение свёрнуто. Без этого ПК через 90 секунд показывал
+        // «бездействует» собеседнику, с которым в этот момент говорил.
+        PresenceReporter.inCall = true
         runCatching { CallForegroundService.start(appContext, "Звонок PISMO") }
 
         val identity = UserSession.effectiveId.toString()
@@ -201,6 +206,7 @@ class CallEngine(
         _screenAudioOn.value = false
         runCatching { CallForegroundService.stop(appContext) }
         IncomingCallMonitor.inCall = false
+        PresenceReporter.inCall = false
         runCatching { room?.disconnect() }
         // release освобождает нативные ресурсы (EglBase, аудиоустройство);
         // без него повторный звонок в той же сессии течёт памятью.

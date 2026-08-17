@@ -200,14 +200,26 @@ data class UserProfile(
     val socialLinks: String,
 )
 
-/** Онлайн-статус: сколько секунд назад пользователь был виден/активен. */
+/**
+ * Присутствие пользователя.
+ *
+ * Пороги обязаны совпадать с ПК (MainForm_Presence.cs): там «не в сети»
+ * при seen_ago > 40, «бездействует» при active_ago > 90. Свои значения
+ * (60 и 300) давали расхождение: телефон показывал собеседника в сети,
+ * когда компьютер уже считал его офлайн, и наоборот.
+ */
 data class Presence(
     val userId: Int,
     val seenAgoSec: Int,
     val activeAgoSec: Int,
 ) {
-    val isOnline: Boolean get() = seenAgoSec in 0..60
-    val isIdle: Boolean get() = isOnline && activeAgoSec > 300
+    val isOnline: Boolean get() = seenAgoSec in 0..SEEN_OFFLINE_SEC
+    val isIdle: Boolean get() = isOnline && activeAgoSec > ACTIVE_IDLE_SEC
+
+    companion object {
+        const val SEEN_OFFLINE_SEC = 40
+        const val ACTIVE_IDLE_SEC = 90
+    }
 }
 
 /** Вложение, подготовленное к отправке. */
@@ -224,4 +236,33 @@ data class PendingAttachment(
 
     override fun hashCode(): Int =
         31 * (31 * data.contentHashCode() + fileName.hashCode()) + kind.hashCode()
+}
+
+/**
+ * Подпись статуса под именем собеседника — порт ChatHeaderPresence из
+ * MainForm_Presence.cs. Формулировки и пороги повторены дословно, чтобы
+ * телефон и компьютер не расходились в том, кто когда «в сети».
+ */
+fun Presence.headerText(): String = when {
+    seenAgoSec > Presence.SEEN_OFFLINE_SEC -> "был(а) в сети ${humanAgo(seenAgoSec)}"
+    activeAgoSec > Presence.ACTIVE_IDLE_SEC -> "● бездействует ${humanDur(activeAgoSec)}"
+    else -> "● в сети"
+}
+
+private fun humanDur(seconds: Int): String {
+    if (seconds < 60) return "меньше минуты"
+    val m = seconds / 60
+    if (m < 60) return "$m мин"
+    val h = m / 60
+    if (h < 24) return "$h ч"
+    return "${h / 24} дн"
+}
+
+private fun humanAgo(seconds: Int): String {
+    if (seconds < 60) return "только что"
+    val m = seconds / 60
+    if (m < 60) return "$m мин назад"
+    val h = m / 60
+    if (h < 24) return "$h ч назад"
+    return "${h / 24} дн назад"
 }

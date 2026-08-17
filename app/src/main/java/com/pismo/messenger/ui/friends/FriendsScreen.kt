@@ -41,12 +41,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pismo.messenger.data.model.FriendEntry
+import com.pismo.messenger.data.model.Presence
 import com.pismo.messenger.data.repo.FriendsRepository
+import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.ui.components.LetterAvatar
 import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.components.UnreadBadge
 import com.pismo.messenger.ui.login.PismoField
 import com.pismo.messenger.ui.theme.PismoColors
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -68,6 +72,9 @@ fun FriendsScreen(onOpenChat: (Int, String) -> Unit) {
     var found by remember { mutableStateOf<List<FriendEntry>>(emptyList()) }
     var query by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
+    // Статусы друзей для точек на аватарках — такой же лёгкий запрос
+    // раз в 6 секунд, как в списке чатов и на ПК.
+    var presence by remember { mutableStateOf<Map<Int, Presence>>(emptyMap()) }
 
     suspend fun reload() {
         FriendsRepository.ensureSchema()
@@ -79,6 +86,16 @@ fun FriendsScreen(onOpenChat: (Int, String) -> Unit) {
     }
 
     LaunchedEffect(Unit) { reload() }
+
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            val ids = friends.map { it.userId }
+            if (ids.isNotEmpty()) {
+                runCatching { presence = PresenceRepository.presenceFor(ids) }
+            }
+            delay(6000)
+        }
+    }
 
     Column(Modifier.fillMaxSize().background(PismoColors.BgSidebar)) {
         TabRow(
@@ -109,7 +126,7 @@ fun FriendsScreen(onOpenChat: (Int, String) -> Unit) {
                     item { EmptyHint("Друзей пока нет. Найдите их во вкладке «Поиск».") }
                 }
                 items(friends, key = { it.userId }) { f ->
-                    PersonRow(f) {
+                    PersonRow(f, presence[f.userId]) {
                         IconButton(onClick = { onOpenChat(f.userId, f.name) }) {
                             Icon(Icons.Default.Chat, "Написать", tint = PismoColors.Blurple)
                         }
@@ -208,14 +225,18 @@ fun FriendsScreen(onOpenChat: (Int, String) -> Unit) {
 }
 
 @Composable
-private fun PersonRow(f: FriendEntry, actions: @Composable RowScope.() -> Unit) {
+private fun PersonRow(
+    f: FriendEntry,
+    presence: Presence? = null,
+    actions: @Composable RowScope.() -> Unit,
+) {
     Row(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        UserAvatar(f.userId, f.name, 40.dp)
+        UserAvatar(f.userId, f.name, 40.dp, presence = presence)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(f.name, color = PismoColors.TextPrimary, fontSize = 15.sp)

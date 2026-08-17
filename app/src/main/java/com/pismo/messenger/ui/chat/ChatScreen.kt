@@ -79,8 +79,11 @@ import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.data.MediaCache
 import com.pismo.messenger.data.model.ChatMessage
 import com.pismo.messenger.data.model.ReactionSummary
+import com.pismo.messenger.data.model.Presence
 import com.pismo.messenger.data.model.Scope
+import com.pismo.messenger.data.model.headerText
 import com.pismo.messenger.data.repo.ChatRepository
+import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.data.repo.ReactionsRepository
 import com.pismo.messenger.media.WavPlayer
 import com.pismo.messenger.media.WavRecorder
@@ -129,6 +132,8 @@ fun ChatScreen(
     var showPins by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
     var showCalendar by remember { mutableStateOf(false) }
+    // Статус собеседника в шапке — «в сети» / «бездействует N» / «был в сети N».
+    var peerPresence by remember(targetId) { mutableStateOf<Presence?>(null) }
     var jumpNote by remember { mutableStateOf("") }
 
     // Сколько сообщений тянуть. Переход к дате расширяет страницу ровно так
@@ -175,6 +180,17 @@ fun ChatScreen(
     LaunchedEffect(targetId, reconnects) {
         loading = true
         reload(scrollToEnd = true)
+    }
+
+    // Присутствие собеседника — отдельным лёгким запросом раз в 6 секунд,
+    // тот же период, что у _presenceTimer на ПК. В общую перезагрузку его
+    // класть нельзя: она идёт только при изменении числа сообщений.
+    LaunchedEffect(targetId, isGroup) {
+        if (isGroup) return@LaunchedEffect
+        while (isActive) {
+            runCatching { peerPresence = PresenceRepository.presenceOf(targetId) }
+            delay(6000)
+        }
     }
 
     // Опрос по числу сообщений — тот же приём, что PollTick на ПК.
@@ -274,14 +290,29 @@ fun ChatScreen(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (isGroup) GroupAvatar(targetId, title, "#5865F2", 32.dp)
-                        else UserAvatar(targetId, title, 32.dp)
+                        else UserAvatar(targetId, title, 32.dp, presence = peerPresence)
                         Spacer(Modifier.width(10.dp))
-                        Text(
-                            if (isGroup) "👥 $title" else title,
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
+                        Column {
+                            Text(
+                                if (isGroup) "👥 $title" else title,
+                                color = Color.White,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                            )
+                            peerPresence?.takeIf { !isGroup }?.let { p ->
+                                Text(
+                                    p.headerText(),
+                                    color = when {
+                                        !p.isOnline -> PismoColors.TextMuted
+                                        p.isIdle -> PismoColors.Yellow
+                                        else -> PismoColors.Green
+                                    },
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
                     }
                 },
                 navigationIcon = {

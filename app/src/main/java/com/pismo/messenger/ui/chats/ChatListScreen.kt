@@ -49,6 +49,7 @@ import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.formatListTime
 import com.pismo.messenger.core.parseHexColor
 import com.pismo.messenger.data.model.Conversation
+import com.pismo.messenger.data.model.Presence
 import com.pismo.messenger.data.model.GroupSummary
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.PresenceRepository
@@ -75,6 +76,10 @@ fun ChatListScreen(
 ) {
     val scope = rememberCoroutineScope()
     var conversations by remember { mutableStateOf<List<Conversation>>(emptyList()) }
+    // Статусы собеседников для точек на аватарках. Обновляются чаще списка:
+    // сам список — тяжёлый запрос, а присутствие меняется каждые несколько
+    // секунд, и точка обязана за ним поспевать.
+    var presence by remember { mutableStateOf<Map<Int, Presence>>(emptyMap()) }
     var groups by remember { mutableStateOf<List<GroupSummary>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
@@ -99,6 +104,19 @@ fun ChatListScreen(
 
     LaunchedEffect(Unit) { reload() }
 
+    // Присутствие обновляем отдельным лёгким запросом с тем же периодом, что
+    // и ПК (6 с). Держать его в общей перезагрузке списка нельзя: тот идёт
+    // только при изменении непрочитанного, и точки бы застывали.
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            val ids = conversations.map { it.userId }
+            if (ids.isNotEmpty()) {
+                runCatching { presence = PresenceRepository.presenceFor(ids) }
+            }
+            delay(6000)
+        }
+    }
+
     // Опрос как на ПК (2.5 с) + мгновенное обновление по событию ws-сервера.
     //
     // Полный список диалогов тянет тяжёлый запрос с подзапросами на каждого
@@ -110,7 +128,6 @@ fun ChatListScreen(
     LaunchedEffect(Unit) {
         while (isActive) {
             delay(2500)
-            runCatching { PresenceRepository.heartbeat(active = true) }
             runCatching {
                 val unread = ChatRepository.unreadBySender()
                 val groupMax = ChatRepository.groupMaxIncoming()
@@ -213,6 +230,7 @@ fun ChatListScreen(
                     items(conversations, key = { "u${it.userId}" }) { c ->
                         ConversationRow(
                             c = c,
+                            presence = presence[c.userId],
                             onClick = { onOpenChat(c.userId, c.name) },
                             onLongClick = { userActions = c },
                         )
@@ -270,7 +288,12 @@ private fun SectionHeader(text: String) {
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun ConversationRow(c: Conversation, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun ConversationRow(
+    c: Conversation,
+    presence: Presence?,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -278,7 +301,7 @@ private fun ConversationRow(c: Conversation, onClick: () -> Unit, onLongClick: (
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        UserAvatar(c.userId, c.name, 44.dp)
+        UserAvatar(c.userId, c.name, 44.dp, presence = presence)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
