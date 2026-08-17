@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -102,9 +103,15 @@ fun LoginScreen(
             .fillMaxSize()
             .background(PismoColors.BgMain),
     ) {
+        // statusBarsPadding обязателен: без него кнопка рисуется ПОД
+        // системной строкой состояния, и все тапы по ней забирает системный
+        // UI — визуально кнопка есть, а нажать её нельзя.
         IconButton(
             onClick = onSettings,
-            modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(8.dp),
         ) {
             Icon(Icons.Default.Settings, "Настройки подключения", tint = PismoColors.TextMuted)
         }
