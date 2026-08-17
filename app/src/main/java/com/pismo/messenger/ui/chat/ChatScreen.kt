@@ -589,5 +589,11 @@ private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedCompat(
     items: List<ChatMessage>,
     itemContent: @Composable (Int, ChatMessage) -> Unit,
 ) {
-    items(items.size) { index -> itemContent(index, items[index]) }
+    // Ключ по id сообщения обязателен. Без него Compose сопоставляет
+    // элементы по порядковому номеру, и любое обновление списка (опрос идёт
+    // каждые 2.5 с) считается заменой всех элементов сразу: состояние
+    // пузырей сбрасывается, уже показанные картинки грузятся заново.
+    items(items.size, key = { index -> items[index].id }) { index ->
+        itemContent(index, items[index])
+    }
 }

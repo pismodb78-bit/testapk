@@ -44,6 +44,7 @@ import com.pismo.messenger.core.ellipsize
 import com.pismo.messenger.core.fileBadge
 import com.pismo.messenger.core.fileColor
 import com.pismo.messenger.core.formatTime
+import com.pismo.messenger.data.MediaCache
 import com.pismo.messenger.data.model.ChatMessage
 import com.pismo.messenger.data.model.ReactionSummary
 import com.pismo.messenger.data.model.ReplyQuote
@@ -76,9 +77,14 @@ fun MessageBubble(
     val scope = rememberCoroutineScope()
     val isMine = msg.isMine
     var menuOpen by remember { mutableStateOf(false) }
-    var quote by remember(msg.id) { mutableStateOf<ReplyQuote?>(null) }
-    var image by remember(msg.id) { mutableStateOf<ByteArray?>(null) }
-    var audio by remember(msg.id) { mutableStateOf<ByteArray?>(null) }
+    // Начальное значение берём из памяти СИНХРОННО. Пузырь, ушедший за край
+    // экрана, LazyColumn уничтожает вместе с этим состоянием, и на обратной
+    // прокрутке всё грузилось заново — выглядело как перезагрузка чата,
+    // из которого ты даже не выходил. Готовое из памяти показывается сразу,
+    // а LaunchedEffect ниже дочитывает только то, чего в ней нет.
+    var quote by remember(msg.id) { mutableStateOf(QuoteMemory.get(msg.replyToId, scopeKind)) }
+    var image by remember(msg.id) { mutableStateOf(MediaCache.peek(msg.id, "img")) }
+    var audio by remember(msg.id) { mutableStateOf(MediaCache.peek(msg.id, "audio")) }
     var viewerBytes by remember(msg.id) { mutableStateOf<ByteArray?>(null) }
     var showForward by remember(msg.id) { mutableStateOf(false) }
     var fileStatus by remember(msg.id) { mutableStateOf("") }
@@ -87,13 +93,15 @@ fun MessageBubble(
     val context = androidx.compose.ui.platform.LocalContext.current
 
     LaunchedEffect(msg.id) {
-        if (msg.replyToId > 0 && !msg.isDeleted) {
-            quote = runCatching { ChatRepository.loadReplyQuote(msg.replyToId, scopeKind) }.getOrNull()
+        if (quote == null && msg.replyToId > 0 && !msg.isDeleted) {
+            quote = runCatching { ChatRepository.loadReplyQuote(msg.replyToId, scopeKind) }
+                .getOrNull()
+                ?.also { QuoteMemory.put(msg.replyToId, scopeKind, it) }
         }
-        if (msg.hasImage) {
+        if (image == null && msg.hasImage) {
             image = runCatching { ChatRepository.loadImage(msg.id, scopeKind, msg.fileName) }.getOrNull()
         }
-        if (msg.hasAudio) {
+        if (audio == null && msg.hasAudio) {
             audio = runCatching { ChatRepository.loadAudio(msg.id, scopeKind) }.getOrNull()
         }
     }

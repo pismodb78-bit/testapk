@@ -183,7 +183,9 @@ fun ChannelChatScreen(
                             horizontal = 10.dp, vertical = 8.dp
                         ),
                     ) {
-                        items(messages.size) { index ->
+                        // Ключ по id: без него обновление списка сбрасывает
+                        // состояние всех пузырей, и картинки грузятся заново.
+                        items(messages.size, key = { messages[it].id }) { index ->
                             val msg = messages[index]
                             val prev = messages.getOrNull(index - 1)
                             val showDate = prev == null ||

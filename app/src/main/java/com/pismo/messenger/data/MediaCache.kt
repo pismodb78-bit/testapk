@@ -18,6 +18,24 @@ object MediaCache {
 
     private const val MAX_CACHE_BYTES = 500L * 1024 * 1024
 
+    /**
+     * Память поверх диска.
+     *
+     * Диск сам по себе проблему прокрутки не решает: LazyColumn уничтожает
+     * пузырь, ушедший за край экрана, вместе с его remember-состоянием, и
+     * при возврате картинка читалась с диска заново — с миганием пустого
+     * места. ПК держит уже раскодированные изображения в памяти списка и
+     * такого не показывает.
+     *
+     * Здесь кэш байтов, а не Bitmap: раскодированный кадр на 4 МП занимает
+     * ~16 МБ, десяток таких — и приложение падает по памяти.
+     */
+    private const val MEMORY_BYTES = 24 * 1024 * 1024
+
+    private val memory = object : android.util.LruCache<String, ByteArray>(MEMORY_BYTES) {
+        override fun sizeOf(key: String, value: ByteArray): Int = value.size
+    }
+
     private lateinit var baseDir: File
 
     fun init(context: Context) {
@@ -52,17 +70,38 @@ object MediaCache {
         File(dir, "$msgId.$ext")
     }.getOrNull()
 
+    private fun memoryKey(msgId: Int, kind: String): String =
+        "${UserSession.effectiveId}/$kind/$msgId"
+
+    /**
+     * Синхронное чтение ИЗ ПАМЯТИ — без диска и без БД.
+     *
+     * Ради него всё и затевалось: пузырь при возврате в зону видимости
+     * должен получить картинку прямо в момент создания состояния, а не
+     * через suspend-загрузку, иначе прокрутка вверх-вниз выглядит как
+     * повторная загрузка всего чата.
+     */
+    fun peek(msgId: Int, kind: String): ByteArray? = memory.get(memoryKey(msgId, kind))
+
     fun get(msgId: Int, kind: String, fileName: String? = null): ByteArray? {
+        memory.get(memoryKey(msgId, kind))?.let { return it }
+
         val f = pathFor(msgId, kind, fileName) ?: return null
         if (!f.exists()) return null
         return runCatching {
             f.setLastModified(System.currentTimeMillis())   // отметка использования для LRU
-            f.readBytes()
+            val data = f.readBytes()
+            // В память кладём только то, что и правда листают глазами.
+            // Файлы и видео-кружки бывают на десятки мегабайт и вытеснили
+            // бы из неё всё остальное на первом же вложении.
+            if (kind == "img" || kind == "audio") memory.put(memoryKey(msgId, kind), data)
+            data
         }.getOrNull()
     }
 
     fun put(msgId: Int, kind: String, data: ByteArray?, fileName: String? = null) {
         if (data == null || data.isEmpty()) return
+        if (kind == "img" || kind == "audio") memory.put(memoryKey(msgId, kind), data)
         val f = pathFor(msgId, kind, fileName) ?: return
         runCatching {
             f.writeBytes(data)
@@ -78,6 +117,7 @@ object MediaCache {
         pathFor(msgId, kind, fileName)?.takeIf { it.exists() }
 
     fun invalidate(msgId: Int, kind: String, fileName: String? = null) {
+        memory.remove(memoryKey(msgId, kind))
         runCatching { pathFor(msgId, kind, fileName)?.delete() }
     }
 
@@ -90,6 +130,7 @@ object MediaCache {
     }
 
     fun clear() {
+        memory.evictAll()
         runCatching {
             root.deleteRecursively()
             root.mkdirs()
