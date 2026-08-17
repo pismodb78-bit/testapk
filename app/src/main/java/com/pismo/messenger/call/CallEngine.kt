@@ -57,6 +57,13 @@ class CallEngine(
         private const val TAG = "CallEngine"
         const val ATTR_MIC = "mic"
         const val ATTR_DEAF = "deaf"
+
+        /**
+         * Частота, под которую настраиваются коэффициенты шумодава.
+         * WebRTC на Android почти всегда захватывает в 48 кГц; ошибка в
+         * пару килогерц сдвинула бы срез фильтра, но не сломала обработку.
+         */
+        private const val SAMPLE_RATE_HINT = 48000
     }
 
     /** Участник звонка в виде, пригодном для отрисовки плитки. */
@@ -104,8 +111,15 @@ class CallEngine(
     private val _frontCamera = MutableStateFlow(Prefs.frontCamera)
     val frontCamera: StateFlow<Boolean> = _frontCamera.asStateFlow()
 
-    /** Микшер звука демки. Не null — значит демка идёт со звуком. */
-    private var screenAudio: ScreenAudioMixer? = null
+    /**
+     * Обработка исходящего звука: шумодав, мьют микрофона и подмешивание
+     * звука демонстрации. Один объект на весь звонок — слот
+     * setAudioBufferCallback у дорожки ровно один.
+     */
+    private val audio = AudioPipeline()
+
+    /** Захватчик системного звука. Не null — значит демка идёт со звуком. */
+    private var screenCapturer: ScreenAudioCapturer? = null
 
     // Громкости входящего звука — модель один в один с NativeCallTransport.
     // Голос и звук демки живут по РАЗНЫМ правилам, и путать их нельзя:
@@ -182,6 +196,7 @@ class CallEngine(
             r.connect(Prefs.liveKitUrl, token)
 
             r.localParticipant.setMicrophoneEnabled(true)
+            installAudioPipeline(r)
             if (withVideo) {
                 r.localParticipant.setCameraEnabled(true)
                 _cameraOn.value = true
@@ -201,8 +216,9 @@ class CallEngine(
         runCatching { eventJob?.cancel() }
         // Захват системного звука SDK не закрывает сам — забыть про release
         // означает, что AudioRecord продолжит писать звук после конца звонка.
-        runCatching { screenAudio?.release() }
-        screenAudio = null
+        runCatching { screenCapturer?.releaseAudioResources() }
+        screenCapturer = null
+        audio.screenMixer = null
         _screenAudioOn.value = false
         runCatching { CallForegroundService.stop(appContext) }
         IncomingCallMonitor.inCall = false
@@ -238,18 +254,39 @@ class CallEngine(
      *
      * Когда идёт демонстрация со звуком, дорожку глушить НЕЛЬЗЯ: системный
      * звук едет внутри неё же (на Android вторую аудиодорожку опубликовать
-     * невозможно — см. ScreenAudioMixer). Поэтому в этом режиме мьютим
+     * невозможно — см. AudioPipeline). Поэтому в этом режиме мьютим
      * только сам микрофон, обнуляя его сэмплы в микшере, а дорожка
      * продолжает нести звук демки.
      */
     private suspend fun setMicMuted(r: Room, muted: Boolean) {
         _micMuted.value = muted
-        val mixer = screenAudio
-        if (mixer != null) {
-            mixer.micMuted = muted
+        audio.micMuted = muted
+        if (screenCapturer != null) {
+            // Демка со звуком едет по этой же дорожке — глушим только
+            // микрофон в конвейере, саму дорожку оставляем живой.
             runCatching { r.localParticipant.setMicrophoneEnabled(true) }
         } else {
             runCatching { r.localParticipant.setMicrophoneEnabled(!muted) }
+            if (!muted) installAudioPipeline(r)
+        }
+    }
+
+    /**
+     * Вешает конвейер на микрофонную дорожку.
+     *
+     * Вызывать после КАЖДОГО включения микрофона: setMicrophoneEnabled(false)
+     * снимает публикацию, и при повторном включении дорожка создаётся заново
+     * — вместе с пустым слотом обработчика.
+     */
+    private fun installAudioPipeline(r: Room) {
+        audio.denoiser = if (Prefs.noiseSuppression) {
+            audio.denoiser ?: MicDenoiser(SAMPLE_RATE_HINT)
+        } else null
+
+        runCatching {
+            val mic = r.localParticipant
+                .getTrackPublication(Track.Source.MICROPHONE)?.track as? LocalAudioTrack
+            mic?.setAudioBufferCallback(audio)
         }
     }
 
@@ -360,13 +397,12 @@ class CallEngine(
 
             val capturer = ScreenAudioCapturer.createFromScreenShareTrack(screenTrack)
                 ?: return@runCatching
+            capturer.gain = Prefs.screenAudioGain
 
-            val mixer = ScreenAudioMixer(capturer).apply {
-                gain = Prefs.screenAudioGain
-                micMuted = _micMuted.value
-            }
-            micTrack.setAudioBufferCallback(mixer)
-            screenAudio = mixer
+            audio.screenMixer = capturer
+            audio.micMuted = _micMuted.value
+            micTrack.setAudioBufferCallback(audio)
+            screenCapturer = capturer
             _screenAudioOn.value = true
         }.onFailure {
             Log.w(TAG, "звук демонстрации недоступен: ${it.message}")
@@ -375,15 +411,15 @@ class CallEngine(
     }
 
     private suspend fun detachScreenAudio(r: Room) {
-        val mixer = screenAudio ?: return
-        screenAudio = null
+        val capturer = screenCapturer ?: return
+        screenCapturer = null
+        audio.screenMixer = null
         _screenAudioOn.value = false
 
-        runCatching {
-            (r.localParticipant.getTrackPublication(Track.Source.MICROPHONE)?.track
-                    as? LocalAudioTrack)?.setAudioBufferCallback(null)
-        }
-        mixer.release()
+        // Сам конвейер с дорожки НЕ снимаем: в нём остаётся шумодав.
+        // Освобождаем только захват системного звука — SDK этого не делает,
+        // и AudioRecord продолжил бы писать после конца демки.
+        runCatching { capturer.releaseAudioResources() }
 
         // Пока шла демка, дорожка была принудительно включена. Возвращаем
         // микрофон в то состояние, которое выбрал пользователь.
@@ -393,7 +429,13 @@ class CallEngine(
     /** Громкость системного звука в исходящей демке, 0..2. */
     fun setScreenAudioGain(gain: Float) {
         Prefs.screenAudioGain = gain
-        screenAudio?.gain = gain
+        screenCapturer?.gain = gain
+    }
+
+    /** Шумодав можно щёлкать прямо в звонке — он наш, не из WebRTC. */
+    fun setNoiseSuppression(enabled: Boolean) {
+        Prefs.noiseSuppression = enabled
+        audio.denoiser = if (enabled) audio.denoiser ?: MicDenoiser(SAMPLE_RATE_HINT) else null
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -415,7 +457,10 @@ class CallEngine(
             r.remoteParticipants.values.forEach { p ->
                 val id = p.identity?.value.orEmpty()
                 p.audioTrackPublications.forEach { (pub, track) ->
-                    val audio = track as? RemoteAudioTrack ?: return@forEach
+                    // remoteAudio, а не audio: поле audio — это наш конвейер
+                    // обработки исходящего звука, и затенять его локальной
+                    // переменной здесь слишком легко перепутать.
+                    val remoteAudio = track as? RemoteAudioTrack ?: return@forEach
                     val isScreen = pub.source == Track.Source.SCREEN_SHARE_AUDIO
                     val volume = if (isScreen) {
                         if (!watchedDemo.contains(id) || demoMutedBy.contains(id)) 0.0
@@ -426,7 +471,7 @@ class CallEngine(
                         else ((voiceVolume[id] ?: 1f) * globalVoiceVolume)
                             .coerceIn(0f, 4f).toDouble()
                     }
-                    runCatching { audio.setVolume(volume) }
+                    runCatching { remoteAudio.setVolume(volume) }
                 }
             }
         }

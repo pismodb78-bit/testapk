@@ -20,6 +20,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -54,7 +55,10 @@ fun HomeScreen(
     onSettings: () -> Unit,
     onLoggedOut: () -> Unit,
 ) {
-    var tab by remember { mutableStateOf(0) }
+    // rememberSaveable, а не remember: при переходе в канал сервера этот
+    // экран уходит из композиции, и обычный remember терял выбранную
+    // вкладку — возврат из канала всегда выбрасывал в «Чаты».
+    var tab by rememberSaveable { mutableStateOf(0) }
     var friendRequests by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) {

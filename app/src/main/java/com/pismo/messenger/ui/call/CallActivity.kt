@@ -31,6 +31,8 @@ import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.HeadsetOff
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.NoiseAware
+import androidx.compose.material.icons.filled.NoiseControlOff
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.ScreenShare
 import androidx.compose.material.icons.filled.StopScreenShare
@@ -361,6 +363,7 @@ private fun CallScreen(
     val error by engine.error.collectAsState()
 
     var showShareOptions by remember { mutableStateOf(false) }
+    var denoise by remember { mutableStateOf(Prefs.noiseSuppression) }
     var shareAudio by remember { mutableStateOf(Prefs.shareScreenAudio) }
     var volumeFor by remember { mutableStateOf<CallEngine.ParticipantState?>(null) }
 
@@ -474,6 +477,17 @@ private fun CallScreen(
                 active = !deafened,
                 label = "Звук",
             ) { scope.launch { engine.toggleDeafen() } }
+
+            // Шумодав наш, а не из WebRTC, поэтому переключается прямо в
+            // разговоре — перезаходить в комнату не нужно.
+            CallButton(
+                icon = if (denoise) Icons.Default.NoiseAware else Icons.Default.NoiseControlOff,
+                active = denoise,
+                label = "Шумодав",
+            ) {
+                denoise = !denoise
+                engine.setNoiseSuppression(denoise)
+            }
 
             CallButton(
                 icon = if (cameraOn) Icons.Default.Videocam else Icons.Default.VideocamOff,
