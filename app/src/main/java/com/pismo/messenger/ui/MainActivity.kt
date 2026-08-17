@@ -25,6 +25,10 @@ import com.pismo.messenger.ui.servers.ServerMembersScreen
 import com.pismo.messenger.ui.login.LoginScreen
 import com.pismo.messenger.ui.login.RegisterScreen
 import com.pismo.messenger.ui.settings.SettingsScreen
+import kotlinx.coroutines.withTimeoutOrNull
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxSize
+import com.pismo.messenger.ui.theme.PismoColors
 import com.pismo.messenger.ui.theme.PismoTheme
 
 /**
@@ -48,7 +52,15 @@ class MainActivity : ComponentActivity() {
 
                 // Пытаемся войти по сохранённым данным до первой отрисовки.
                 LaunchedEffect(Unit) {
-                    val restored = com.pismo.messenger.data.repo.AuthRepository.autoLogin()
+                    // Автологин ходит в удалённую базу. Если она недоступна,
+                    // запрос висит до сокетного таймаута, а startRoute всё это
+                    // время null — и экран остаётся пустым серым полем.
+                    // Ограничиваем ожидание и в любом случае показываем вход.
+                    val restored = withTimeoutOrNull(8_000) {
+                        runCatching {
+                            com.pismo.messenger.data.repo.AuthRepository.autoLogin()
+                        }.getOrDefault(false)
+                    } ?: false
                     startRoute = if (restored) Routes.CHATS else Routes.LOGIN
                     if (restored) {
                         SignalingClient.connect(UserSession.effectiveId)
@@ -59,7 +71,22 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val start = startRoute ?: return@PismoTheme
+                // Пока решается, куда идти, показываем индикатор, а не пустоту:
+                // раньше здесь был голый return, и экран замирал серым.
+                val start = startRoute
+                if (start == null) {
+                    androidx.compose.foundation.layout.Box(
+                        androidx.compose.ui.Modifier
+                            .fillMaxSize()
+                            .background(PismoColors.BgMain),
+                        contentAlignment = androidx.compose.ui.Alignment.Center,
+                    ) {
+                        androidx.compose.material3.CircularProgressIndicator(
+                            color = PismoColors.Blurple
+                        )
+                    }
+                    return@PismoTheme
+                }
 
                 // Окно входящего звонка — в корне, ВНЕ NavHost: иначе оно
                 // пересоздаётся на каждом переходе и не показывается там,

@@ -176,8 +176,15 @@ class CallEngine(
             val r = LiveKit.create(
                 appContext,
                 options = RoomOptions(
-                    adaptiveStream = true,
-                    dynacast = true,
+                    // adaptiveStream и dynacast НАМЕРЕННО выключены.
+                    // Dynacast перестаёт публиковать слои, на которые, по
+                    // мнению SDK, никто не подписан, — и ПК видел у нашей
+                    // демонстрации вечное «Подключение…». Раньше демка
+                    // работала именно потому, что обе опции были выключены
+                    // по умолчанию; я включил их вместе с настройками звука
+                    // и сам же сломал показ экрана.
+                    adaptiveStream = false,
+                    dynacast = false,
                     audioTrackCaptureDefaults = LocalAudioTrackOptions(
                         noiseSuppression = Prefs.noiseSuppression,
                         echoCancellation = Prefs.echoCancellation,
@@ -279,11 +286,7 @@ class CallEngine(
      * — вместе с пустым слотом обработчика.
      */
     private fun installAudioPipeline(r: Room) {
-        audio.denoiser = if (Prefs.noiseSuppression) {
-            (audio.denoiser ?: MicDenoiser(SAMPLE_RATE_HINT)).apply {
-                strength = Prefs.denoiseStrength
-            }
-        } else null
+        audio.mic = newMicProcessor()
 
         runCatching {
             val mic = r.localParticipant
@@ -434,20 +437,53 @@ class CallEngine(
         screenCapturer?.gain = gain
     }
 
+    /**
+     * Собирает обработчик микрофона по текущим настройкам.
+     *
+     * Цепочка нужна не только ради шумодава: порог активации и makeup-усиление
+     * работают и при выключенном подавлении, поэтому null возвращается лишь
+     * тогда, когда не нужно вообще ничего.
+     */
+    private fun newMicProcessor(): MicProcessor? {
+        val needed = Prefs.noiseSuppression ||
+            !Prefs.voiceAutoSensitivity ||
+            Prefs.voiceOutputGain != 100
+        if (!needed) return null
+
+        return (audio.mic ?: MicProcessor(SAMPLE_RATE_HINT)).apply {
+            strength = if (Prefs.noiseSuppression) Prefs.denoiseStrength else 0f
+            voiceGateAuto = Prefs.voiceAutoSensitivity
+            voiceThresholdDb = Prefs.voiceThresholdDb
+            outputGainPercent = Prefs.voiceOutputGain
+        }
+    }
+
     /** Шумодав можно щёлкать прямо в звонке — он наш, не из WebRTC. */
     fun setNoiseSuppression(enabled: Boolean) {
         Prefs.noiseSuppression = enabled
-        audio.denoiser = if (enabled) {
-            (audio.denoiser ?: MicDenoiser(SAMPLE_RATE_HINT)).apply {
-                strength = Prefs.denoiseStrength
-            }
-        } else null
+        audio.mic = newMicProcessor()
     }
 
     /** Сила подавления, 0..1. Меняется прямо в разговоре. */
     fun setDenoiseStrength(value: Float) {
         Prefs.denoiseStrength = value
-        audio.denoiser?.strength = value
+        audio.mic = newMicProcessor()
+    }
+
+    /**
+     * Порог активации голоса — порт SetVoiceGate(bool, int).
+     * [auto] = true — порога нет, звук передаётся всегда.
+     */
+    fun setVoiceGate(auto: Boolean, thresholdDb: Int) {
+        Prefs.voiceAutoSensitivity = auto
+        Prefs.voiceThresholdDb = thresholdDb
+        audio.mic = newMicProcessor()
+    }
+
+    /** Makeup-усиление голоса на выходе цепи, 0..300 % — порт SetOutputGain. */
+    fun setVoiceOutputGain(percent: Int) {
+        Prefs.voiceOutputGain = percent
+        audio.mic = newMicProcessor()
     }
 
     // ════════════════════════════════════════════════════════════════

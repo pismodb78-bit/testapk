@@ -82,6 +82,9 @@ fun SettingsScreen(onBack: () -> Unit) {
     var autoGain by remember { mutableStateOf(Prefs.autoGainControl) }
     var screenGain by remember { mutableStateOf(Prefs.screenAudioGain) }
     var denoiseStrength by remember { mutableStateOf(Prefs.denoiseStrength) }
+    var voiceAuto by remember { mutableStateOf(Prefs.voiceAutoSensitivity) }
+    var voiceThreshold by remember { mutableStateOf(Prefs.voiceThresholdDb.toFloat()) }
+    var voiceOutGain by remember { mutableStateOf(Prefs.voiceOutputGain.toFloat()) }
     // Тема применяется сразу по нажатию, а не по кнопке «Сохранить»: иначе
     // непонятно, что именно выбрал — палитра-то не поменялась.
     var theme by remember { mutableStateOf(themeMode) }
@@ -114,6 +117,9 @@ fun SettingsScreen(onBack: () -> Unit) {
         Prefs.autoGainControl = autoGain
         Prefs.screenAudioGain = screenGain
         Prefs.denoiseStrength = denoiseStrength
+        Prefs.voiceAutoSensitivity = voiceAuto
+        Prefs.voiceThresholdDb = voiceThreshold.toInt()
+        Prefs.voiceOutputGain = voiceOutGain.toInt()
         scope.launch { Db.closeAll() }
         status = "Настройки сохранены."
     }
@@ -289,13 +295,61 @@ fun SettingsScreen(onBack: () -> Unit) {
                     colors = SliderDefaults.colors(thumbColor = PismoColors.Blurple),
                 )
                 Text(
-                    "Выше — сильнее давятся клики клавиатуры, мышь и голоса из " +
-                            "соседней комнаты, но тише становится собственный тихий " +
-                            "голос. Это наш обработчик, а не галочка WebRTC, поэтому " +
-                            "меняется прямо в разговоре.",
+                    "Частотный шумодав: постоянный фон (кулер, шипение, гул, " +
+                            "дальний гомон) вырезается по частотам, а следом " +
+                            "лимитер давит короткие щелчки — клавиатуру и мышь. " +
+                            "Голос он не режет, поэтому держать на максимуме " +
+                            "нормально. Это наш обработчик, а не галочка WebRTC, " +
+                            "поэтому меняется прямо в разговоре.",
                     color = PismoColors.TextMuted, fontSize = 11.sp,
                 )
             }
+
+            Spacer(Modifier.height(10.dp))
+            SwitchRow("Автоопределение чувствительности", voiceAuto) { voiceAuto = it }
+            if (!voiceAuto) {
+                Text(
+                    "Порог активации голоса: ${voiceThreshold.toInt()} дБ",
+                    color = PismoColors.TextSecondary, fontSize = 13.sp,
+                )
+                Slider(
+                    value = voiceThreshold,
+                    onValueChange = { voiceThreshold = it },
+                    valueRange = -60f..0f,
+                    colors = SliderDefaults.colors(thumbColor = PismoColors.Blurple),
+                )
+                Text(
+                    "Звук тише порога в эфир не уходит — этим отрезаются шорохи и " +
+                            "разговоры из другой комнаты. Ближе к нулю — строже. " +
+                            "Тот же ползунок, что и в настройках ПК-версии.",
+                    color = PismoColors.TextMuted, fontSize = 11.sp,
+                )
+            } else {
+                Text(
+                    "Звук передаётся всегда, без порога — как автоматический режим " +
+                            "в Discord.",
+                    color = PismoColors.TextMuted, fontSize = 11.sp,
+                )
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Громкость голоса на выходе: ${voiceOutGain.toInt()}%",
+                color = PismoColors.TextSecondary, fontSize = 13.sp,
+            )
+            Slider(
+                value = voiceOutGain,
+                onValueChange = { voiceOutGain = it },
+                valueRange = 0f..300f,
+                colors = SliderDefaults.colors(thumbColor = PismoColors.Blurple),
+            )
+            Text(
+                "Шумодав неизбежно приглушает голос — здесь громкость добирается " +
+                        "обратно. Усиление линейное до самого потолка и лишь на пиках " +
+                        "мягко ограничивается, так что 300% это действительно втрое " +
+                        "громче, без хрипа.",
+                color = PismoColors.TextMuted, fontSize = 11.sp,
+            )
             SwitchRow("Эхоподавление", echoCancellation) { echoCancellation = it }
             SwitchRow("Автоусиление громкости", autoGain) { autoGain = it }
             Text(

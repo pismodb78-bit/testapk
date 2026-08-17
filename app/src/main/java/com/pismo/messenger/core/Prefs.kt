@@ -152,14 +152,42 @@ object Prefs {
         set(v) = sp.edit().putBoolean("audio_ns", v).apply()
 
     /**
-     * Сила шумодава, 0..1. Пороги ПК рассчитаны на гарнитуру у рта; у
-     * телефона микрофон всенаправленный, поэтому клики клавиатуры и голоса
-     * из другой комнаты нужно давить агрессивнее — но платой идёт свой
-     * тихий голос, так что значение выбирает пользователь.
+     * Сила шумодава, 0..1 — тот же ползунок, что NoiseSuppressionStrength
+     * (0..100 %) на ПК, и по умолчанию так же на максимуме.
+     *
+     * Раньше здесь стояло 0.5, потому что старый алгоритм на большой силе
+     * рвал голос: «сила» задирала пороги гейта. Теперь под ползунком
+     * винеровский фильтр, который давит фон по частотам, а не по громкости, —
+     * его максимум звучит ровно, и занижать значение больше незачем.
      */
     var denoiseStrength: Float
-        get() = sp.getFloat("denoise_strength", 0.5f)
+        get() = sp.getFloat("denoise_strength", 1.0f)
         set(v) = sp.edit().putFloat("denoise_strength", v).apply()
+
+    /**
+     * Автоопределение чувствительности микрофона (как в Discord) — порт
+     * VoiceAutoSensitivity. true = звук передаётся всегда, порог не действует.
+     */
+    var voiceAutoSensitivity: Boolean
+        get() = sp.getBoolean("voice_auto_sensitivity", false)
+        set(v) = sp.edit().putBoolean("voice_auto_sensitivity", v).apply()
+
+    /**
+     * Ручной порог активации голоса в дБ (−60..0) — порт VoiceThreshold.
+     * Звук тише порога не передаётся; именно им отрезаются тихие шумы и
+     * разговоры из другой комнаты. Действует при voiceAutoSensitivity = false.
+     */
+    var voiceThresholdDb: Int
+        get() = sp.getInt("voice_threshold_db", -40)
+        set(v) = sp.edit().putInt("voice_threshold_db", v.coerceIn(-60, 0)).apply()
+
+    /**
+     * Усиление голоса на выходе цепи обработки, 0..300 % — порт
+     * VoiceOutputGain. Шумодав приглушает голос, этим добираем громкость.
+     */
+    var voiceOutputGain: Int
+        get() = sp.getInt("voice_output_gain", 100)
+        set(v) = sp.edit().putInt("voice_output_gain", v.coerceIn(0, 300)).apply()
 
     /** Эхоподавление (WebRTC AEC) — без него собеседник слышит сам себя. */
     var echoCancellation: Boolean

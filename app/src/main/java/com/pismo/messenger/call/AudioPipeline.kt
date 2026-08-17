@@ -23,9 +23,12 @@ import java.nio.ByteBuffer
  */
 class AudioPipeline : AudioBufferCallback {
 
-    /** Шумодав. null — обработка выключена в настройках. */
+    /**
+     * Обработка микрофона: порог активации, шумодав, лимитер, makeup-усиление.
+     * null — вся цепочка выключена в настройках.
+     */
     @Volatile
-    var denoiser: MicDenoiser? = null
+    var mic: MicProcessor? = null
 
     /** true — микрофон замьючен пользователем; звук демки при этом остаётся. */
     @Volatile
@@ -50,10 +53,12 @@ class AudioPipeline : AudioBufferCallback {
         bytesRead: Int,
         captureTimeNs: Long,
     ): Long {
-        // Шумодав рассчитан на 16-битный PCM; для других форматов WebRTC его
+        // Цепочка рассчитана на 16-битный PCM; для других форматов WebRTC её
         // просто пропускаем, вместо того чтобы портить буфер.
         if (!micMuted && isPcm16(audioFormat)) {
-            denoiser?.let { runCatching { it.process(buffer, bytesRead) } }
+            mic?.let {
+                runCatching { it.process(buffer, bytesRead, channelCount, sampleRate) }
+            }
         }
 
         if (micMuted) zero(buffer)
