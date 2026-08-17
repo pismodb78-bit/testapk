@@ -277,9 +277,9 @@ private sealed interface MemberAction {
 private fun MemberRow(
     m: ServerMemberRow,
     presence: Presence?,
-    onOpenProfile: () -> Unit = {},
     roles: List<ServerRole>,
     perms: ServerPermissions,
+    onOpenProfile: () -> Unit = {},
     onAction: (MemberAction) -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
