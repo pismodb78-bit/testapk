@@ -169,6 +169,14 @@ fun SettingsScreen(onBack: () -> Unit) {
             )
             Spacer(Modifier.height(10.dp))
             PismoField(lkUrl, { lkUrl = it }, "URL сервера LiveKit")
+            Text(
+                "Схема ws:// — это норма: сигналинг LiveKit идёт по WebSocket, " +
+                        "и на ПК стоит тот же ws://5.181.23.167:7880. TLS нет, потому " +
+                        "что сервер живёт на голом IP без домена; медиа при этом всё " +
+                        "равно шифруется (SRTP), а вот сигналинг и токен комнаты " +
+                        "ходят открытым текстом.",
+                color = PismoColors.TextMuted, fontSize = 11.sp,
+            )
             Spacer(Modifier.height(8.dp))
             PismoField(lkKey, { lkKey = it }, "API key")
             Spacer(Modifier.height(8.dp))
@@ -184,7 +192,21 @@ fun SettingsScreen(onBack: () -> Unit) {
 
             Spacer(Modifier.height(20.dp))
             Section("Сигналинг и уведомления")
-            PismoField(wsUrl, { wsUrl = it }, "WebSocket (пусто — ws://<сервер>:8080/)")
+            PismoField(wsUrl, { wsUrl = it }, "WebSocket (пусто — собрать по адресу БД)")
+            Spacer(Modifier.height(4.dp))
+            // Показываем, что получится на самом деле. Пустое поле — это не
+            // «не настроено», а «взять хост от базы и порт 8080», ровно как
+            // GetWebSocketUrl на ПК берёт хост из ip.txt. Но по пустой
+            // строке этого не видно, и выглядит как забытая настройка.
+            Text(
+                "Используется: " + wsUrl.trim().ifBlank { "ws://${host.trim()}:8080/" },
+                color = PismoColors.Cyan, fontSize = 12.sp,
+            )
+            Text(
+                "Своё значение нужно, только если сигналинг живёт отдельно от " +
+                        "базы. ПК берёт адрес так же — из ip.txt, порт 8080.",
+                color = PismoColors.TextMuted, fontSize = 11.sp,
+            )
             Spacer(Modifier.height(8.dp))
             SwitchRow("Мгновенные события через WebSocket", wsEnabled) { wsEnabled = it }
             SwitchRow("Уведомления о новых сообщениях", notifications) { notifications = it }
