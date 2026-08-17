@@ -43,6 +43,30 @@ object PresenceRepository {
         }
     }
 
+    /**
+     * Последние известные статусы.
+     *
+     * Нужен, чтобы точки появлялись мгновенно при открытии экрана, а не
+     * после round-trip к удалённой базе. Каждый экран опрашивает присутствие
+     * сам, и без общей памяти переход «список чатов → переписка → участники»
+     * каждый раз начинался с пустоты, хотя ответ уже был получен секунду
+     * назад на предыдущем экране.
+     *
+     * Устаревания здесь нет намеренно: значение и так живёт секунды, а
+     * показать статус шестисекундной давности честнее, чем не показать
+     * ничего.
+     */
+    private val cache = HashMap<Int, Presence>()
+
+    /** Мгновенное чтение из памяти, без обращения к базе. */
+    fun cached(userId: Int): Presence? = synchronized(cache) { cache[userId] }
+
+    fun cachedFor(userIds: Collection<Int>): Map<Int, Presence> = synchronized(cache) {
+        userIds.mapNotNull { id -> cache[id]?.let { id to it } }.toMap()
+    }
+
+    fun clearCache() = synchronized(cache) { cache.clear() }
+
     suspend fun presenceFor(userIds: Collection<Int>): Map<Int, Presence> {
         if (userIds.isEmpty()) return emptyMap()
         val list = userIds.joinToString(",")
@@ -58,12 +82,18 @@ object PresenceRepository {
                     seenAgoSec = rs.getInt("seen_ago").let { if (rs.wasNull()) Int.MAX_VALUE else it },
                     activeAgoSec = rs.getInt("active_ago").let { if (rs.wasNull()) Int.MAX_VALUE else it },
                 )
-            }.toMap()
-        }.getOrDefault(emptyMap())
+            }.toMap().also { fresh -> synchronized(cache) { cache.putAll(fresh) } }
+        }.getOrElse {
+            // Связь моргнула — отдаём последнее известное вместо пустоты,
+            // иначе все точки разом гаснут на одном неудачном запросе.
+            cachedFor(userIds)
+        }
     }
 
     suspend fun presenceOf(userId: Int): Presence =
-        presenceFor(listOf(userId))[userId] ?: Presence(userId, Int.MAX_VALUE, Int.MAX_VALUE)
+        presenceFor(listOf(userId))[userId]
+            ?: cached(userId)
+            ?: Presence(userId, Int.MAX_VALUE, Int.MAX_VALUE)
 
     // ── Голосовые каналы ──────────────────────────────────────────────
 

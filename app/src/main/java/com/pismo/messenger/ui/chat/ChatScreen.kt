@@ -31,8 +31,8 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Stop
@@ -157,13 +157,20 @@ fun ChatScreen(
     // Статус собеседника в шапке — «в сети» / «бездействует N» / «был в сети N».
     var peerPresence by remember(targetId) { mutableStateOf<Presence?>(null) }
     var jumpNote by remember { mutableStateOf("") }
+    var menuOpen by remember { mutableStateOf(false) }
+    // Прикреплённый, но ещё не отправленный файл — аналог «подготовки к
+    // отправке» на ПК.
+    var pending by remember(targetId) { mutableStateOf<PendingFile?>(null) }
 
     // Сколько сообщений тянуть. Переход к дате расширяет страницу ровно так
     // же, как _dmLimit на ПК: лента грузится с конца, и без расширения
     // прыжок в прошлый месяц упирался бы в незагруженную историю.
     var pageLimit by remember(targetId) { mutableStateOf(0) }
 
-    suspend fun reload(scrollToEnd: Boolean = false) {
+    // force = «прокрути вниз обязательно». Обычный scrollToEnd уважает
+    // положение пользователя в истории (чтобы чужое сообщение не выдёргивало
+    // из середины), но СВОЮ отправку показать нужно всегда.
+    suspend fun reload(scrollToEnd: Boolean = false, force: Boolean = false) {
         runCatching {
             val loaded = if (isGroup) {
                 if (pageLimit > 0) ChatRepository.loadGroupMessages(targetId, pageLimit)
@@ -194,7 +201,7 @@ fun ChatScreen(
         // иначе новое сообщение выдёргивало бы его из середины истории.
         val atBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()
             ?.index?.let { it >= listState.layoutInfo.totalItemsCount - 3 } ?: true
-        if (scrollToEnd && messages.isNotEmpty() && atBottom) {
+        if (messages.isNotEmpty() && (force || (scrollToEnd && atBottom))) {
             listState.scrollToItem(messages.lastIndex)
         }
     }
@@ -214,7 +221,7 @@ fun ChatScreen(
                 notifyPeers(isGroup, targetId)
             }
             replyTo = null
-            reload(scrollToEnd = true)
+            reload(scrollToEnd = true, force = true)
         }
     }
 
@@ -307,28 +314,21 @@ fun ChatScreen(
                     return@runCatching
                 }
 
-                sending = true
                 val isImage = com.pismo.messenger.core.isImageName(name) ||
                         com.pismo.messenger.core.isGifName(name)
-                ChatRepository.sendMessage(
-                    scope = scopeKind,
-                    target = targetId,
-                    text = "",
-                    image = if (isImage) bytes else null,
-                    file = if (isImage) null else bytes,
-                    fileName = name,
-                    replyToId = replyTo?.id ?: 0,
-                )
-                replyTo = null
-                notifyPeers(isGroup, targetId)
-                reload(scrollToEnd = true)
+
+                // Файл НЕ отправляем сразу. На ПК вложение сначала
+                // прикрепляется, к нему можно дописать текст, и уходит всё
+                // одним сообщением; здесь же получалось два — сначала файл,
+                // потом отдельно подпись.
+                pending = PendingFile(bytes = bytes, fileName = name, isImage = isImage)
             }
-            sending = false
         }
     }
 
     fun send() {
         val text = input.trim()
+        val attach = pending
         val edit = editing
         if (edit != null) {
             if (text.isEmpty()) return
@@ -340,7 +340,9 @@ fun ChatScreen(
             }
             return
         }
-        if (text.isEmpty() || sending) return
+        // Без вложения пустой текст отправлять нечего; с вложением —
+        // наоборот, подпись необязательна.
+        if ((text.isEmpty() && attach == null) || sending) return
 
         sending = true
         scope.launch {
@@ -349,14 +351,18 @@ fun ChatScreen(
                     scope = scopeKind,
                     target = targetId,
                     text = text,
+                    image = attach?.takeIf { it.isImage }?.bytes,
+                    file = attach?.takeIf { !it.isImage }?.bytes,
+                    fileName = attach?.fileName,
                     replyToId = replyTo?.id ?: 0,
                 )
                 notifyPeers(isGroup, targetId)
             }
             input = ""
             replyTo = null
+            pending = null
             sending = false
-            reload(scrollToEnd = true)
+            reload(scrollToEnd = true, force = true)
         }
     }
 
@@ -400,17 +406,27 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showSearch = true }) {
-                        Icon(Icons.Default.Search, "Поиск", tint = PismoColors.TextSecondary)
-                    }
-                    IconButton(onClick = { showCalendar = true }) {
-                        Icon(
-                            Icons.Default.CalendarMonth, "Перейти к дате",
-                            tint = PismoColors.TextSecondary,
-                        )
-                    }
-                    IconButton(onClick = { showPins = true }) {
-                        Icon(Icons.Default.PushPin, "Закреплённые", tint = PismoColors.TextSecondary)
+                    // Поиск, дата и закреплённые уехали в меню: пять кнопок
+                    // в ряд не оставляли шапке места, и имя со статусом
+                    // обрезались на середине слова.
+                    Box {
+                        IconButton(onClick = { menuOpen = true }) {
+                            Icon(Icons.Default.MoreVert, "Ещё", tint = PismoColors.TextSecondary)
+                        }
+                        DropdownMenu(menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Поиск по переписке") },
+                                onClick = { menuOpen = false; showSearch = true },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Перейти к дате") },
+                                onClick = { menuOpen = false; showCalendar = true },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Закреплённые") },
+                                onClick = { menuOpen = false; showPins = true },
+                            )
+                        }
                     }
                     IconButton(onClick = { startCall(context, targetId, title, isGroup, false) }) {
                         Icon(Icons.Default.Call, "Позвонить", tint = PismoColors.Green)
@@ -499,6 +515,42 @@ fun ChatScreen(
                 }
             }
 
+            // Панель прикреплённого файла: он ждёт отправки вместе с текстом.
+            pending?.let { att ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(PismoColors.BgElevated)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier
+                            .width(3.dp)
+                            .height(32.dp)
+                            .background(PismoColors.Green)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (att.isImage) "Изображение прикреплено" else "Файл прикреплён",
+                            color = PismoColors.Green,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            att.fileName + " · " + formatBytesShort(att.bytes.size.toLong()),
+                            color = PismoColors.TextMuted,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                        )
+                    }
+                    IconButton(onClick = { pending = null }) {
+                        Icon(Icons.Default.Close, "Убрать вложение", tint = PismoColors.TextMuted)
+                    }
+                }
+            }
+
             // Панель ответа/редактирования над строкой ввода.
             val banner = replyTo ?: editing
             if (banner != null) {
@@ -561,11 +613,14 @@ fun ChatScreen(
                         color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
                     )
                     Spacer(Modifier.width(12.dp))
+                    // «максимум 3» без единицы читалось как угодно — от секунд
+                    // до часов. Пишем единицу прямо в строке и не даём ей
+                    // ужиматься: weight(1f) с maxLines обрезал хвост.
                     Text(
-                        "Запись голосового · максимум ${VOICE_MAX_SECONDS / 60} мин",
+                        "из ${VOICE_MAX_SECONDS / 60} мин",
                         color = PismoColors.TextMuted, fontSize = 12.sp,
-                        modifier = Modifier.weight(1f), maxLines = 1,
                     )
+                    Spacer(Modifier.weight(1f))
                     androidx.compose.material3.TextButton(onClick = {
                         // cancel(), а не stop(): записанное надо выбросить,
                         // а не отправить.
@@ -620,7 +675,7 @@ fun ChatScreen(
                         ),
                     )
 
-                    if (input.isBlank() && editing == null) {
+                    if (input.isBlank() && editing == null && pending == null) {
                         // Удержание — запись голосового, как кнопка 🎤 на ПК.
                         IconButton(
                             onClick = {
@@ -807,3 +862,33 @@ private fun fileSizeOf(context: android.content.Context, uri: android.net.Uri): 
             if (idx >= 0 && c.moveToFirst() && !c.isNull(idx)) c.getLong(idx) else 0L
         } ?: 0L
     }.getOrDefault(0L)
+
+/**
+ * Прикреплённый, но ещё не отправленный файл.
+ *
+ * На ПК вложение сначала «готовится к отправке», к нему дописывается текст,
+ * и всё уходит ОДНИМ сообщением. Здесь файл улетал сразу при выборе, а
+ * подпись потом отдельной строкой — получалось два сообщения вместо одного.
+ */
+private data class PendingFile(
+    val bytes: ByteArray,
+    val fileName: String,
+    val isImage: Boolean,
+) {
+    // ByteArray сравнивается по ссылке, поэтому equals/hashCode пишем руками:
+    // без них Compose считал бы одинаковые вложения разными и лишний раз
+    // пересобирал панель.
+    override fun equals(other: Any?): Boolean =
+        other is PendingFile && fileName == other.fileName &&
+                isImage == other.isImage && bytes.contentEquals(other.bytes)
+
+    override fun hashCode(): Int =
+        31 * (31 * bytes.contentHashCode() + fileName.hashCode()) + isImage.hashCode()
+}
+
+/** «482 КБ» / «12,4 МБ» — для подписи под прикреплённым файлом. */
+private fun formatBytesShort(bytes: Long): String = when {
+    bytes < 1024L -> "$bytes Б"
+    bytes < 1024L * 1024L -> "${bytes / 1024L} КБ"
+    else -> String.format(java.util.Locale.getDefault(), "%.1f МБ", bytes / 1024.0 / 1024.0)
+}

@@ -103,19 +103,6 @@ fun LoginScreen(
             .fillMaxSize()
             .background(PismoColors.BgMain),
     ) {
-        // statusBarsPadding обязателен: без него кнопка рисуется ПОД
-        // системной строкой состояния, и все тапы по ней забирает системный
-        // UI — визуально кнопка есть, а нажать её нельзя.
-        IconButton(
-            onClick = onSettings,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .statusBarsPadding()
-                .padding(8.dp),
-        ) {
-            Icon(Icons.Default.Settings, "Настройки подключения", tint = PismoColors.TextMuted)
-        }
-
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -242,6 +229,21 @@ fun LoginScreen(
             }
 
             Spacer(Modifier.height(24.dp))
+        }
+
+        // Кнопка объявлена ПОСЛЕДНЕЙ в Box намеренно: в Compose порядок
+        // объявления — это порядок отрисовки, и прокручиваемая Column выше
+        // растянута на весь экран. Стоя перед ней, кнопка оказывалась под
+        // Column и не получала ни одного нажатия — экран входа просто
+        // проглатывал их. statusBarsPadding здесь про отступ, а не про клики.
+        IconButton(
+            onClick = onSettings,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(8.dp),
+        ) {
+            Icon(Icons.Default.Settings, "Настройки подключения", tint = PismoColors.TextMuted)
         }
     }
 }

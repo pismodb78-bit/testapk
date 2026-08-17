@@ -495,6 +495,37 @@ object ServerRepository {
      * Нужно уведомлениям: бейдж знает только id, а в шторке должно быть
      * название канала, а не «Канал #17».
      */
+    /**
+     * Максимальный id ЧУЖОГО сообщения по каждому каналу, где я состою.
+     *
+     * Отдельный простой запрос вместо бейджей. Бейджи собирают тяжёлый SQL с
+     * проверками необязательных колонок и таблицы упоминаний, и если он
+     * падает (нет server_mentions, закрыт information_schema), уведомления о
+     * каналах пропадают целиком и молча. Здесь ломаться нечему.
+     */
+    suspend fun maxIncomingPerChannel(): Map<Int, Int> = runCatching {
+        val me = UserSession.effectiveId
+        Db.query(
+            "SELECT ch.id, COALESCE(MAX(sm.id),0) AS max_id " +
+                    "FROM server_channels ch " +
+                    "JOIN server_members m ON m.server_id = ch.server_id AND m.user_id = ? " +
+                    "LEFT JOIN server_messages sm ON sm.channel_id = ch.id AND sm.sender_id <> ? " +
+                    "WHERE ch.type <> 'voice' " +
+                    "GROUP BY ch.id",
+            me, me
+        ) { rs -> rs.getInt("id") to rs.getInt("max_id") }.toMap()
+    }.getOrDefault(emptyMap())
+
+    /** Заглушённые мной серверы — их каналы не должны звенеть. */
+    suspend fun mutedChannelIds(): Set<Int> = runCatching {
+        Db.query(
+            "SELECT ch.id FROM server_channels ch " +
+                    "JOIN server_members m ON m.server_id = ch.server_id AND m.user_id = ? " +
+                    "WHERE m.muted_notifs = 1",
+            UserSession.effectiveId
+        ) { rs -> rs.getInt("id") }.toSet()
+    }.getOrDefault(emptySet())
+
     suspend fun channelNames(): Map<Int, String> = runCatching {
         Db.query(
             "SELECT ch.id, ch.name FROM server_channels ch " +
@@ -637,6 +668,29 @@ object ServerRepository {
                     (myLogin.isNotEmpty() && lower.contains("@$myLogin")) ||
                     (myRole.isNotBlank() && lower.contains("@$myRole"))
         }
+    }
+
+    /**
+     * Сколько среди свежих сообщений канала — ОТВЕТЫ на мои.
+     *
+     * На ПК ответ считается упоминанием наравне с «@логин», но повод у них
+     * разный, и в шторке разницу видно: «ответили» и «упомянули» — не одно
+     * и то же.
+     */
+    suspend fun repliesToMeAmongNew(channelId: Int): Int {
+        if (hasReplyCol == null) hasReplyCol = columnExists("server_messages", "reply_to_id")
+        if (hasReplyCol != true) return 0
+        val me = UserSession.effectiveId
+        return runCatching {
+            Db.scalarInt(
+                "SELECT COUNT(*) FROM server_messages sm " +
+                        "JOIN server_messages p ON p.id = sm.reply_to_id " +
+                        "LEFT JOIN server_reads r ON r.user_id = ? AND r.channel_id = sm.channel_id " +
+                        "WHERE sm.channel_id = ? AND sm.sender_id <> ? AND p.sender_id = ? " +
+                        "  AND sm.id > COALESCE(r.last_read_id, 0)",
+                me, channelId, me, me
+            )
+        }.getOrDefault(0)
     }
 
     /** Описание последнего сообщения канала — для текста уведомления. */

@@ -112,6 +112,7 @@ object Notifications {
         channelId: Int,
         channelName: String,
         mentions: Int,
+        replies: Int = 0,
         preview: String = "Новое сообщение в канале",
     ) {
         if (!Prefs.notificationsEnabled) return
@@ -120,11 +121,25 @@ object Notifications {
         val extras = Bundle().apply { putInt("open_channel", channelId) }
         val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(if (mentions > 0) "@ # $channelName" else "# $channelName")
-            .setContentText(if (mentions > 0) "@ Вас упомянули · $preview" else preview)
+            // Разделяем поводы: упоминание, ответ на моё сообщение и просто
+            // новое сообщение — это три разные причины отвлечь человека.
+            .setContentTitle(
+                when {
+                    mentions > 0 -> "@ # $channelName"
+                    replies > 0 -> "↩ # $channelName"
+                    else -> "# $channelName"
+                }
+            )
+            .setContentText(
+                when {
+                    mentions > 0 -> "Вас упомянули · $preview"
+                    replies > 0 -> "Ответили на ваше сообщение · $preview"
+                    else -> preview
+                }
+            )
             .setStyle(NotificationCompat.BigTextStyle().bigText(preview))
             .setPriority(
-                if (mentions > 0) NotificationCompat.PRIORITY_HIGH
+                if (mentions > 0 || replies > 0) NotificationCompat.PRIORITY_HIGH
                 else NotificationCompat.PRIORITY_DEFAULT
             )
             .setAutoCancel(true)
@@ -134,6 +149,26 @@ object Notifications {
         runCatching {
             NotificationManagerCompat.from(context)
                 .notify(ID_MESSAGE_BASE + 200_000 + channelId, notification)
+        }
+    }
+
+    /** Входящая заявка в друзья — на ПК о ней сообщает значок в списке. */
+    fun showFriendRequest(context: Context, fromId: Int, fromName: String) {
+        if (!Prefs.notificationsEnabled) return
+        if (!hasPermission(context)) return
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("Заявка в друзья")
+            .setContentText("$fromName хочет добавить вас в друзья")
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(openAppIntent(context, Bundle().apply { putBoolean("open_friends", true) }))
+            .build()
+
+        runCatching {
+            NotificationManagerCompat.from(context)
+                .notify(ID_MESSAGE_BASE + 300_000 + fromId, notification)
         }
     }
 

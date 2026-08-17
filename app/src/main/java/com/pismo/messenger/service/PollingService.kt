@@ -8,6 +8,7 @@ import androidx.lifecycle.lifecycleScope
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.repo.ChatRepository
+import com.pismo.messenger.data.repo.FriendsRepository
 import com.pismo.messenger.data.repo.ServerRepository
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -26,9 +27,11 @@ class PollingService : LifecycleService() {
 
     private val previousUnread = HashMap<Int, Int>()
     private val previousGroupMax = HashMap<Int, Int>()
-    private val previousChannelUnread = HashMap<Int, Int>()
+    private val previousChannelMax = HashMap<Int, Int>()
     private var groupBaselineReady = false
     private var channelBaselineReady = false
+    private val knownFriendRequests = HashSet<Int>()
+    private var friendBaselineReady = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
@@ -84,6 +87,31 @@ class PollingService : LifecycleService() {
         }
 
         pollChannels()
+        pollFriendRequests()
+    }
+
+    /**
+     * Заявки в друзья. Раньше о них не сообщалось вообще: узнать о заявке
+     * можно было, только зайдя на вкладку «Друзья» и увидев там цифру.
+     */
+    private suspend fun pollFriendRequests() {
+        val incoming = runCatching { FriendsRepository.incomingRequests() }
+            .getOrDefault(emptyList())
+
+        val ids = incoming.map { it.userId }.toSet()
+        if (!friendBaselineReady) {
+            knownFriendRequests.addAll(ids)
+            friendBaselineReady = true
+            return
+        }
+
+        for (entry in incoming) {
+            if (!knownFriendRequests.add(entry.userId)) continue
+            Notifications.showFriendRequest(this, entry.userId, entry.name)
+        }
+        // Отозванные и принятые заявки забываем, иначе повторная заявка от
+        // того же человека уже не покажется.
+        knownFriendRequests.retainAll(ids)
     }
 
     /**
@@ -95,45 +123,54 @@ class PollingService : LifecycleService() {
      * запрос «что нового» дал бы расхождение между цифрой и уведомлением.
      */
     private suspend fun pollChannels() {
-        val badges = runCatching { ServerRepository.badges(UserSession.userName) }
-            .getOrDefault(emptyList())
-        if (badges.isEmpty()) return
+        // Триггер — простой запрос максимальных id, а НЕ бейджи. Бейджи
+        // собирают тяжёлый SQL с проверками необязательных колонок, и если он
+        // падает, уведомления о каналах пропадают целиком и молча — ровно то,
+        // что и наблюдалось: из личных чатов уведомления шли, из каналов нет.
+        val maxIds = ServerRepository.maxIncomingPerChannel()
+        if (maxIds.isEmpty()) return
 
         // Первый проход только запоминает состояние: иначе при каждом
         // запуске сервиса сыпались бы уведомления о давно прочитанном.
         if (!channelBaselineReady) {
-            badges.forEach { previousChannelUnread[it.channelId] = it.unread }
+            previousChannelMax.putAll(maxIds)
             channelBaselineReady = true
             return
         }
 
+        val fresh = maxIds.filter { (channelId, maxId) ->
+            maxId > (previousChannelMax[channelId] ?: 0)
+        }
+        previousChannelMax.putAll(maxIds)
+        if (fresh.isEmpty()) return
+
+        val muted = ServerRepository.mutedChannelIds()
         val names = runCatching { ServerRepository.channelNames() }.getOrDefault(emptyMap())
+        val badges = runCatching { ServerRepository.badges(UserSession.userName) }
+            .getOrDefault(emptyList())
 
-        for (b in badges) {
-            val before = previousChannelUnread[b.channelId] ?: 0
-            previousChannelUnread[b.channelId] = b.unread
-            // Заглушённые каналы молчат — так же, как на ПК.
-            if (b.muted || b.unread <= before) continue
+        for ((channelId, _) in fresh) {
+            if (channelId in muted) continue
 
-            // Упоминания. Полагаться только на b.mentions нельзя: они
-            // считаются по таблице server_mentions (миграция 15), а её на
-            // сервере может не быть — тогда счётчик всегда ноль и уведомление
-            // об упоминании не приходит никогда. Поэтому если таблица молчит,
-            // разбираем свежие сообщения по расшифрованному тексту сами.
-            val mentions = if (b.mentions > 0) b.mentions
-            else runCatching {
-                ServerRepository.mentionsAmongNew(b.channelId, before)
-            }.getOrDefault(0)
+            val badge = badges.firstOrNull { it.channelId == channelId }
+            // Упоминания: сначала бейдж (таблица server_mentions), иначе —
+            // разбор расшифрованного текста. Отдельно считаем ответы на мои
+            // сообщения: на ПК это тоже упоминание, но повод другой, и в
+            // шторке разница видна.
+            val mentions = badge?.mentions?.takeIf { it > 0 }
+                ?: runCatching { ServerRepository.mentionsAmongNew(channelId, 0) }.getOrDefault(0)
+            val replies = runCatching { ServerRepository.repliesToMeAmongNew(channelId) }
+                .getOrDefault(0)
 
-            val preview = runCatching {
-                ServerRepository.previewOfLatestInChannel(b.channelId)
-            }.getOrDefault("Новое сообщение")
+            val preview = runCatching { ServerRepository.previewOfLatestInChannel(channelId) }
+                .getOrDefault("Новое сообщение")
 
             Notifications.showChannelMessage(
                 this,
-                channelId = b.channelId,
-                channelName = names[b.channelId] ?: "Канал",
+                channelId = channelId,
+                channelName = names[channelId] ?: "Канал",
                 mentions = mentions,
+                replies = replies,
                 preview = preview,
             )
         }

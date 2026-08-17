@@ -82,9 +82,16 @@ object ChatRepository {
         }
     }
 
-    /** Все пользователи — режим админа (LoadAllUsersForAdmin). */
+    /**
+     * Все пользователи — режим админа (LoadAllUsersForAdmin).
+     *
+     * Себя из списка исключаем: переписки с самим собой в проекте нет, а
+     * строка в списке вела в пустой чат и только путала. Обычный список
+     * диалогов делает то же самое условием `u.id <> ?`.
+     */
     suspend fun loadAllUsers(): List<Conversation> = Db.query(
-        "SELECT id, Name, Surname, login, role FROM users ORDER BY Name"
+        "SELECT id, Name, Surname, login, role FROM users WHERE id <> ? ORDER BY Name",
+        UserSession.effectiveId
     ) { rs ->
         Conversation(
             userId = rs.getInt("id"),
