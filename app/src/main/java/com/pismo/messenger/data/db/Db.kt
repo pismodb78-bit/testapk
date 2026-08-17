@@ -2,6 +2,9 @@ package com.pismo.messenger.data.db
 
 import com.pismo.messenger.core.Prefs
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -104,15 +107,101 @@ object Db {
         }
     }
 
+    // ── Состояние связи ────────────────────────────────────────────────
+    //
+    // ПК открывает соединение на КАЖДЫЙ запрос, поэтому перезапуск сервера
+    // там незаметен: следующий же запрос открывает новое. Здесь пул, и
+    // после падения сервера в нём остаются дохлые соединения, а экраны,
+    // загрузившиеся один раз, больше ничего не перезапрашивают — отсюда и
+    // «пришлось перезапустить приложение».
+    //
+    // Лечится двумя вещами: запрос сам повторяется на свежем соединении,
+    // а [reconnects] считает восстановления связи, чтобы экраны могли
+    // перезагрузить данные, не дожидаясь действий пользователя.
+
+    private val _online = MutableStateFlow(true)
+
+    /** false — последняя попытка обращения к базе не удалась. */
+    val online: StateFlow<Boolean> = _online.asStateFlow()
+
+    private val _reconnects = MutableStateFlow(0)
+
+    /** Счётчик восстановлений связи: меняется — экранам пора перезагрузиться. */
+    val reconnects: StateFlow<Int> = _reconnects.asStateFlow()
+
+    private fun markOnline() {
+        if (!_online.value) {
+            _online.value = true
+            _reconnects.value = _reconnects.value + 1
+        }
+    }
+
+    private fun markOffline() {
+        _online.value = false
+    }
+
+    /**
+     * Похоже ли исключение на разрыв соединения, а не на ошибку в запросе.
+     * Повторять имеет смысл только первое: повтор синтаксической ошибки
+     * просто удвоит задержку.
+     */
+    private fun isConnectionFailure(e: Throwable): Boolean {
+        var cause: Throwable? = e
+        while (cause != null) {
+            if (cause is java.net.SocketException ||
+                cause is java.net.SocketTimeoutException ||
+                cause is java.net.ConnectException ||
+                cause is java.io.EOFException
+            ) return true
+            val sqlState = (cause as? java.sql.SQLException)?.sqlState
+            // 08xxx — класс «connection exception» по SQL-стандарту.
+            if (sqlState != null && sqlState.startsWith("08")) return true
+            val text = cause.message.orEmpty()
+            if (text.contains("Communications link failure", ignoreCase = true) ||
+                text.contains("connection is closed", ignoreCase = true) ||
+                text.contains("Broken pipe", ignoreCase = true) ||
+                text.contains("server closed", ignoreCase = true)
+            ) return true
+            cause = cause.cause
+        }
+        return false
+    }
+
     /**
      * Выполняет блок на соединении из пула. Соединение, на котором вылетело
      * SQL-исключение, в пул не возвращается — оно может быть уже разорвано.
+     *
+     * При обрыве связи запрос повторяется ОДИН раз на заново открытом
+     * соединении: сервер могли перезапустить, и лежащие в пуле сокеты уже
+     * мертвы, хотя сама база снова доступна.
      */
     suspend fun <T> use(block: (Connection) -> T): T = withContext(Dispatchers.IO) {
+        try {
+            val result = runOnce(block)
+            markOnline()
+            return@withContext result
+        } catch (first: Throwable) {
+            if (!isConnectionFailure(first)) throw first
+            markOffline()
+
+            // Пул после обрыва целиком под подозрением — выбрасываем его,
+            // иначе повтор возьмёт следующее такое же мёртвое соединение.
+            lock.withLock {
+                pool.forEach { runCatching { it.close() } }
+                pool.clear()
+            }
+
+            val result = runOnce(block)
+            markOnline()
+            return@withContext result
+        }
+    }
+
+    private suspend fun <T> runOnce(block: (Connection) -> T): T {
         val conn = borrow()
         var broken = false
         try {
-            block(conn)
+            return block(conn)
         } catch (e: Throwable) {
             broken = true
             throw e

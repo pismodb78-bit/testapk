@@ -33,12 +33,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.db.Db
@@ -86,7 +88,17 @@ fun ProfileScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit) {
     var avatarVersion by remember { mutableStateOf(0) }
     val context = LocalContext.current
 
+    // Выбранный файл сначала уходит в обрезку — как на ПК, где после
+    // выбора открывается AvatarCropForm. Заливать оригинал напрямую нельзя:
+    // аватар тянется из БД при каждой отрисовке списка у всех участников.
+    var cropUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    var bannerVersion by remember { mutableStateOf(0) }
+
     val avatarPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri -> if (uri != null) cropUri = uri }
+
+    val bannerPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -98,17 +110,33 @@ fun ProfileScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit) {
             }
             when {
                 data == null -> report("Не удалось прочитать изображение.", true)
-                // Аватар лежит в БД как BLOB и тянется при каждом показе списка,
-                // поэтому крупные файлы бьют по скорости всем участникам.
-                data.size > 2 * 1024 * 1024 ->
-                    report("Файл больше 2 МБ — выберите изображение поменьше.", true)
-                ProfileRepository.setAvatar(data) -> {
-                    avatarVersion++
-                    report("Аватар обновлён.", false)
+                data.size > 3 * 1024 * 1024 ->
+                    report("Файл больше 3 МБ — выберите изображение поменьше.", true)
+                ProfileRepository.setBanner(data) -> {
+                    bannerVersion++
+                    report("Фон профиля обновлён.", false)
                 }
-                else -> report("Не удалось сохранить аватар.", true)
+                else -> report("Не удалось сохранить фон.", true)
             }
         }
+    }
+
+    cropUri?.let { uri ->
+        AvatarCropDialog(
+            uri = uri,
+            onCancel = { cropUri = null },
+            onDone = { png ->
+                cropUri = null
+                scope.launch {
+                    if (ProfileRepository.setAvatar(png)) {
+                        avatarVersion++
+                        report("Аватар обновлён.", false)
+                    } else {
+                        report("Не удалось сохранить аватар.", true)
+                    }
+                }
+            },
+        )
     }
 
     LaunchedEffect(Unit) {
@@ -128,9 +156,24 @@ fun ProfileScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit) {
         Modifier
             .fillMaxSize()
             .background(PismoColors.BgMain)
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .verticalScroll(rememberScrollState()),
     ) {
+        // Баннер-фон профиля — то же, что панель сверху в ProfileForm.cs.
+        ProfileBanner(
+            userId = UserSession.effectiveId,
+            version = bannerVersion,
+            onPick = { bannerPicker.launch("image/*") },
+            onClear = {
+                scope.launch {
+                    if (ProfileRepository.setBanner(null)) {
+                        bannerVersion++
+                        report("Фон профиля убран.", false)
+                    }
+                }
+            },
+        )
+
+        Column(Modifier.padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.clickable { avatarPicker.launch("image/*") }) {
                 key(avatarVersion) {
@@ -314,6 +357,59 @@ fun ProfileScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit) {
         ) { Text("Выйти из аккаунта", color = Color.White, fontWeight = FontWeight.Bold) }
 
         Spacer(Modifier.height(32.dp))
+        }
+    }
+}
+
+/**
+ * Фон профиля. На ПК это панель 160 px, поверх низа которой заходит аватар;
+ * картинка растягивается по принципу cover — заполняет панель целиком,
+ * лишнее обрезается.
+ */
+@Composable
+private fun ProfileBanner(
+    userId: Int,
+    version: Int,
+    onPick: () -> Unit,
+    onClear: () -> Unit,
+) {
+    var bytes by remember(userId, version) { mutableStateOf<ByteArray?>(null) }
+
+    LaunchedEffect(userId, version) {
+        bytes = runCatching { ProfileRepository.banner(userId) }.getOrNull()
+    }
+
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(140.dp)
+            .background(PismoColors.Green)
+            .clickable { onPick() },
+    ) {
+        val data = bytes
+        if (data != null && data.isNotEmpty()) {
+            AsyncImage(
+                model = data,
+                contentDescription = "Фон профиля",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
+        Row(
+            Modifier
+                .align(Alignment.TopEnd)
+                .padding(6.dp),
+        ) {
+            if (data != null && data.isNotEmpty()) {
+                TextButton(onClick = onClear) {
+                    Text("Убрать фон", color = Color.White, fontSize = 12.sp)
+                }
+            }
+            TextButton(onClick = onPick) {
+                Text("Сменить фон", color = Color.White, fontSize = 12.sp)
+            }
+        }
     }
 }
 

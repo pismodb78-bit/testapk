@@ -485,6 +485,19 @@ object ServerRepository {
         val muted: Boolean,
     )
 
+    /**
+     * id канала → его имя, по всем серверам, где я состою.
+     * Нужно уведомлениям: бейдж знает только id, а в шторке должно быть
+     * название канала, а не «Канал #17».
+     */
+    suspend fun channelNames(): Map<Int, String> = runCatching {
+        Db.query(
+            "SELECT ch.id, ch.name FROM server_channels ch " +
+                    "JOIN server_members m ON m.server_id = ch.server_id AND m.user_id = ?",
+            UserSession.effectiveId
+        ) { rs -> rs.getInt("id") to rs.str("name") }.toMap()
+    }.getOrDefault(emptyMap())
+
     suspend fun markChannelRead(channelId: Int) {
         runCatching {
             Db.exec(

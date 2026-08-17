@@ -70,6 +70,18 @@ import io.livekit.android.renderer.TextureViewRenderer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import android.os.Build
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.filled.FlipCameraAndroid
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Slider
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.pismo.messenger.call.IncomingCallMonitor
+import com.pismo.messenger.core.Prefs
 
 /**
  * Экран звонка. Комната LiveKit определяется так же, как на ПК:
@@ -86,6 +98,14 @@ class CallActivity : ComponentActivity() {
         const val EXTRA_WITH_VIDEO = "with_video"
         const val EXTRA_IS_CALLER = "is_caller"
         const val EXTRA_CHANNEL_ID = "channel_id"
+
+        /**
+         * true — активити открыта системой по full-screen intent, звонок
+         * ещё НЕ принят. Автоматически входить в комнату в этом случае
+         * нельзя: на заблокированном экране Android поднимает активити сам,
+         * без участия человека, и звонок бы отвечался сам собой.
+         */
+        const val EXTRA_RINGING = "ringing"
     }
 
     private lateinit var engine: CallEngine
@@ -94,6 +114,7 @@ class CallActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        showOverLockScreen()
         engine = CallEngine(applicationContext, lifecycleScope)
 
         val peerId = intent.getIntExtra(EXTRA_PEER_ID, -1)
@@ -103,17 +124,94 @@ class CallActivity : ComponentActivity() {
         val isCaller = intent.getBooleanExtra(EXTRA_IS_CALLER, false)
         sessionId = intent.getIntExtra(EXTRA_SESSION_ID, -1)
         channelId = intent.getIntExtra(EXTRA_CHANNEL_ID, -1)
+        val ringing = intent.getBooleanExtra(EXTRA_RINGING, false)
 
         setContent {
             PismoTheme {
-                CallScreen(
-                    engine = engine,
-                    peerName = peerName,
-                    onHangup = { finishCall() },
-                )
+                var answered by remember { mutableStateOf(!ringing) }
+
+                if (!answered) {
+                    RingingScreen(
+                        callerName = peerName,
+                        hasVideo = withVideo,
+                        onAccept = {
+                            answered = true
+                            IncomingCallMonitor.incoming.value?.let {
+                                IncomingCallMonitor.accepted(this@CallActivity, it)
+                            }
+                            joinRoom(peerId, groupId, peerName, withVideo, isCaller)
+                        },
+                        onReject = {
+                            IncomingCallMonitor.incoming.value?.let {
+                                IncomingCallMonitor.rejected(this@CallActivity, it)
+                            }
+                            lifecycleScope.launch {
+                                runCatching { if (sessionId > 0) CallRepository.reject(sessionId) }
+                                finish()
+                            }
+                        },
+                    )
+                } else {
+                    CallScreen(
+                        engine = engine,
+                        peerName = peerName,
+                        onHangup = { finishCall() },
+                    )
+                }
             }
         }
 
+        if (!ringing) joinRoom(peerId, groupId, peerName, withVideo, isCaller)
+
+        // Состояние микрофона и подключения для дока.
+        lifecycleScope.launch {
+            while (isActive) {
+                ActiveCall.updateState(
+                    micMuted = engine.micMuted.value,
+                    connected = engine.state.value == CallEngine.State.CONNECTED,
+                )
+                delay(1000)
+            }
+        }
+
+        // Присутствие в голосовом канале — heartbeat, как на ПК.
+        lifecycleScope.launch {
+            while (isActive) {
+                if (channelId > 0) {
+                    PresenceRepository.voiceHeartbeat(
+                        channelId,
+                        streaming = engine.screenSharing.value || engine.cameraOn.value,
+                        micMuted = engine.micMuted.value,
+                        deafened = engine.deafened.value,
+                    )
+                }
+                delay(10_000)
+            }
+        }
+    }
+
+    /** Показ поверх экрана блокировки — иначе входящий ночью просто не увидят. */
+    private fun showOverLockScreen() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                        android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                        android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            )
+        }
+    }
+
+    private fun joinRoom(
+        peerId: Int,
+        groupId: Int,
+        peerName: String,
+        withVideo: Boolean,
+        isCaller: Boolean,
+    ) {
         lifecycleScope.launch {
             val room = when {
                 // Голосовой канал сервера — сессии в БД нет вовсе.
@@ -158,32 +256,6 @@ class CallActivity : ComponentActivity() {
 
             engine.join(room, withVideo)
         }
-
-        // Состояние микрофона и подключения для дока.
-        lifecycleScope.launch {
-            while (isActive) {
-                ActiveCall.updateState(
-                    micMuted = engine.micMuted.value,
-                    connected = engine.state.value == CallEngine.State.CONNECTED,
-                )
-                delay(1000)
-            }
-        }
-
-        // Присутствие в голосовом канале — heartbeat, как на ПК.
-        lifecycleScope.launch {
-            while (isActive) {
-                if (channelId > 0) {
-                    PresenceRepository.voiceHeartbeat(
-                        channelId,
-                        streaming = engine.screenSharing.value || engine.cameraOn.value,
-                        micMuted = engine.micMuted.value,
-                        deafened = engine.deafened.value,
-                    )
-                }
-                delay(10_000)
-            }
-        }
     }
 
     private fun finishCall() {
@@ -209,6 +281,66 @@ class CallActivity : ComponentActivity() {
     }
 }
 
+/**
+ * Экран «вам звонят», когда активити подняли по full-screen intent.
+ * Пока человек не нажал «Принять», в комнату мы не заходим.
+ */
+@Composable
+private fun RingingScreen(
+    callerName: String,
+    hasVideo: Boolean,
+    onAccept: () -> Unit,
+    onReject: () -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(PismoColors.BgDarkest)
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        LetterAvatar(0, callerName, 96.dp)
+        Spacer(Modifier.height(20.dp))
+        Text(
+            callerName.ifBlank { "Входящий звонок" },
+            color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold,
+        )
+        Text(
+            if (hasVideo) "Входящий видеозвонок" else "Входящий звонок",
+            color = PismoColors.TextMuted, fontSize = 14.sp,
+        )
+        Spacer(Modifier.height(48.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            Box(
+                Modifier
+                    .size(72.dp)
+                    .clip(CircleShape)
+                    .background(PismoColors.Red),
+                contentAlignment = Alignment.Center,
+            ) {
+                IconButton(onClick = onReject) {
+                    Icon(Icons.Default.CallEnd, "Отклонить", tint = Color.White)
+                }
+            }
+            Box(
+                Modifier
+                    .size(72.dp)
+                    .clip(CircleShape)
+                    .background(PismoColors.Green),
+                contentAlignment = Alignment.Center,
+            ) {
+                IconButton(onClick = onAccept) {
+                    Icon(Icons.Default.Call, "Принять", tint = Color.White)
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun CallScreen(
     engine: CallEngine,
@@ -222,16 +354,67 @@ private fun CallScreen(
     val deafened by engine.deafened.collectAsState()
     val cameraOn by engine.cameraOn.collectAsState()
     val sharing by engine.screenSharing.collectAsState()
+    val screenAudioOn by engine.screenAudioOn.collectAsState()
+    val frontCamera by engine.frontCamera.collectAsState()
     val state by engine.state.collectAsState()
     val error by engine.error.collectAsState()
+
+    var showShareOptions by remember { mutableStateOf(false) }
+    var shareAudio by remember { mutableStateOf(Prefs.shareScreenAudio) }
+    var volumeFor by remember { mutableStateOf<CallEngine.ParticipantState?>(null) }
 
     val screenCaptureLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            scope.launch { engine.startScreenShare(result.data!!) }
+            scope.launch { engine.startScreenShare(result.data!!, shareAudio) }
         }
     }
+
+    if (showShareOptions) {
+        AlertDialog(
+            onDismissRequest = { showShareOptions = false },
+            containerColor = PismoColors.BgSidebar,
+            title = { Text("Демонстрация экрана", color = Color.White) },
+            text = {
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = shareAudio,
+                            onCheckedChange = {
+                                shareAudio = it
+                                Prefs.shareScreenAudio = it
+                            },
+                        )
+                        Text("Передавать системный звук", color = Color.White, fontSize = 14.sp)
+                    }
+                    Text(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                            "Звук приложений, которые сами не запретили его записывать. " +
+                                    "Второго разрешения система не спросит."
+                        else
+                            "Захват системного звука доступен с Android 10 — на этой версии " +
+                                    "демонстрация пойдёт без звука.",
+                        color = PismoColors.TextMuted, fontSize = 11.sp,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showShareOptions = false
+                    val mgr = context.getSystemService(MediaProjectionManager::class.java)
+                    mgr?.createScreenCaptureIntent()?.let { screenCaptureLauncher.launch(it) }
+                }) { Text("Начать", color = PismoColors.Cyan) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showShareOptions = false }) {
+                    Text("Отмена", color = PismoColors.TextMuted)
+                }
+            },
+        )
+    }
+
+    volumeFor?.let { p -> ParticipantVolumeDialog(engine, p) { volumeFor = null } }
 
     Column(
         Modifier
@@ -268,7 +451,7 @@ private fun CallScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(participants, key = { it.identity }) { p ->
-                ParticipantTile(engine, p)
+                ParticipantTile(engine, p, onLongPress = { if (!p.isLocal) volumeFor = p })
             }
         }
 
@@ -297,6 +480,16 @@ private fun CallScreen(
                 label = "Камера",
             ) { scope.launch { engine.toggleCamera() } }
 
+            // Кнопка появляется только при включённой камере: переключать
+            // фронталку на выключенной камере нечего.
+            if (cameraOn) {
+                CallButton(
+                    icon = Icons.Default.FlipCameraAndroid,
+                    active = true,
+                    label = if (frontCamera) "Фронтальная" else "Основная",
+                ) { engine.switchCamera() }
+            }
+
             CallButton(
                 icon = if (sharing) Icons.Default.StopScreenShare else Icons.Default.ScreenShare,
                 active = sharing,
@@ -305,8 +498,7 @@ private fun CallScreen(
                 if (sharing) {
                     scope.launch { engine.stopScreenShare() }
                 } else {
-                    val mgr = context.getSystemService(MediaProjectionManager::class.java)
-                    mgr?.createScreenCaptureIntent()?.let { screenCaptureLauncher.launch(it) }
+                    showShareOptions = true
                 }
             }
 
@@ -325,16 +517,32 @@ private fun CallScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ParticipantTile(engine: CallEngine, p: CallEngine.ParticipantState) {
+private fun ParticipantTile(
+    engine: CallEngine,
+    p: CallEngine.ParticipantState,
+    onLongPress: () -> Unit,
+) {
     val track = p.screenTrack ?: p.cameraTrack
+
+    // «Смотрим демку» = плитка с экраном на виду. От этого зависит, слышно
+    // ли её звук: на ПК звук демонстрации намеренно молчит, пока её не
+    // смотрят, иначе в общем звонке одновременно орали бы все стримы.
+    DisposableEffect(p.identity, p.screenTrack != null) {
+        if (!p.isLocal && p.screenTrack != null) engine.setScreenAudioWatched(p.identity, true)
+        onDispose {
+            if (!p.isLocal) engine.setScreenAudioWatched(p.identity, false)
+        }
+    }
 
     Box(
         Modifier
             .fillMaxWidth()
             .aspectRatio(if (track != null) 16f / 9f else 1f)
             .clip(RoundedCornerShape(12.dp))
-            .background(PismoColors.BgSidebar),
+            .background(PismoColors.BgSidebar)
+            .combinedClickable(onClick = {}, onLongClick = onLongPress),
         contentAlignment = Alignment.Center,
     ) {
         if (track != null) {
@@ -379,6 +587,73 @@ private fun ParticipantTile(engine: CallEngine, p: CallEngine.ParticipantState) 
             }
         }
     }
+}
+
+/**
+ * Громкость конкретного участника — то же, что ПКМ по плитке на ПК.
+ * Голос и звук его демонстрации регулируются раздельно.
+ */
+@Composable
+private fun ParticipantVolumeDialog(
+    engine: CallEngine,
+    p: CallEngine.ParticipantState,
+    onDismiss: () -> Unit,
+) {
+    var voice by remember(p.identity) { mutableStateOf(engine.volumeOf(p.identity)) }
+    var demo by remember(p.identity) { mutableStateOf(engine.demoVolumeOf(p.identity)) }
+    var muted by remember(p.identity) { mutableStateOf(engine.isMutedFor(p.identity)) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = PismoColors.BgSidebar,
+        title = { Text(p.name, color = Color.White) },
+        text = {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = muted,
+                        onCheckedChange = {
+                            muted = it
+                            engine.setParticipantMuted(p.identity, it)
+                        },
+                    )
+                    Text("Заглушить голос", color = Color.White, fontSize = 14.sp)
+                }
+
+                Text(
+                    "Громкость голоса: ${(voice * 100).toInt()}%",
+                    color = PismoColors.TextMuted, fontSize = 12.sp,
+                )
+                Slider(
+                    value = voice,
+                    onValueChange = {
+                        voice = it
+                        engine.setParticipantVolume(p.identity, it)
+                    },
+                    valueRange = 0f..3f,
+                    enabled = !muted,
+                )
+
+                if (p.screenTrack != null) {
+                    Text(
+                        "Громкость демонстрации: ${(demo * 100).toInt()}%",
+                        color = PismoColors.TextMuted, fontSize = 12.sp,
+                    )
+                    Slider(
+                        value = demo,
+                        onValueChange = {
+                            demo = it
+                            engine.setScreenShareVolume(p.identity, it)
+                        },
+                        valueRange = 0f..3f,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Готово", color = PismoColors.Cyan) }
+        },
+    )
 }
 
 @Composable

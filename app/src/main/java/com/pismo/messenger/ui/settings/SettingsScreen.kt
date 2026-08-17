@@ -76,7 +76,7 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     // Обход кеша — это работа с файловой системой, в композиции ей не место.
     LaunchedEffect(Unit) {
-        cacheSize = withContext(Dispatchers.IO) { MediaCache.sizeBytes() / 1024 / 1024 }
+        cacheSize = withContext(Dispatchers.IO) { MediaCache.sizeBytes() }
     }
 
     fun save() {
@@ -208,7 +208,13 @@ fun SettingsScreen(onBack: () -> Unit) {
 
             Spacer(Modifier.height(20.dp))
             Section("Кеш медиа")
-            Text("Занято: $cacheSize МБ", color = PismoColors.TextSecondary, fontSize = 13.sp)
+            // Раньше здесь было деление на МБ в целых числах, и любой кеш
+            // меньше мегабайта показывался как «0 МБ» — выглядело так, будто
+            // ничего не сохраняется вообще.
+            Text(
+                "Занято: " + formatBytes(cacheSize),
+                color = PismoColors.TextSecondary, fontSize = 13.sp,
+            )
             Spacer(Modifier.height(8.dp))
             Button(
                 onClick = {
@@ -268,4 +274,12 @@ private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
             colors = SwitchDefaults.colors(checkedTrackColor = PismoColors.Blurple),
         )
     }
+}
+
+/** «12 КБ» / «3,4 МБ» — целые мегабайты врали про пустой кеш. */
+private fun formatBytes(bytes: Long): String = when {
+    bytes <= 0L -> "пусто"
+    bytes < 1024L -> "$bytes Б"
+    bytes < 1024L * 1024L -> "${bytes / 1024L} КБ"
+    else -> String.format(java.util.Locale.getDefault(), "%.1f МБ", bytes / 1024.0 / 1024.0)
 }

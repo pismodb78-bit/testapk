@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -46,6 +48,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -61,6 +64,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.pismo.messenger.core.UserSession
@@ -69,6 +74,7 @@ import com.pismo.messenger.core.fileBadge
 import com.pismo.messenger.core.fileColor
 import com.pismo.messenger.core.formatDateSeparator
 import com.pismo.messenger.core.formatTime
+import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.data.MediaCache
 import com.pismo.messenger.data.model.ChatMessage
 import com.pismo.messenger.data.model.ReactionSummary
@@ -147,7 +153,13 @@ fun ChatScreen(
         }
     }
 
-    LaunchedEffect(targetId) {
+    // reconnects в ключе: после восстановления связи с базой экран
+    // перезагружается сам. Иначе первый неудачный запрос оставлял пустую
+    // переписку до перезапуска приложения — опрос ниже сверяет только
+    // количество и на нуле ничего не менял.
+    val reconnects by Db.reconnects.collectAsState()
+
+    LaunchedEffect(targetId, reconnects) {
         loading = true
         reload(scrollToEnd = true)
     }
@@ -286,6 +298,10 @@ fun ChatScreen(
             Modifier
                 .fillMaxSize()
                 .padding(padding)
+                // Без imePadding клавиатура наезжает на строку ввода, и не
+                // видно, что набираешь. adjustResize в манифесте сам по себе
+                // Compose не помогает: он двигает окно, а не разметку.
+                .imePadding()
         ) {
             if (readOnly) {
                 Text(
@@ -300,7 +316,11 @@ fun ChatScreen(
                 )
             }
 
-            Box(Modifier.weight(1f)) {
+            // fillMaxWidth обязателен: в Column ширину задаёт самый широкий
+            // ребёнок, и на время загрузки им был сам индикатор — коробка
+            // схлопывалась по нему, а align(Center) центрировал кружок
+            // внутри него же, то есть выбрасывал к левому краю экрана.
+            Box(Modifier.fillMaxWidth().weight(1f)) {
                 if (loading) {
                     CircularProgressIndicator(
                         Modifier.align(Alignment.Center),
@@ -412,6 +432,13 @@ fun ChatScreen(
                             Text("Сообщение…", color = PismoColors.TextMuted, fontSize = 14.sp)
                         },
                         maxLines = 5,
+                        // ImeAction.None даёт на клавиатуре обычный Enter,
+                        // который переводит строку. С действием по умолчанию
+                        // там оказывается «Готово», и перенос набрать нечем.
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Sentences,
+                            imeAction = ImeAction.None,
+                        ),
                         colors = TextFieldDefaults.colors(
                             focusedContainerColor = Color.Transparent,
                             unfocusedContainerColor = Color.Transparent,

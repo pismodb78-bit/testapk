@@ -48,11 +48,17 @@ object CallRepository {
     )
 
     /**
-     * Входящие звонки: адресованные лично мне либо в группу, где я состою,
-     * новее последнего просмотренного id.
+     * Входящие звонки: адресованные лично мне либо в группу, где я состою.
+     *
+     * Условия «новее последнего id» здесь намеренно НЕТ. На ПК от него
+     * отказались с прямой пометкой «ненадёжный фильтр, часть звонков
+     * пропускалась»: отметка уезжала вперёд на звонке, который так и не
+     * показали, и следующие вызовы молча отсеивались. Уже показанные
+     * отсекает IncomingCallMonitor своим множеством id.
      */
-    suspend fun incomingCalls(afterId: Int): List<CallSessionRow> {
+    suspend fun incomingCalls(): List<CallSessionRow> {
         val me = UserSession.effectiveId
+        if (me <= 0) return emptyList()
         val sql = """
             SELECT cs.id, cs.caller_id, cs.has_video, cs.group_id, cs.callee_id,
                    TRIM(CONCAT(u.Name,' ',u.Surname)) AS caller_name, u.login
@@ -62,11 +68,11 @@ object CallRepository {
             WHERE (cs.callee_id = ? OR gm.user_id = ?)
               AND cs.status = 'ringing'
               AND cs.caller_id <> ?
-              AND cs.id > ?
+            ORDER BY cs.id ASC
         """.trimIndent()
 
         return runCatching {
-            Db.query(sql, me, me, me, me, afterId) { rs ->
+            Db.query(sql, me, me, me, me) { rs ->
                 CallSessionRow(
                     id = rs.getInt("id"),
                     callerId = rs.getInt("caller_id"),

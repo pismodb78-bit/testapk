@@ -4,9 +4,12 @@ import android.app.Notification
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.pismo.messenger.R
 import com.pismo.messenger.ui.MainActivity
 
@@ -39,9 +42,31 @@ class CallForegroundService : Service() {
             )
             .build()
 
-        startForeground(Notifications.ID_CALL, notification)
+        // Начиная с Android 10 тип сервиса указывается явно, и с Android 14
+        // система сверяет КАЖДЫЙ заявленный тип с выданными разрешениями.
+        // Поэтому camera добавляем только когда разрешение реально есть:
+        // иначе startForeground бросит SecurityException и звонок оборвётся
+        // ровно в момент сворачивания приложения.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            if (granted(android.Manifest.permission.CAMERA)) {
+                types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            }
+            if (!granted(android.Manifest.permission.RECORD_AUDIO)) {
+                // Без микрофона тип microphone тоже запрещён — а других
+                // подходящих типов у нас нет, поэтому сервис не поднимаем.
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            startForeground(Notifications.ID_CALL, notification, types)
+        } else {
+            startForeground(Notifications.ID_CALL, notification)
+        }
         return START_NOT_STICKY
     }
+
+    private fun granted(permission: String): Boolean =
+        ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
     override fun onBind(intent: Intent?): IBinder? = null
 

@@ -11,8 +11,36 @@ import com.pismo.messenger.data.model.UserProfile
  */
 object ProfileRepository {
 
-    /** Аватары меняются редко — держим в памяти, чтобы не дёргать БД на каждый список. */
+    /**
+     * Аватары меняются редко — держим в памяти, чтобы не дёргать БД на
+     * каждый список.
+     *
+     * У кэша ОБЯЗАТЕЛЕН срок годности. Раньше его не было, и запись жила до
+     * перезапуска приложения: сменивший аватар видел новый сразу (свою запись
+     * мы перезаписываем сами), а все остальные — старый, пока не закроют
+     * приложение. Со стороны это выглядело так, будто аватар вообще не
+     * уходит на сервер, хотя в БД он лежал.
+     */
+    private const val AVATAR_TTL_MS = 3 * 60 * 1000L
+
     private val avatarCache = HashMap<Int, ByteArray?>()
+    private val avatarLoadedAt = HashMap<Int, Long>()
+
+    private fun isFresh(userId: Int): Boolean {
+        val at = avatarLoadedAt[userId] ?: return false
+        return System.currentTimeMillis() - at < AVATAR_TTL_MS
+    }
+
+    private fun remember(userId: Int, data: ByteArray?) {
+        avatarCache[userId] = data
+        avatarLoadedAt[userId] = System.currentTimeMillis()
+    }
+
+    /** Забыть аватар пользователя — при следующем показе он перечитается. */
+    fun invalidateAvatar(userId: Int) {
+        avatarCache.remove(userId)
+        avatarLoadedAt.remove(userId)
+    }
 
     suspend fun load(userId: Int): UserProfile? = runCatching {
         Db.queryFirst(
@@ -59,13 +87,15 @@ object ProfileRepository {
     // ── Аватар ────────────────────────────────────────────────────────
 
     suspend fun avatar(userId: Int): ByteArray? {
-        avatarCache[userId]?.let { return it }
-        if (avatarCache.containsKey(userId)) return null   // знаем, что аватара нет
+        if (avatarCache.containsKey(userId) && isFresh(userId)) return avatarCache[userId]
 
-        val data = runCatching {
+        val result = runCatching {
             Db.scalarBytes("SELECT avatar_data FROM users WHERE id=?", userId)
-        }.getOrNull()
-        avatarCache[userId] = data
+        }
+        // Обрыв связи — не повод забывать то, что уже нарисовано: отдаём
+        // старое изображение и пробуем ещё раз на следующем показе.
+        val data = result.getOrElse { return avatarCache[userId] }
+        remember(userId, data)
         return data
     }
 
@@ -77,7 +107,7 @@ object ProfileRepository {
      * вместо одного round-trip.
      */
     suspend fun prefetchAvatars(userIds: Collection<Int>) {
-        val missing = userIds.distinct().filter { !avatarCache.containsKey(it) }
+        val missing = userIds.distinct().filter { !avatarCache.containsKey(it) || !isFresh(it) }
         if (missing.isEmpty()) return
 
         runCatching {
@@ -87,7 +117,7 @@ object ProfileRepository {
                         "SELECT id, avatar_data FROM users WHERE id IN (${missing.joinToString(",")})"
                     ).use { rs ->
                         while (rs.next()) {
-                            avatarCache[rs.getInt("id")] = rs.getBytes("avatar_data")
+                            remember(rs.getInt("id"), rs.getBytes("avatar_data"))
                         }
                     }
                 }
@@ -95,7 +125,7 @@ object ProfileRepository {
         }
         // Тем, у кого колонки нет или строка не вернулась, ставим null —
         // иначе на каждый кадр отрисовки уходил бы повторный запрос.
-        missing.forEach { avatarCache.putIfAbsent(it, null) }
+        missing.forEach { if (!isFresh(it)) remember(it, avatarCache[it]) }
     }
 
     /** Синхронное чтение из памяти — для отрисовки без обращения к БД. */
@@ -106,7 +136,7 @@ object ProfileRepository {
         val ok = runCatching {
             Db.exec("UPDATE users SET avatar_data=? WHERE id=?", data, id)
         }.isSuccess
-        if (ok) avatarCache[id] = data
+        if (ok) remember(id, data)
         return ok
     }
 
@@ -118,5 +148,8 @@ object ProfileRepository {
         Db.exec("UPDATE users SET banner_data=? WHERE id=?", data, UserSession.effectiveId)
     }.isSuccess
 
-    fun clearAvatarCache() = avatarCache.clear()
+    fun clearAvatarCache() {
+        avatarCache.clear()
+        avatarLoadedAt.clear()
+    }
 }

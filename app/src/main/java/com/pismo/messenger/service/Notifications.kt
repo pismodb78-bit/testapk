@@ -24,6 +24,7 @@ object Notifications {
 
     const val ID_SERVICE = 1001
     const val ID_CALL = 1002
+    const val ID_SCREEN = 1003
     private const val ID_MESSAGE_BASE = 2000
 
     fun createChannels(context: Context) {
@@ -105,6 +106,32 @@ object Notifications {
         }
     }
 
+    /** Сообщение в канале сервера. Упоминание — отдельным текстом, как на ПК. */
+    fun showChannelMessage(context: Context, channelId: Int, channelName: String, mentions: Int) {
+        if (!Prefs.notificationsEnabled) return
+        if (!hasPermission(context)) return
+
+        val extras = Bundle().apply { putInt("open_channel", channelId) }
+        val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("# $channelName")
+            .setContentText(
+                if (mentions > 0) "Вас упомянули ($mentions)" else "Новое сообщение в канале"
+            )
+            .setPriority(
+                if (mentions > 0) NotificationCompat.PRIORITY_HIGH
+                else NotificationCompat.PRIORITY_DEFAULT
+            )
+            .setAutoCancel(true)
+            .setContentIntent(openAppIntent(context, extras))
+            .build()
+
+        runCatching {
+            NotificationManagerCompat.from(context)
+                .notify(ID_MESSAGE_BASE + 200_000 + channelId, notification)
+        }
+    }
+
     fun cancelMessage(context: Context, senderId: Int) {
         runCatching { NotificationManagerCompat.from(context).cancel(ID_MESSAGE_BASE + senderId) }
     }
@@ -114,6 +141,22 @@ object Notifications {
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("PISMO")
             .setContentText("Проверка новых сообщений")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .setContentIntent(openAppIntent(context))
+            .build()
+
+    /**
+     * Уведомление для foreground-сервиса демонстрации экрана.
+     *
+     * LiveKit умеет собрать своё, но у него нет иконки, а startForeground
+     * без setSmallIcon падает исключением прямо в момент старта демки.
+     */
+    fun screenShareNotification(context: Context): android.app.Notification =
+        NotificationCompat.Builder(context, CHANNEL_CALLS)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("PISMO")
+            .setContentText("Идёт демонстрация экрана")
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setContentIntent(openAppIntent(context))

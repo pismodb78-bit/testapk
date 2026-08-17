@@ -10,6 +10,9 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Полноэкранное уведомление о звонке поверх блокировки. Без него
+         входящий с ПК приходит обычной строкой в шторке и легко теряется. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -60,10 +63,24 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- mediaProjection тут НЕ объявлен намеренно: демонстрацию экрана
+             держит свой foreground-сервис LiveKit (ScreenCaptureService),
+             он приходит из манифеста SDK при слиянии. Если объявить тип и
+             здесь, Android 14 при startForeground потребует активную
+             проекцию в момент старта звонка — и упадёт с SecurityException. -->
         <service
             android:name=".service.CallForegroundService"
             android:exported="false"
-            android:foregroundServiceType="microphone|camera|mediaProjection" />
+            android:foregroundServiceType="microphone|camera" />
+
+        <receiver
+            android:name=".service.CallActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.pismo.messenger.CALL_ACCEPT" />
+                <action android:name="com.pismo.messenger.CALL_REJECT" />
+            </intent-filter>
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"

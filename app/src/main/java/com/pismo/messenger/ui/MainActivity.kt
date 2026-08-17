@@ -16,6 +16,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
+import com.pismo.messenger.service.PollingService
 import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.chat.ChatScreen
 import com.pismo.messenger.ui.home.HomeScreen
@@ -49,16 +50,28 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(Unit) {
                     val restored = com.pismo.messenger.data.repo.AuthRepository.autoLogin()
                     startRoute = if (restored) Routes.CHATS else Routes.LOGIN
-                    if (restored) SignalingClient.connect(UserSession.effectiveId)
+                    if (restored) {
+                        SignalingClient.connect(UserSession.effectiveId)
+                        // Фоновый сервис был написан, но его никто не
+                        // запускал — отсюда и «уведомления не приходят
+                        // вообще, тем более в свёрнутом состоянии».
+                        PollingService.start(this@MainActivity)
+                    }
                 }
 
                 val start = startRoute ?: return@PismoTheme
+
+                // Окно входящего звонка — в корне, ВНЕ NavHost: иначе оно
+                // пересоздаётся на каждом переходе и не показывается там,
+                // где его не повесили руками.
+                com.pismo.messenger.ui.call.IncomingCallDialog()
 
                 NavHost(navController = navController, startDestination = start) {
                     composable(Routes.LOGIN) {
                         LoginScreen(
                             onLoggedIn = {
                                 SignalingClient.connect(UserSession.effectiveId)
+                                PollingService.start(this@MainActivity)
                                 navController.navigate(Routes.CHATS) {
                                     popUpTo(Routes.LOGIN) { inclusive = true }
                                 }
@@ -105,6 +118,8 @@ class MainActivity : ComponentActivity() {
                             },
                             onSettings = { navController.navigate(Routes.SETTINGS) },
                             onLoggedOut = {
+                                PollingService.stop(this@MainActivity)
+                                com.pismo.messenger.call.IncomingCallMonitor.reset()
                                 navController.navigate(Routes.LOGIN) {
                                     popUpTo(Routes.CHATS) { inclusive = true }
                                 }

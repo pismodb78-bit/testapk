@@ -2,16 +2,30 @@ package com.pismo.messenger.call
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.util.Log
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
+import com.pismo.messenger.service.CallForegroundService
+import com.pismo.messenger.service.Notifications
 import io.livekit.android.LiveKit
+import io.livekit.android.RoomOptions
+import io.livekit.android.audio.ScreenAudioCapturer
 import io.livekit.android.events.RoomEvent
 import io.livekit.android.events.collect
 import io.livekit.android.room.Room
 import io.livekit.android.room.participant.Participant
 import io.livekit.android.room.participant.RemoteParticipant
+import io.livekit.android.room.track.CameraPosition
+import io.livekit.android.room.track.LocalAudioTrack
+import io.livekit.android.room.track.LocalAudioTrackOptions
+import io.livekit.android.room.track.LocalVideoTrack
+import io.livekit.android.room.track.LocalVideoTrackOptions
+import io.livekit.android.room.track.RemoteAudioTrack
+import io.livekit.android.room.track.RemoteTrackPublication
+import io.livekit.android.room.track.Track
 import io.livekit.android.room.track.VideoTrack
+import io.livekit.android.room.track.screencapture.ScreenCaptureParams
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -82,6 +96,28 @@ class CallEngine(
     private val _screenSharing = MutableStateFlow(false)
     val screenSharing: StateFlow<Boolean> = _screenSharing.asStateFlow()
 
+    /** Идёт ли захват системного звука вместе с демонстрацией. */
+    private val _screenAudioOn = MutableStateFlow(false)
+    val screenAudioOn: StateFlow<Boolean> = _screenAudioOn.asStateFlow()
+
+    private val _frontCamera = MutableStateFlow(Prefs.frontCamera)
+    val frontCamera: StateFlow<Boolean> = _frontCamera.asStateFlow()
+
+    /** Микшер звука демки. Не null — значит демка идёт со звуком. */
+    private var screenAudio: ScreenAudioMixer? = null
+
+    // Громкости входящего звука — модель один в один с NativeCallTransport.
+    // Голос и звук демки живут по РАЗНЫМ правилам, и путать их нельзя:
+    // «наушники» (deafen) глушат голос, но НЕ демку — стрим должно быть
+    // слышно даже с выключенным звуком, ровно как на ПК.
+    private val voiceVolume = HashMap<String, Float>()
+    private val voiceMutedBy = HashSet<String>()
+    private val demoVolume = HashMap<String, Float>()
+    private val demoMutedBy = HashSet<String>()
+    private val watchedDemo = HashSet<String>()
+    private var globalVoiceVolume = 1f
+    private var globalDemoVolume = 1f
+
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
@@ -105,12 +141,37 @@ class CallEngine(
         _state.value = State.CONNECTING
         currentRoom = roomName
 
+        // Без foreground-сервиса Android 14 убивает микрофон, как только
+        // приложение уходит с экрана: собеседник перестаёт тебя слышать
+        // ровно в момент сворачивания, без всякой ошибки.
+        IncomingCallMonitor.inCall = true
+        runCatching { CallForegroundService.start(appContext, "Звонок PISMO") }
+
         val identity = UserSession.effectiveId.toString()
         val display = UserSession.effectiveName.ifBlank { identity }
         val token = LiveKitToken.create(roomName, identity, display)
 
         try {
-            val r = LiveKit.create(appContext)
+            // Обработка звука задаётся ТОЛЬКО здесь: WebRTC собирает цепочку
+            // AEC/NS/AGC при создании комнаты и на лету её не пересобирает.
+            val r = LiveKit.create(
+                appContext,
+                options = RoomOptions(
+                    adaptiveStream = true,
+                    dynacast = true,
+                    audioTrackCaptureDefaults = LocalAudioTrackOptions(
+                        noiseSuppression = Prefs.noiseSuppression,
+                        echoCancellation = Prefs.echoCancellation,
+                        autoGainControl = Prefs.autoGainControl,
+                        highPassFilter = true,
+                        typingNoiseDetection = true,
+                    ),
+                    videoTrackCaptureDefaults = LocalVideoTrackOptions(
+                        position = if (Prefs.frontCamera) CameraPosition.FRONT
+                        else CameraPosition.BACK,
+                    ),
+                ),
+            )
             room = r
             observe(r)
             r.connect(Prefs.liveKitUrl, token)
@@ -133,6 +194,13 @@ class CallEngine(
 
     fun leave() {
         runCatching { eventJob?.cancel() }
+        // Захват системного звука SDK не закрывает сам — забыть про release
+        // означает, что AudioRecord продолжит писать звук после конца звонка.
+        runCatching { screenAudio?.release() }
+        screenAudio = null
+        _screenAudioOn.value = false
+        runCatching { CallForegroundService.stop(appContext) }
+        IncomingCallMonitor.inCall = false
         runCatching { room?.disconnect() }
         // release освобождает нативные ресурсы (EglBase, аудиоустройство);
         // без него повторный звонок в той же сессии течёт памятью.
@@ -154,35 +222,40 @@ class CallEngine(
 
     suspend fun toggleMic() {
         val r = room ?: return
-        val muted = !_micMuted.value
-        _micMuted.value = muted
-        runCatching { r.localParticipant.setMicrophoneEnabled(!muted) }
+        setMicMuted(r, !_micMuted.value)
         publishVoiceState()
         refreshParticipants()
     }
 
-    /** «Наушники»: глушим весь входящий звук и сообщаем об этом остальным. */
+    /**
+     * Мьют микрофона.
+     *
+     * Когда идёт демонстрация со звуком, дорожку глушить НЕЛЬЗЯ: системный
+     * звук едет внутри неё же (на Android вторую аудиодорожку опубликовать
+     * невозможно — см. ScreenAudioMixer). Поэтому в этом режиме мьютим
+     * только сам микрофон, обнуляя его сэмплы в микшере, а дорожка
+     * продолжает нести звук демки.
+     */
+    private suspend fun setMicMuted(r: Room, muted: Boolean) {
+        _micMuted.value = muted
+        val mixer = screenAudio
+        if (mixer != null) {
+            mixer.micMuted = muted
+            runCatching { r.localParticipant.setMicrophoneEnabled(true) }
+        } else {
+            runCatching { r.localParticipant.setMicrophoneEnabled(!muted) }
+        }
+    }
+
+    /** «Наушники»: глушим входящий ГОЛОС и сообщаем об этом остальным. */
     suspend fun toggleDeafen() {
         val r = room ?: return
-        val deaf = !_deafened.value
-        _deafened.value = deaf
-
-        // Глушим всех удалённых участников.
-        runCatching {
-            r.remoteParticipants.values.forEach { p ->
-                p.audioTrackPublications.forEach { (_, track) ->
-                    (track as? io.livekit.android.room.track.RemoteAudioTrack)?.let {
-                        it.setVolume(if (deaf) 0.0 else 1.0)
-                    }
-                }
-            }
-        }
+        _deafened.value = !_deafened.value
 
         // Заглушив вход, принято глушить и свой микрофон — как в Discord и на ПК.
-        if (deaf && !_micMuted.value) {
-            _micMuted.value = true
-            runCatching { r.localParticipant.setMicrophoneEnabled(false) }
-        }
+        if (_deafened.value && !_micMuted.value) setMicMuted(r, true)
+
+        applyRemoteVolumes()
         publishVoiceState()
         refreshParticipants()
     }
@@ -195,36 +268,214 @@ class CallEngine(
         refreshParticipants()
     }
 
+    /**
+     * Переключение фронтальная / основная камера.
+     *
+     * Раньше здесь брался «первый попавшийся» видеотрек — им могла
+     * оказаться дорожка демонстрации экрана, у которой камеры нет вовсе,
+     * и кнопка просто ничего не делала. Теперь берём именно CAMERA и
+     * задаём позицию явно, а не «переключи на другую».
+     */
     fun switchCamera() {
+        val front = !_frontCamera.value
+        _frontCamera.value = front
+        Prefs.frontCamera = front
         runCatching {
             val track = room?.localParticipant?.videoTrackPublications
-                ?.firstOrNull()?.second as? io.livekit.android.room.track.LocalVideoTrack
-            track?.switchCamera()
+                ?.firstOrNull { (pub, _) -> pub.source == Track.Source.CAMERA }
+                ?.second as? LocalVideoTrack
+            track?.switchCamera(position = if (front) CameraPosition.FRONT else CameraPosition.BACK)
         }
     }
+
+    // ════════════════════════════════════════════════════════════════
+    //  ДЕМОНСТРАЦИЯ ЭКРАНА
+    // ════════════════════════════════════════════════════════════════
 
     /**
      * Демонстрация экрана. [projectionData] — Intent из
      * MediaProjectionManager.createScreenCaptureIntent(), полученный
      * через startActivityForResult; без него Android захват не разрешит.
+     *
+     * [withAudio] — передавать ли системный звук. Второго диалога разрешения
+     * при этом НЕ будет: ScreenAudioCapturer берёт MediaProjection прямо у
+     * созданного трека демонстрации.
      */
-    suspend fun startScreenShare(projectionData: Intent) {
+    suspend fun startScreenShare(projectionData: Intent, withAudio: Boolean = Prefs.shareScreenAudio) {
         val r = room ?: return
         runCatching {
-            r.localParticipant.setScreenShareEnabled(true, projectionData)
+            r.localParticipant.setScreenShareEnabled(
+                true,
+                ScreenCaptureParams(
+                    mediaProjectionPermissionResultData = projectionData,
+                    notificationId = Notifications.ID_SCREEN,
+                    // Своё уведомление, а не дефолтное из SDK: у того нет
+                    // иконки, и startForeground падает на старте демки.
+                    notification = Notifications.screenShareNotification(appContext),
+                ),
+            )
             _screenSharing.value = true
         }.onFailure {
             Log.e(TAG, "screen share failed", it)
             _error.value = "Не удалось начать демонстрацию: ${it.message}"
+            return
         }
+
+        if (withAudio && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) attachScreenAudio(r)
         refreshParticipants()
     }
 
     suspend fun stopScreenShare() {
         val r = room ?: return
+        detachScreenAudio(r)
         runCatching { r.localParticipant.setScreenShareEnabled(false) }
         _screenSharing.value = false
         refreshParticipants()
+    }
+
+    /**
+     * Захват системного звука Android появился только в 10 (API 29) —
+     * на более старых версиях демонстрация идёт без звука, и это ограничение
+     * ОС, а не приложения.
+     */
+    private suspend fun attachScreenAudio(r: Room) {
+        runCatching {
+            // Микрофонная дорожка — единственный канал, куда звук демки можно
+            // положить. Если микрофон замьючен, дорожки нет вовсе, поэтому
+            // включаем её и глушим микрофон программно, в микшере.
+            if (r.localParticipant.getTrackPublication(Track.Source.MICROPHONE) == null) {
+                r.localParticipant.setMicrophoneEnabled(true)
+            }
+            val micTrack = r.localParticipant
+                .getTrackPublication(Track.Source.MICROPHONE)?.track as? LocalAudioTrack
+                ?: return@runCatching
+            val screenTrack = r.localParticipant
+                .getTrackPublication(Track.Source.SCREEN_SHARE)?.track ?: return@runCatching
+
+            val capturer = ScreenAudioCapturer.createFromScreenShareTrack(screenTrack)
+                ?: return@runCatching
+
+            val mixer = ScreenAudioMixer(capturer).apply {
+                gain = Prefs.screenAudioGain
+                micMuted = _micMuted.value
+            }
+            micTrack.setAudioBufferCallback(mixer)
+            screenAudio = mixer
+            _screenAudioOn.value = true
+        }.onFailure {
+            Log.w(TAG, "звук демонстрации недоступен: ${it.message}")
+            _screenAudioOn.value = false
+        }
+    }
+
+    private suspend fun detachScreenAudio(r: Room) {
+        val mixer = screenAudio ?: return
+        screenAudio = null
+        _screenAudioOn.value = false
+
+        runCatching {
+            (r.localParticipant.getTrackPublication(Track.Source.MICROPHONE)?.track
+                    as? LocalAudioTrack)?.setAudioBufferCallback(null)
+        }
+        mixer.release()
+
+        // Пока шла демка, дорожка была принудительно включена. Возвращаем
+        // микрофон в то состояние, которое выбрал пользователь.
+        if (_micMuted.value) runCatching { r.localParticipant.setMicrophoneEnabled(false) }
+    }
+
+    /** Громкость системного звука в исходящей демке, 0..2. */
+    fun setScreenAudioGain(gain: Float) {
+        Prefs.screenAudioGain = gain
+        screenAudio?.gain = gain
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  ГРОМКОСТЬ ВХОДЯЩЕГО ЗВУКА (порт NativeCallTransport)
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * Раскладывает громкости по дорожкам.
+     *
+     * Голос и звук демки разведены намеренно, как на ПК:
+     *  • голос — глушится «наушниками», множится на общий ползунок голоса;
+     *  • демка — «наушниками» НЕ глушится, но слышна только если её смотрят.
+     * Перепутать эти два правила — и стрим будет либо всегда молчать, либо
+     * орать из всех вкладок сразу.
+     */
+    private fun applyRemoteVolumes() {
+        val r = room ?: return
+        runCatching {
+            r.remoteParticipants.values.forEach { p ->
+                val id = p.identity?.value.orEmpty()
+                p.audioTrackPublications.forEach { (pub, track) ->
+                    val audio = track as? RemoteAudioTrack ?: return@forEach
+                    val isScreen = pub.source == Track.Source.SCREEN_SHARE_AUDIO
+                    val volume = if (isScreen) {
+                        if (!watchedDemo.contains(id) || demoMutedBy.contains(id)) 0.0
+                        else ((demoVolume[id] ?: 1f) * globalDemoVolume)
+                            .coerceIn(0f, 4f).toDouble()
+                    } else {
+                        if (_deafened.value || voiceMutedBy.contains(id)) 0.0
+                        else ((voiceVolume[id] ?: 1f) * globalVoiceVolume)
+                            .coerceIn(0f, 4f).toDouble()
+                    }
+                    runCatching { audio.setVolume(volume) }
+                }
+            }
+        }
+    }
+
+    /** Смотрим/не смотрим демку участника — порт SetScreenAudioWatched. */
+    fun setScreenAudioWatched(identity: String, watched: Boolean) {
+        if (watched) watchedDemo.add(identity) else watchedDemo.remove(identity)
+
+        // Дополнительно (пере)подписываемся на видеотрек демки: при adaptive
+        // stream сервер ставит его на паузу, если никто не смотрит, и после
+        // возобновления кадры не идут, пока подписку не тронешь. Тот же
+        // приём в SetScreenSubscribed на ПК.
+        runCatching {
+            room?.remoteParticipants?.values
+                ?.firstOrNull { it.identity?.value == identity }
+                ?.videoTrackPublications
+                ?.firstOrNull { (pub, _) -> pub.source == Track.Source.SCREEN_SHARE }
+                ?.first
+                ?.let { (it as? RemoteTrackPublication)?.setSubscribed(watched) }
+        }
+        applyRemoteVolumes()
+    }
+
+    /** Громкость ГОЛОСА конкретного участника, 0..3. */
+    fun setParticipantVolume(identity: String, volume: Float) {
+        voiceVolume[identity] = volume
+        applyRemoteVolumes()
+    }
+
+    fun setParticipantMuted(identity: String, muted: Boolean) {
+        if (muted) voiceMutedBy.add(identity) else voiceMutedBy.remove(identity)
+        applyRemoteVolumes()
+    }
+
+    /** Громкость ДЕМКИ конкретного участника, 0..3. */
+    fun setScreenShareVolume(identity: String, volume: Float) {
+        demoVolume[identity] = volume
+        applyRemoteVolumes()
+    }
+
+    fun volumeOf(identity: String): Float = voiceVolume[identity] ?: 1f
+    fun demoVolumeOf(identity: String): Float = demoVolume[identity] ?: 1f
+    fun isMutedFor(identity: String): Boolean = voiceMutedBy.contains(identity)
+
+    /** Общая громкость всех демок (ползунок «Громкость демонстрации»). */
+    fun setScreenAudioVolumeAll(volume: Float) {
+        globalDemoVolume = volume
+        applyRemoteVolumes()
+    }
+
+    /** Общая громкость голоса. */
+    fun setPlaybackVolume(volume: Float) {
+        globalVoiceVolume = volume
+        applyRemoteVolumes()
     }
 
     /** Публикует значки мьюта так, как их читает ПК. */
@@ -319,6 +570,11 @@ class CallEngine(
         }
 
         _participants.value = list
+
+        // Новая дорожка приходит с громкостью 1.0 — если её не привести к
+        // нашим правилам сразу, чужая демка заорёт до того, как её начали
+        // смотреть, а заглушённый участник снова станет слышен.
+        applyRemoteVolumes()
     }
 
     private fun firstCameraTrack(p: Participant): VideoTrack? = runCatching {

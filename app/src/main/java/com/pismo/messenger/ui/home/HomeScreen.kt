@@ -25,7 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.sp
 import com.pismo.messenger.data.repo.FriendsRepository
-import com.pismo.messenger.ui.call.IncomingCallWatcher
+
 import com.pismo.messenger.ui.call.VoiceDock
 import com.pismo.messenger.ui.chats.ChatListScreen
 import com.pismo.messenger.ui.components.UnreadBadge
@@ -117,9 +117,8 @@ fun HomeScreen(
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
-            // Входящие звонки ловим на любом разделе, а не только в чате.
-            IncomingCallWatcher()
-
+            // Окно входящего звонка живёт в корне MainActivity: здесь оно
+            // исчезало вместе с экраном, стоило открыть переписку.
             when (tab) {
                 0 -> ChatListScreen(
                     onOpenChat = onOpenChat,

@@ -9,6 +9,7 @@ import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.PresenceRepository
+import com.pismo.messenger.data.repo.ServerRepository
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -26,7 +27,9 @@ class PollingService : LifecycleService() {
 
     private val previousUnread = HashMap<Int, Int>()
     private val previousGroupMax = HashMap<Int, Int>()
+    private val previousChannelUnread = HashMap<Int, Int>()
     private var groupBaselineReady = false
+    private var channelBaselineReady = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
@@ -78,6 +81,46 @@ class PollingService : LifecycleService() {
                 Notifications.showGroupMessage(this, gid, name, "Новое сообщение")
             }
             previousGroupMax[gid] = maxId
+        }
+
+        pollChannels()
+    }
+
+    /**
+     * Каналы серверов. Раньше их здесь не было вовсе — сообщение в канале
+     * не давало уведомления ни в фоне, ни свёрнутым, хотя красная цифра в
+     * списке серверов появлялась.
+     *
+     * Считаем по тем же бейджам, что рисует список серверов: отдельный
+     * запрос «что нового» дал бы расхождение между цифрой и уведомлением.
+     */
+    private suspend fun pollChannels() {
+        val badges = runCatching { ServerRepository.badges(UserSession.userName) }
+            .getOrDefault(emptyList())
+        if (badges.isEmpty()) return
+
+        // Первый проход только запоминает состояние: иначе при каждом
+        // запуске сервиса сыпались бы уведомления о давно прочитанном.
+        if (!channelBaselineReady) {
+            badges.forEach { previousChannelUnread[it.channelId] = it.unread }
+            channelBaselineReady = true
+            return
+        }
+
+        val names = runCatching { ServerRepository.channelNames() }.getOrDefault(emptyMap())
+
+        for (b in badges) {
+            val before = previousChannelUnread[b.channelId] ?: 0
+            previousChannelUnread[b.channelId] = b.unread
+            // Заглушённые каналы молчат — так же, как на ПК.
+            if (b.muted || b.unread <= before) continue
+
+            Notifications.showChannelMessage(
+                this,
+                channelId = b.channelId,
+                channelName = names[b.channelId] ?: "Канал",
+                mentions = b.mentions,
+            )
         }
     }
 

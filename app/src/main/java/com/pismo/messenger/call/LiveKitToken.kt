@@ -13,10 +13,15 @@ import com.pismo.messenger.core.Prefs
 object LiveKitToken {
 
     /**
-     * Имя комнаты для личного или группового звонка — строковый id
-     * call-сессии, ровно как на ПК.
+     * Имя комнаты для личного или группового звонка.
+     *
+     * Префикс "call_" ОБЯЗАТЕЛЕН и не косметический: ПК формирует имя как
+     * `_isChannel ? _channelRoom : "call_" + _sessionId` (CallForm.cs:273).
+     * Без префикса телефон заходил в комнату "17", а компьютер — в "call_17",
+     * и оба сидели в пустых комнатах, каждый в своей: звонок «шёл», но
+     * собеседник не появлялся никогда.
      */
-    fun roomForCall(sessionId: Int): String = sessionId.toString()
+    fun roomForCall(sessionId: Int): String = "call_$sessionId"
 
     /**
      * Имя комнаты голосового канала сервера — "vch_<id канала>".

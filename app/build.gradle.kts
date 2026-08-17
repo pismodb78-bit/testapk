@@ -105,7 +105,12 @@ dependencies {
     implementation("androidx.camera:camera-view:1.4.0")
 
     // ── Звонки ──
-    implementation("io.livekit:livekit-android:2.11.0")
+    // 2.28.0, а не 2.11.0, ровно из-за одной вещи: до 2.12 в Track.Source
+    // не было SCREEN_SHARE_AUDIO, а с 2.24 в SDK лежит готовый
+    // ScreenAudioCapturer, который берёт MediaProjection прямо у трека
+    // демонстрации. Без него звук демки на Android пришлось бы просить
+    // вторым системным диалогом — либо потерять совсем.
+    implementation("io.livekit:livekit-android:2.28.0")
 
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.2")
 }

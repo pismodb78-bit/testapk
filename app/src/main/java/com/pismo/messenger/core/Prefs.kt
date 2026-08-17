@@ -138,4 +138,40 @@ object Prefs {
     var backgroundPolling: Boolean
         get() = sp.getBoolean("bg_polling", true)
         set(v) = sp.edit().putBoolean("bg_polling", v).apply()
+
+    // ── Обработка звука в звонке ───────────────────────────────────────
+    //
+    // Это те же три галочки, что и в SettingsForm ПК-версии. Значения
+    // применяются при ЗАХОДЕ в комнату (RoomOptions.audioTrackCaptureDefaults),
+    // на лету WebRTC их не переключает — поэтому в настройках честно сказано,
+    // что изменения вступят в силу со следующего звонка.
+
+    /** Шумоподавление (WebRTC NS). */
+    var noiseSuppression: Boolean
+        get() = sp.getBoolean("audio_ns", true)
+        set(v) = sp.edit().putBoolean("audio_ns", v).apply()
+
+    /** Эхоподавление (WebRTC AEC) — без него собеседник слышит сам себя. */
+    var echoCancellation: Boolean
+        get() = sp.getBoolean("audio_aec", true)
+        set(v) = sp.edit().putBoolean("audio_aec", v).apply()
+
+    /** Автоусиление (WebRTC AGC). */
+    var autoGainControl: Boolean
+        get() = sp.getBoolean("audio_agc", true)
+        set(v) = sp.edit().putBoolean("audio_agc", v).apply()
+
+    /**
+     * Громкость системного звука в демонстрации экрана, 0..2.
+     * По умолчанию 0.6: звук демки подмешивается в микрофонную дорожку, и
+     * на единице он забивает голос.
+     */
+    var screenAudioGain: Float
+        get() = sp.getFloat("screen_audio_gain", 0.6f)
+        set(v) = sp.edit().putFloat("screen_audio_gain", v).apply()
+
+    /** Передавать системный звук вместе с демонстрацией экрана. */
+    var shareScreenAudio: Boolean
+        get() = sp.getBoolean("share_screen_audio", true)
+        set(v) = sp.edit().putBoolean("share_screen_audio", v).apply()
 }
