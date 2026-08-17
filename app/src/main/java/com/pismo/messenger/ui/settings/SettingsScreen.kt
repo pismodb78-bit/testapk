@@ -70,6 +70,10 @@ fun SettingsScreen(onBack: () -> Unit) {
     var micGain by remember { mutableStateOf(Prefs.micGain) }
     var frontCamera by remember { mutableStateOf(Prefs.frontCamera) }
     var bgPolling by remember { mutableStateOf(Prefs.backgroundPolling) }
+    var noiseSuppression by remember { mutableStateOf(Prefs.noiseSuppression) }
+    var echoCancellation by remember { mutableStateOf(Prefs.echoCancellation) }
+    var autoGain by remember { mutableStateOf(Prefs.autoGainControl) }
+    var screenGain by remember { mutableStateOf(Prefs.screenAudioGain) }
 
     var status by remember { mutableStateOf("") }
     var cacheSize by remember { mutableStateOf(0L) }
@@ -94,6 +98,10 @@ fun SettingsScreen(onBack: () -> Unit) {
         Prefs.micGain = micGain
         Prefs.frontCamera = frontCamera
         Prefs.backgroundPolling = bgPolling
+        Prefs.noiseSuppression = noiseSuppression
+        Prefs.echoCancellation = echoCancellation
+        Prefs.autoGainControl = autoGain
+        Prefs.screenAudioGain = screenGain
         scope.launch { Db.closeAll() }
         status = "Настройки сохранены."
     }
@@ -205,6 +213,35 @@ fun SettingsScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             SwitchRow("Фронтальная камера по умолчанию", frontCamera) { frontCamera = it }
             SwitchRow("Фоновая проверка сообщений", bgPolling) { bgPolling = it }
+
+            Spacer(Modifier.height(20.dp))
+            Section("Обработка звука в звонке")
+            SwitchRow("Шумоподавление", noiseSuppression) { noiseSuppression = it }
+            SwitchRow("Эхоподавление", echoCancellation) { echoCancellation = it }
+            SwitchRow("Автоусиление громкости", autoGain) { autoGain = it }
+            Text(
+                "WebRTC собирает цепочку обработки при входе в комнату, поэтому " +
+                        "изменения применятся со следующего звонка. Эхоподавление лучше " +
+                        "не выключать: без него собеседник слышит собственный голос.",
+                color = PismoColors.TextMuted, fontSize = 12.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Громкость системного звука в демонстрации: ${(screenGain * 100).toInt()}%",
+                color = PismoColors.TextSecondary, fontSize = 13.sp,
+            )
+            Slider(
+                value = screenGain,
+                onValueChange = { screenGain = it },
+                valueRange = 0f..2f,
+                colors = SliderDefaults.colors(thumbColor = PismoColors.Blurple),
+            )
+            Text(
+                "Звук демонстрации подмешивается в микрофонную дорожку — на Android " +
+                        "вторую аудиодорожку опубликовать нельзя. На 100% он заглушает голос, " +
+                        "поэтому по умолчанию 60%.",
+                color = PismoColors.TextMuted, fontSize = 12.sp,
+            )
 
             Spacer(Modifier.height(20.dp))
             Section("Кеш медиа")

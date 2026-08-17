@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
@@ -127,11 +128,23 @@ fun ChatScreen(
     var showCircleRecorder by remember { mutableStateOf(false) }
     var showPins by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
+    var showCalendar by remember { mutableStateOf(false) }
+    var jumpNote by remember { mutableStateOf("") }
+
+    // Сколько сообщений тянуть. Переход к дате расширяет страницу ровно так
+    // же, как _dmLimit на ПК: лента грузится с конца, и без расширения
+    // прыжок в прошлый месяц упирался бы в незагруженную историю.
+    var pageLimit by remember(targetId) { mutableStateOf(0) }
 
     suspend fun reload(scrollToEnd: Boolean = false) {
         runCatching {
-            val loaded = if (isGroup) ChatRepository.loadGroupMessages(targetId)
-            else ChatRepository.loadDirectMessages(targetId)
+            val loaded = if (isGroup) {
+                if (pageLimit > 0) ChatRepository.loadGroupMessages(targetId, pageLimit)
+                else ChatRepository.loadGroupMessages(targetId)
+            } else {
+                if (pageLimit > 0) ChatRepository.loadDirectMessages(targetId, pageLimit)
+                else ChatRepository.loadDirectMessages(targetId)
+            }
             messages = loaded
             lastCount = loaded.size
             reactions = ReactionsRepository.forMessages(loaded.map { it.id }, scopeKind)
@@ -279,6 +292,12 @@ fun ChatScreen(
                 actions = {
                     IconButton(onClick = { showSearch = true }) {
                         Icon(Icons.Default.Search, "Поиск", tint = PismoColors.TextSecondary)
+                    }
+                    IconButton(onClick = { showCalendar = true }) {
+                        Icon(
+                            Icons.Default.CalendarMonth, "Перейти к дате",
+                            tint = PismoColors.TextSecondary,
+                        )
                     }
                     IconButton(onClick = { showPins = true }) {
                         Icon(Icons.Default.PushPin, "Закреплённые", tint = PismoColors.TextSecondary)
@@ -506,6 +525,51 @@ fun ChatScreen(
                 // не реализована.
                 val idx = messages.indexOfFirst { it.id == found.id }
                 if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
+            },
+        )
+    }
+
+    if (showCalendar) {
+        DateJumpDialog(
+            onDismiss = { showCalendar = false },
+            onPick = { dayStartMs ->
+                showCalendar = false
+                scope.launch {
+                    val need = ChatRepository.countSince(scopeKind, targetId, dayStartMs)
+                    if (need <= 0) {
+                        jumpNote = "За выбранную дату и позже сообщений нет."
+                        return@launch
+                    }
+                    // Тянем на пяток больше нужного — так же, как need + 5
+                    // в JumpToDate: иначе целевое сообщение окажется первым
+                    // в ленте, без единой строки контекста над ним.
+                    if (need + 5 > messages.size) {
+                        pageLimit = need + 5
+                        loading = true
+                        reload()
+                    }
+                    val idx = messages.indexOfFirst { it.createdAtMs >= dayStartMs }
+                    if (idx >= 0) {
+                        listState.animateScrollToItem(idx)
+                        jumpNote = ""
+                    } else {
+                        jumpNote = "Не удалось найти сообщения за эту дату."
+                    }
+                }
+            },
+        )
+    }
+
+    if (jumpNote.isNotEmpty()) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { jumpNote = "" },
+            containerColor = PismoColors.BgSidebar,
+            title = { Text("Переход к дате", color = Color.White) },
+            text = { Text(jumpNote, color = PismoColors.TextSecondary) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { jumpNote = "" }) {
+                    Text("Ок", color = PismoColors.Cyan)
+                }
             },
         )
     }

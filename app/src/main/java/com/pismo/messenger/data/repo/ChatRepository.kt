@@ -133,6 +133,34 @@ object ChatRepository {
      * Приём тот же, что на ПК: выбираем по id DESC с LIMIT, затем
      * разворачиваем подзапросом в ASC.
      */
+    /**
+     * Сколько сообщений в переписке начиная с указанного дня — порт счётчика
+     * из JumpToDate (MainForm.cs:3323).
+     *
+     * Нужен, чтобы понять, насколько расширить страницу: лента грузится с
+     * конца, и без этого прыжок на дату месячной давности показывал бы
+     * пустоту — нужного сообщения просто нет в загруженной странице.
+     */
+    suspend fun countSince(scope: Scope, target: Int, dayStartMs: Long): Int {
+        val me = UserSession.effectiveId
+        val seconds = dayStartMs / 1000
+        return runCatching {
+            if (scope == Scope.GROUP) {
+                Db.scalarInt(
+                    "SELECT COUNT(*) FROM group_messages " +
+                            "WHERE group_id=? AND UNIX_TIMESTAMP(created_at) >= ?",
+                    target, seconds
+                )
+            } else {
+                Db.scalarInt(
+                    "SELECT COUNT(*) FROM messages WHERE ((sender_id=? AND receiver_id=?) " +
+                            "OR (sender_id=? AND receiver_id=?)) AND UNIX_TIMESTAMP(created_at) >= ?",
+                    me, target, target, me, seconds
+                )
+            }
+        }.getOrDefault(0)
+    }
+
     suspend fun loadDirectMessages(partnerId: Int, limit: Int = PAGE_SIZE, beforeId: Int = 0): List<ChatMessage> {
         val me = UserSession.effectiveId
         val cursor = if (beforeId > 0) "AND m.id < $beforeId " else ""
