@@ -151,6 +151,16 @@ object Prefs {
         get() = sp.getBoolean("audio_ns", true)
         set(v) = sp.edit().putBoolean("audio_ns", v).apply()
 
+    /**
+     * Сила шумодава, 0..1. Пороги ПК рассчитаны на гарнитуру у рта; у
+     * телефона микрофон всенаправленный, поэтому клики клавиатуры и голоса
+     * из другой комнаты нужно давить агрессивнее — но платой идёт свой
+     * тихий голос, так что значение выбирает пользователь.
+     */
+    var denoiseStrength: Float
+        get() = sp.getFloat("denoise_strength", 0.5f)
+        set(v) = sp.edit().putFloat("denoise_strength", v).apply()
+
     /** Эхоподавление (WebRTC AEC) — без него собеседник слышит сам себя. */
     var echoCancellation: Boolean
         get() = sp.getBoolean("audio_aec", true)

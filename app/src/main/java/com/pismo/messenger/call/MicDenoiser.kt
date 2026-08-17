@@ -35,6 +35,21 @@ class MicDenoiser(sampleRate: Int) {
     @Volatile
     var transientGuard: Boolean = true
 
+    /**
+     * Сила подавления, 0..1. Влияет на то, насколько высоко над шумовым
+     * полом должен подняться звук, чтобы считаться речью.
+     *
+     * Зачем регулировка. Пороги ПК подобраны под гарнитуру у рта: клики
+     * клавиатуры и голос из другой комнаты они пропускают, потому что по
+     * громкости те попадают в ту же зону, что и тихая речь. На телефоне
+     * микрофон всенаправленный, и это слышно сильнее. Поднимая силу, мы
+     * поднимаем порог открытия гейта — дальние источники остаются под ним.
+     * Платой идёт собственный тихий голос, поэтому значение отдано
+     * пользователю, а не зашито.
+     */
+    @Volatile
+    var strength: Float = 0.5f
+
     private val sr = sampleRate
 
     // Высокочастотный фильтр — два однополюсных каскада ~120 Гц. Один полюс
@@ -114,7 +129,10 @@ class MicDenoiser(sampleRate: Int) {
                 val a = abs(y)
                 dcFast += (a - dcFast) * (if (a > dcFast) 0.6f else 0.05f)
                 dcSlow += (a - dcSlow) * (if (a > dcSlow) 0.002f else 0.0008f)
-                if (dcFast > 350f && dcFast > dcSlow * 4f) {
+                // Порог де-кликера опускаем с силой: на максимуме ловим и
+                // негромкие щелчки мыши, которые раньше проходили.
+                val k0 = strength.coerceIn(0f, 1f)
+                if (dcFast > (350f - 180f * k0) && dcFast > dcSlow * (4f - 1.5f * k0)) {
                     // Тянем пик к устойчивому уровню: голос почти не меняется,
                     // а щелчок срезается даже посреди фразы.
                     var duck = (dcSlow * 1.5f) / (a + 1f)
@@ -146,8 +164,14 @@ class MicDenoiser(sampleRate: Int) {
         if (noiseFloor < 30f) noiseFloor = 30f
 
         // ── 4) Целевое усиление ──
-        val openLevel = noiseFloor * 4.0f
-        val closeLevel = noiseFloor * 2.2f
+        //
+        // Пороги растут вместе с силой: на 0 это исходные значения ПК
+        // (4.0 и 2.2 шумового пола), на 1 — примерно вдвое выше, и всё,
+        // что не громче фона в 8 раз, гейт держит закрытым. Именно сюда
+        // попадают клики клавиатуры и голоса из соседней комнаты.
+        val k = strength.coerceIn(0f, 1f)
+        val openLevel = noiseFloor * (4.0f + 4.0f * k)
+        val closeLevel = noiseFloor * (2.2f + 2.0f * k)
         var target = when {
             envelope >= openLevel -> 1f
             envelope <= closeLevel -> 0.008f
@@ -156,7 +180,11 @@ class MicDenoiser(sampleRate: Int) {
 
         if (transientGuard) {
             val msPerBlock = max(1, n * 1000 / sr)
-            val needBlocks = max(1, 30 / msPerBlock)     // ~30 мс до открытия
+            // Чем выше сила, тем дольше должен держаться громкий звук,
+            // прежде чем гейт признает его речью. Клик клавиатуры короткий
+            // (единицы миллисекунд) и до этого порога не дотягивает.
+            val needMs = (30 + 40 * k).toInt()
+            val needBlocks = max(1, needMs / msPerBlock)
             val hangTotal = max(1, 180 / msPerBlock)     // ~180 мс удержания
 
             if (envelope >= openLevel) loudRun++ else loudRun = 0
@@ -186,7 +214,9 @@ class MicDenoiser(sampleRate: Int) {
             if (transientGuard) {
                 val a = abs(s)
                 voiceRef += (a - voiceRef) * (if (a > voiceRef) 0.0015f else 0.0006f)
-                val thr = voiceRef * 2.5f + 450f
+                // Порог всплеска для лимитера тоже ужимаем: ниже порог —
+                // раньше срабатывает подавление щелчка.
+                val thr = voiceRef * (2.5f - 1.0f * k) + (450f - 200f * k)
 
                 val delayed = laBuf[laPos]
                 laBuf[laPos] = s

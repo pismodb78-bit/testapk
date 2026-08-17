@@ -81,6 +81,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     var echoCancellation by remember { mutableStateOf(Prefs.echoCancellation) }
     var autoGain by remember { mutableStateOf(Prefs.autoGainControl) }
     var screenGain by remember { mutableStateOf(Prefs.screenAudioGain) }
+    var denoiseStrength by remember { mutableStateOf(Prefs.denoiseStrength) }
     // Тема применяется сразу по нажатию, а не по кнопке «Сохранить»: иначе
     // непонятно, что именно выбрал — палитра-то не поменялась.
     var theme by remember { mutableStateOf(themeMode) }
@@ -112,6 +113,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         Prefs.echoCancellation = echoCancellation
         Prefs.autoGainControl = autoGain
         Prefs.screenAudioGain = screenGain
+        Prefs.denoiseStrength = denoiseStrength
         scope.launch { Db.closeAll() }
         status = "Настройки сохранены."
     }
@@ -275,6 +277,25 @@ fun SettingsScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(20.dp))
             Section("Обработка звука в звонке")
             SwitchRow("Шумоподавление", noiseSuppression) { noiseSuppression = it }
+            if (noiseSuppression) {
+                Text(
+                    "Сила подавления: ${(denoiseStrength * 100).toInt()}%",
+                    color = PismoColors.TextSecondary, fontSize = 13.sp,
+                )
+                Slider(
+                    value = denoiseStrength,
+                    onValueChange = { denoiseStrength = it },
+                    valueRange = 0f..1f,
+                    colors = SliderDefaults.colors(thumbColor = PismoColors.Blurple),
+                )
+                Text(
+                    "Выше — сильнее давятся клики клавиатуры, мышь и голоса из " +
+                            "соседней комнаты, но тише становится собственный тихий " +
+                            "голос. Это наш обработчик, а не галочка WebRTC, поэтому " +
+                            "меняется прямо в разговоре.",
+                    color = PismoColors.TextMuted, fontSize = 11.sp,
+                )
+            }
             SwitchRow("Эхоподавление", echoCancellation) { echoCancellation = it }
             SwitchRow("Автоусиление громкости", autoGain) { autoGain = it }
             Text(

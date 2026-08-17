@@ -280,7 +280,9 @@ class CallEngine(
      */
     private fun installAudioPipeline(r: Room) {
         audio.denoiser = if (Prefs.noiseSuppression) {
-            audio.denoiser ?: MicDenoiser(SAMPLE_RATE_HINT)
+            (audio.denoiser ?: MicDenoiser(SAMPLE_RATE_HINT)).apply {
+                strength = Prefs.denoiseStrength
+            }
         } else null
 
         runCatching {
@@ -435,7 +437,17 @@ class CallEngine(
     /** Шумодав можно щёлкать прямо в звонке — он наш, не из WebRTC. */
     fun setNoiseSuppression(enabled: Boolean) {
         Prefs.noiseSuppression = enabled
-        audio.denoiser = if (enabled) audio.denoiser ?: MicDenoiser(SAMPLE_RATE_HINT) else null
+        audio.denoiser = if (enabled) {
+            (audio.denoiser ?: MicDenoiser(SAMPLE_RATE_HINT)).apply {
+                strength = Prefs.denoiseStrength
+            }
+        } else null
+    }
+
+    /** Сила подавления, 0..1. Меняется прямо в разговоре. */
+    fun setDenoiseStrength(value: Float) {
+        Prefs.denoiseStrength = value
+        audio.denoiser?.strength = value
     }
 
     // ════════════════════════════════════════════════════════════════

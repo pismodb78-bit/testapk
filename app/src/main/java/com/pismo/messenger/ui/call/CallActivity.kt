@@ -109,6 +109,12 @@ class CallActivity : ComponentActivity() {
          * без участия человека, и звонок бы отвечался сам собой.
          */
         const val EXTRA_RINGING = "ringing"
+
+        /**
+         * true — пользователь нажал «Принять» прямо в шторке. Экран «вам
+         * звонят» пропускаем и сразу заходим в комнату.
+         */
+        const val EXTRA_ACCEPT_NOW = "accept_now"
     }
 
     private lateinit var engine: CallEngine
@@ -127,7 +133,14 @@ class CallActivity : ComponentActivity() {
         val isCaller = intent.getBooleanExtra(EXTRA_IS_CALLER, false)
         sessionId = intent.getIntExtra(EXTRA_SESSION_ID, -1)
         channelId = intent.getIntExtra(EXTRA_CHANNEL_ID, -1)
-        val ringing = intent.getBooleanExtra(EXTRA_RINGING, false)
+        // accept_now перекрывает ringing: из шторки звонок уже принят.
+        val acceptNow = intent.getBooleanExtra(EXTRA_ACCEPT_NOW, false)
+        val ringing = intent.getBooleanExtra(EXTRA_RINGING, false) && !acceptNow
+
+        if (acceptNow) {
+            IncomingCallMonitor.incoming.value?.let { IncomingCallMonitor.accepted(this, it) }
+            lifecycleScope.launch { runCatching { if (sessionId > 0) CallRepository.accept(sessionId) } }
+        }
 
         setContent {
             PismoTheme {

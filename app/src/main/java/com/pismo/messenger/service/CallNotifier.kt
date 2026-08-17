@@ -63,10 +63,13 @@ object CallNotifier {
                 R.mipmap.ic_launcher, "Отклонить",
                 broadcast(context, ACTION_REJECT, call.id)
             )
-            .addAction(
-                R.mipmap.ic_launcher, "Принять",
-                broadcast(context, ACTION_ACCEPT, call.id)
-            )
+            // «Принять» — ИМЕННО activity-PendingIntent, а не broadcast.
+            // Начиная с Android 10 запуск активити из BroadcastReceiver
+            // запрещён как фоновый: приёмник срабатывал, звонок помечался
+            // принятым, а экран звонка не открывался — и подключения не
+            // происходило. Работало только когда приложение уже на экране.
+            // У уведомления такое право есть, поэтому ведём прямо в активити.
+            .addAction(R.mipmap.ic_launcher, "Принять", acceptPending(context, call))
 
         runCatching {
             NotificationManagerCompat.from(context).notify(ID_INCOMING, builder.build())
@@ -77,6 +80,24 @@ object CallNotifier {
     fun cancelIncoming(context: Context) {
         runCatching { NotificationManagerCompat.from(context).cancel(ID_INCOMING) }
         stopRinging()
+    }
+
+    /** Открывает экран звонка сразу принятым — минуя экран «вам звонят». */
+    private fun acceptPending(context: Context, call: CallSessionRow): PendingIntent {
+        val intent = Intent(context, CallActivity::class.java).apply {
+            putExtra(CallActivity.EXTRA_SESSION_ID, call.id)
+            putExtra(CallActivity.EXTRA_PEER_ID, call.callerId)
+            putExtra(CallActivity.EXTRA_GROUP_ID, call.groupId ?: -1)
+            putExtra(CallActivity.EXTRA_PEER_NAME, call.callerName)
+            putExtra(CallActivity.EXTRA_WITH_VIDEO, call.hasVideo)
+            putExtra(CallActivity.EXTRA_IS_CALLER, false)
+            putExtra(CallActivity.EXTRA_ACCEPT_NOW, true)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+        return PendingIntent.getActivity(
+            context, call.id * 2 + 1, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
     }
 
     private fun broadcast(context: Context, action: String, callId: Int): PendingIntent {

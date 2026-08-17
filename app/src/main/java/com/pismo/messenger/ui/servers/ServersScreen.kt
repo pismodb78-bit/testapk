@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.HeadsetOff
 import androidx.compose.material.icons.filled.MicOff
@@ -285,6 +286,11 @@ fun ServersScreen(
                         VoiceChannelRow(
                             channel = ch,
                             participants = here,
+                            // У голосового канала свой чат — на ПК он
+                            // открывается значком 💬 справа, БЕЗ входа в
+                            // звонок. На телефоне его не было вовсе: нажатие
+                            // по строке всегда вело в разговор.
+                            onOpenChat = { onOpenChannel(s.id, ch.id, ch.name) },
                             onLongClick = { if (perms.isAdminLike) editChannel = ch },
                             onJoin = {
                                 // Лимит вместимости (миграция 14): 0 — без ограничения.
@@ -464,6 +470,7 @@ private fun VoiceChannelRow(
     channel: ServerChannel,
     participants: List<VoiceParticipant>,
     onJoin: () -> Unit,
+    onOpenChat: () -> Unit,
     onLongClick: () -> Unit,
 ) {
     Column {
@@ -488,6 +495,16 @@ private fun VoiceChannelRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            // Значок чата справа — как 💬 в ServersForm: открывает
+            // переписку канала, НЕ подключая к разговору.
+            IconButton(onClick = onOpenChat, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    Icons.Default.ChatBubbleOutline, "Чат канала",
+                    tint = PismoColors.TextMuted, modifier = Modifier.size(16.dp),
+                )
+            }
+            Spacer(Modifier.width(4.dp))
+
             if (channel.userLimit > 0) {
                 Pill("${participants.size}/${channel.userLimit}")
             } else if (participants.isNotEmpty()) {
