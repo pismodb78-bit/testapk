@@ -170,6 +170,16 @@ object Prefs {
         get() = sp.getFloat("screen_audio_gain", 0.6f)
         set(v) = sp.edit().putFloat("screen_audio_gain", v).apply()
 
+    // ── Оформление ─────────────────────────────────────────────────────
+    /**
+     * Тема: "system" (по системной), "dark" или "light".
+     * Хранится строкой, а не порядковым номером enum: перестановка
+     * элементов в enum молча поменяла бы значение у всех, кто уже выбрал.
+     */
+    var themeModeName: String
+        get() = sp.getString("theme_mode", "system") ?: "system"
+        set(v) = sp.edit().putString("theme_mode", v).apply()
+
     /** Передавать системный звук вместе с демонстрацией экрана. */
     var shareScreenAudio: Boolean
         get() = sp.getBoolean("share_screen_audio", true)

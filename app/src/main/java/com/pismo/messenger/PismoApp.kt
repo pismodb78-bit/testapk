@@ -7,6 +7,7 @@ import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.PresenceReporter
 import com.pismo.messenger.data.MediaCache
 import com.pismo.messenger.service.Notifications
+import com.pismo.messenger.ui.theme.PismoColors
 
 class PismoApp : Application() {
 
@@ -16,6 +17,9 @@ class PismoApp : Application() {
         Prefs.init(this)
         MediaCache.init(this)
         Notifications.createChannels(this)
+        // Палитру ставим до первой отрисовки, иначе светлая тема мигнёт
+        // тёмным кадром на старте.
+        PismoColors.initFrom(this)
 
         // Слежение за входящими звонками запускаем на уровне процесса, а не
         // экрана: звонок должен показываться и из переписки, и когда

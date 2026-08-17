@@ -1,12 +1,17 @@
 package com.pismo.messenger.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -45,6 +50,8 @@ import com.pismo.messenger.data.MediaCache
 import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.ui.login.PismoField
 import com.pismo.messenger.ui.theme.PismoColors
+import com.pismo.messenger.ui.theme.ThemeMode
+import com.pismo.messenger.ui.theme.themeMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -74,6 +81,9 @@ fun SettingsScreen(onBack: () -> Unit) {
     var echoCancellation by remember { mutableStateOf(Prefs.echoCancellation) }
     var autoGain by remember { mutableStateOf(Prefs.autoGainControl) }
     var screenGain by remember { mutableStateOf(Prefs.screenAudioGain) }
+    // Тема применяется сразу по нажатию, а не по кнопке «Сохранить»: иначе
+    // непонятно, что именно выбрал — палитра-то не поменялась.
+    var theme by remember { mutableStateOf(themeMode) }
 
     var status by remember { mutableStateOf("") }
     var cacheSize by remember { mutableStateOf(0L) }
@@ -237,6 +247,32 @@ fun SettingsScreen(onBack: () -> Unit) {
             SwitchRow("Фоновая проверка сообщений", bgPolling) { bgPolling = it }
 
             Spacer(Modifier.height(20.dp))
+            Section("Оформление")
+            Text(
+                "У ПК-версии светлой темы нет — она целиком тёмная. Здесь " +
+                        "светлая подобрана по тем же ролям цветов; фирменные " +
+                        "(синий, статусы, ошибки) в обеих одинаковы.",
+                color = PismoColors.TextMuted, fontSize = 12.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth()) {
+                ThemeChip("Системная", theme == ThemeMode.SYSTEM) {
+                    theme = ThemeMode.SYSTEM
+                    Prefs.themeModeName = theme.stored
+                }
+                Spacer(Modifier.width(8.dp))
+                ThemeChip("Тёмная", theme == ThemeMode.DARK) {
+                    theme = ThemeMode.DARK
+                    Prefs.themeModeName = theme.stored
+                }
+                Spacer(Modifier.width(8.dp))
+                ThemeChip("Светлая", theme == ThemeMode.LIGHT) {
+                    theme = ThemeMode.LIGHT
+                    Prefs.themeModeName = theme.stored
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
             Section("Обработка звука в звонке")
             SwitchRow("Шумоподавление", noiseSuppression) { noiseSuppression = it }
             SwitchRow("Эхоподавление", echoCancellation) { echoCancellation = it }
@@ -341,4 +377,25 @@ private fun formatBytes(bytes: Long): String = when {
     bytes < 1024L -> "$bytes Б"
     bytes < 1024L * 1024L -> "${bytes / 1024L} КБ"
     else -> String.format(java.util.Locale.getDefault(), "%.1f МБ", bytes / 1024.0 / 1024.0)
+}
+
+/** Кнопка выбора темы. Выбранная подсвечивается фирменным синим. */
+@Composable
+private fun RowScope.ThemeChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .weight(1f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (selected) PismoColors.Blurple else PismoColors.BgElevated)
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            color = if (selected) Color.White else PismoColors.TextSecondary,
+            fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        )
+    }
 }
