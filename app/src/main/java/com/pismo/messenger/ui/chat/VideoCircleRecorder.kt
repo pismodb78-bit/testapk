@@ -73,10 +73,9 @@ private const val TARGET_FPS = 10
 /**
  * Потолок длительности кружка — 3 минуты.
  *
- * Не косметика: кадры копятся в ПАМЯТИ как Bitmap'ы и целиком уходят в БД
- * одним BLOB'ом. На старой минуте контейнер уже весил заметно, а без
- * верхней границы длинная запись просто уронила бы приложение по памяти
- * ещё до отправки.
+ * Не косметика: кадры копятся в памяти и целиком уходят в БД одним BLOB'ом.
+ * Они сжимаются в JPEG сразу при захвате (см. frames ниже), поэтому три
+ * минуты — это около 18 МБ, что база принимает спокойно.
  */
 private const val MAX_SECONDS = 180
 
@@ -89,7 +88,15 @@ fun VideoCircleRecorderDialog(
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
 
-    val frames = remember { mutableListOf<Bitmap>() }
+    // Кадры храним УЖЕ сжатыми в JPEG, а не как Bitmap: 240×240 ARGB_8888
+    // весит 230 КБ, и трёхминутная запись на 10 fps — это 1800 кадров,
+    // больше 400 МБ. В байтах та же запись занимает около 18 МБ.
+    //
+    // Список синхронизированный: пишет в него поток анализатора камеры, а
+    // читает и чистит — главный.
+    val frames = remember {
+        java.util.Collections.synchronizedList(mutableListOf<ByteArray>())
+    }
     val capturing = remember { AtomicBoolean(false) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     val audioRecorder = remember { WavRecorder(scope) }
@@ -108,15 +115,40 @@ fun VideoCircleRecorderDialog(
     // Кадры прореживаем до TARGET_FPS: анализатор отдаёт их гораздо чаще,
     // а в контейнер нужен ровный поток, иначе на ПК кружочек играет рывками.
     val frameIntervalMs = 1000L / TARGET_FPS
-    var lastFrameAt = remember { 0L }
+    // AtomicLong, а не обычная переменная: отметку читает и пишет поток
+    // анализатора, а сбрасывает главный при старте записи.
+    val lastFrameAt = remember { java.util.concurrent.atomic.AtomicLong(0L) }
 
     DisposableEffect(Unit) {
         onDispose {
             capturing.set(false)
             audioRecorder.cancel()
             analysisExecutor.shutdown()
-            frames.forEach { runCatching { it.recycle() } }
             frames.clear()
+        }
+    }
+
+    /** Останавливает запись, собирает контейнер и отдаёт его наружу. */
+    fun finishRecording() {
+        if (!recording) return
+        recording = false
+        capturing.set(false)
+        busy = true
+        scope.launch {
+            val wav = audioRecorder.stop()
+            val snapshot = synchronized(frames) { frames.toList() }
+            if (snapshot.isEmpty()) {
+                busy = false
+                onDismiss()
+                return@launch
+            }
+            val encoded = runCatching {
+                withContext(Dispatchers.Default) {
+                    VideoCircleCodec.encodeJpeg(snapshot, wav, TARGET_FPS)
+                }
+            }.getOrNull()
+            busy = false
+            if (encoded != null) onRecorded(encoded) else onDismiss()
         }
     }
 
@@ -143,12 +175,17 @@ fun VideoCircleRecorderDialog(
                 try {
                     if (capturing.get()) {
                         val now = System.currentTimeMillis()
-                        if (now - lastFrameAt >= frameIntervalMs) {
-                            lastFrameAt = now
+                        if (now - lastFrameAt.get() >= frameIntervalMs) {
+                            lastFrameAt.set(now)
                             toCircleFrame(
                                 proxy.toBitmap(),
                                 proxy.imageInfo.rotationDegrees,
-                            )?.let { frames.add(it) }
+                            )?.let { bmp ->
+                                // Жмём здесь же и сразу отпускаем Bitmap —
+                                // копить их до конца записи нельзя.
+                                frames.add(VideoCircleCodec.toJpeg(bmp))
+                                runCatching { bmp.recycle() }
+                            }
                         }
                     }
                 } catch (_: Throwable) {
@@ -175,7 +212,10 @@ fun VideoCircleRecorderDialog(
             delay(1000)
             seconds++
         }
-        if (seconds >= MAX_SECONDS && recording) recording = false
+        // Дошли до потолка — именно ЗАВЕРШАЕМ запись, а не просто гасим
+        // флаг: раньше здесь сбрасывался только он, захват кадров продолжал
+        // идти, и записанное никуда не уходило.
+        if (recording && seconds >= MAX_SECONDS) finishRecording()
     }
 
     Dialog(
@@ -225,8 +265,24 @@ fun VideoCircleRecorderDialog(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = { if (!busy && !recording) onDismiss() }) {
-                    Icon(Icons.Default.Close, "Отмена", tint = Color.White)
+                // Отмена доступна и ВО ВРЕМЯ записи: прервать неудачный
+                // дубль иначе было нечем — оставалось только записать до
+                // конца и отправить. Записанное выбрасываем.
+                IconButton(
+                    enabled = !busy,
+                    onClick = {
+                        capturing.set(false)
+                        recording = false
+                        audioRecorder.cancel()
+                        frames.clear()
+                        onDismiss()
+                    },
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        if (recording) "Отменить запись" else "Закрыть",
+                        tint = if (recording) PismoColors.Red else Color.White,
+                    )
                 }
 
                 Box(
@@ -241,29 +297,11 @@ fun VideoCircleRecorderDialog(
                         onClick = {
                             if (!recording) {
                                 frames.clear()
-                                lastFrameAt = 0L
+                                lastFrameAt.set(0L)
                                 audioRecorder.start()
                                 capturing.set(true)
                                 recording = true
-                            } else {
-                                recording = false
-                                capturing.set(false)
-                                busy = true
-                                scope.launch {
-                                    val wav = audioRecorder.stop()
-                                    val snapshot = frames.toList()
-                                    if (snapshot.isEmpty()) {
-                                        busy = false
-                                        onDismiss()
-                                        return@launch
-                                    }
-                                    val encoded = runCatching {
-                                        VideoCircleCodec.encode(snapshot, wav, TARGET_FPS)
-                                    }.getOrNull()
-                                    busy = false
-                                    if (encoded != null) onRecorded(encoded) else onDismiss()
-                                }
-                            }
+                            } else finishRecording()
                         },
                     ) {
                         Icon(

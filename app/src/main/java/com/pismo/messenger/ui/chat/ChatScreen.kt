@@ -106,6 +106,17 @@ import kotlinx.coroutines.launch
  */
 private const val VOICE_MAX_SECONDS = 180
 
+/**
+ * Потолок размера вложения.
+ *
+ * Сверху его задаёт сервер: max_allowed_packet на нашей базе — около
+ * 256 МБ, больше одной строкой не примут. Снизу — сам телефон: файл
+ * читается в память целиком, а JDBC и шифрование делают ещё копии, так что
+ * на 250 МБ уйдёт под гигабайт кучи. Поэтому берём заведомо проходимые
+ * 128 МБ и говорим об этом вслух, а не отбрасываем выбор молча, как было.
+ */
+private const val MAX_ATTACH_BYTES = 128L * 1024 * 1024
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
@@ -274,9 +285,25 @@ fun ChatScreen(
         scope.launch {
             runCatching {
                 val name = queryFileName(context, uri)
+
+                // Размер узнаём ДО чтения: файл на 300 МБ иначе успел бы
+                // положить приложение ещё до проверки.
+                val declared = fileSizeOf(context, uri)
+                if (declared > MAX_ATTACH_BYTES) {
+                    jumpNote = "Файл слишком большой: " +
+                            "${declared / 1024 / 1024} МБ при пределе " +
+                            "${MAX_ATTACH_BYTES / 1024 / 1024} МБ."
+                    return@runCatching
+                }
+
                 val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                     ?: return@runCatching
-                if (bytes.size > 64L * 1024 * 1024) return@runCatching
+                if (bytes.size > MAX_ATTACH_BYTES) {
+                    jumpNote = "Файл слишком большой: " +
+                            "${bytes.size / 1024 / 1024} МБ при пределе " +
+                            "${MAX_ATTACH_BYTES / 1024 / 1024} МБ."
+                    return@runCatching
+                }
 
                 sending = true
                 val isImage = com.pismo.messenger.core.isImageName(name) ||
@@ -666,7 +693,7 @@ fun ChatScreen(
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { jumpNote = "" },
             containerColor = PismoColors.BgSidebar,
-            title = { Text("Переход к дате", color = Color.White) },
+            title = { Text("PISMO", color = Color.White) },
             text = { Text(jumpNote, color = PismoColors.TextSecondary) },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = { jumpNote = "" }) {
@@ -763,3 +790,18 @@ private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedCompat(
         itemContent(index, items[index])
     }
 }
+
+/**
+ * Размер файла по content-URI без его чтения.
+ *
+ * OpenableColumns.SIZE отдают не все провайдеры (облачные часто молчат),
+ * поэтому при неудаче возвращаем 0 — «неизвестно», и решение принимается
+ * уже по фактически прочитанным байтам.
+ */
+private fun fileSizeOf(context: android.content.Context, uri: android.net.Uri): Long =
+    runCatching {
+        context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+            val idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+            if (idx >= 0 && c.moveToFirst() && !c.isNull(idx)) c.getLong(idx) else 0L
+        } ?: 0L
+    }.getOrDefault(0L)

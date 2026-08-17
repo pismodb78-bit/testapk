@@ -33,7 +33,24 @@ object VideoCircleCodec {
         val fps: Int,
     )
 
-    fun encode(frames: List<Bitmap>, wavAudio: ByteArray?, fps: Int): ByteArray {
+    fun encode(frames: List<Bitmap>, wavAudio: ByteArray?, fps: Int): ByteArray =
+        encodeJpeg(frames.map { toJpeg(it) }, wavAudio, fps)
+
+    /** Сжимает кадр в JPEG того же качества, что и контейнер. */
+    fun toJpeg(frame: Bitmap): ByteArray = ByteArrayOutputStream().also {
+        frame.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, it)
+    }.toByteArray()
+
+    /**
+     * Сборка контейнера из УЖЕ сжатых кадров.
+     *
+     * Зачем отдельный вход: кадр 240×240 в ARGB_8888 занимает 230 КБ, и при
+     * 10 fps трёхминутный кружок — это 1800 кадров, больше 400 МБ живых
+     * Bitmap'ов. Ни один телефон такого не переживёт. Поэтому запись жмёт
+     * каждый кадр сразу и держит в памяти байты (≈10 КБ на кадр, ~18 МБ на
+     * всю запись), а Bitmap освобождает тут же.
+     */
+    fun encodeJpeg(frames: List<ByteArray>, wavAudio: ByteArray?, fps: Int): ByteArray {
         val audio = wavAudio ?: ByteArray(0)
         val out = ByteArrayOutputStream()
 
@@ -43,10 +60,7 @@ object VideoCircleCodec {
         out.write(int32(fps))
         out.write(audio)
 
-        for (frame in frames) {
-            val jpeg = ByteArrayOutputStream().also {
-                frame.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, it)
-            }.toByteArray()
+        for (jpeg in frames) {
             out.write(int32(jpeg.size))
             out.write(jpeg)
         }
