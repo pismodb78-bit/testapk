@@ -43,6 +43,7 @@ import com.pismo.messenger.core.avatarColor
 import com.pismo.messenger.core.ellipsize
 import com.pismo.messenger.core.fileBadge
 import com.pismo.messenger.core.fileColor
+import com.pismo.messenger.core.MediaKinds
 import com.pismo.messenger.core.formatTime
 import com.pismo.messenger.data.MediaCache
 import com.pismo.messenger.data.model.ChatMessage
@@ -196,11 +197,25 @@ fun MessageBubble(
                             Spacer(Modifier.height(6.dp))
                         }
 
+                        // Видео и музыка играют прямо в пузыре — как на ПК,
+                        // где для них создаётся InlineVideoPlayer, а не
+                        // карточка «нажмите для загрузки».
+                        val playableVideo = msg.hasFile && MediaKinds.isVideo(msg.fileName)
+                        val playableAudio = msg.hasFile && MediaKinds.isAudio(msg.fileName)
+                        if (playableVideo) {
+                            InlineVideoBubble(msg.id, scopeKind, msg.fileName!!)
+                            Spacer(Modifier.height(6.dp))
+                        } else if (playableAudio) {
+                            InlineAudioBubble(msg.id, scopeKind, msg.fileName!!)
+                            Spacer(Modifier.height(6.dp))
+                        }
+
                         // Карточку файла показываем ТОЛЬКО когда предпросмотра
                         // нет. Если картинка уже нарисована в пузыре, вторая
                         // строка «Нажмите для загрузки» — дубль того же
                         // вложения: на ПК её там нет, там просто изображение.
-                        val previewShown = image != null || msg.hasAudio || msg.hasVideo
+                        val previewShown = image != null || msg.hasAudio || msg.hasVideo ||
+                            playableVideo || playableAudio
                         if (!msg.fileName.isNullOrBlank() && msg.hasFile && !previewShown) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -345,7 +360,11 @@ fun MessageBubble(
     }
 
     viewerBytes?.let { bytes ->
-        FullscreenImageViewer(bytes) { viewerBytes = null }
+        FullscreenImageViewer(
+            bytes = bytes,
+            onDismiss = { viewerBytes = null },
+            fileName = msg.fileName,
+        )
     }
 
     if (showEmojiPicker) {

@@ -887,7 +887,7 @@ private data class PendingFile(
 }
 
 /** «482 КБ» / «12,4 МБ» — для подписи под прикреплённым файлом. */
-private fun formatBytesShort(bytes: Long): String = when {
+internal fun formatBytesShort(bytes: Long): String = when {
     bytes < 1024L -> "$bytes Б"
     bytes < 1024L * 1024L -> "${bytes / 1024L} КБ"
     else -> String.format(java.util.Locale.getDefault(), "%.1f МБ", bytes / 1024.0 / 1024.0)

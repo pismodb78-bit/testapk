@@ -1,0 +1,614 @@
+package com.pismo.messenger.ui.chat
+
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
+import android.media.MediaPlayer
+import android.widget.VideoView
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.pismo.messenger.data.MediaCache
+import com.pismo.messenger.data.model.Scope
+import com.pismo.messenger.data.repo.ChatRepository
+import com.pismo.messenger.media.MediaSaver
+import com.pismo.messenger.ui.theme.PismoColors
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+
+/**
+ * Видео прямо в пузыре — порт InlineVideoPlayer.cs.
+ *
+ * Логика ПК: тяжёлый плеер не создаётся заранее (там это отдельный WebView2
+ * на каждое видео, чат бы встал колом). По умолчанию видна лёгкая обложка с
+ * крупной ▶ и именем файла, а настоящий плеер — с перемоткой, громкостью и
+ * полным экраном — запускается ТОЛЬКО по нажатию.
+ *
+ * Здесь то же самое и по той же причине: VideoView держит декодер и
+ * поверхность, и десяток таких в ленте съел бы и память, и аппаратные
+ * декодеры устройства (их на телефоне единицы).
+ *
+ * Отличие от ПК, вынужденное: там видео рисуется в пузыре, только если байты
+ * УЖЕ скачаны, иначе показывается обычная карточка файла. На телефоне мы
+ * тянем вложение из удалённой базы, и качать десятки мегабайт заранее нельзя,
+ * поэтому обложка показывается всегда, а загрузка идёт по нажатию — ровно
+ * как в карточке файла на ПК («нажмите для воспроизведения»). Если файл уже
+ * в кеше, на обложке появляется настоящий первый кадр.
+ */
+@Composable
+fun InlineVideoBubble(
+    msgId: Int,
+    scopeKind: Scope,
+    fileName: String,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var file by remember(msgId) { mutableStateOf(MediaCache.fileFor(msgId, "file", fileName)) }
+    var cover by remember(msgId) { mutableStateOf<Bitmap?>(null) }
+    var loading by remember(msgId) { mutableStateOf(false) }
+    var status by remember(msgId) { mutableStateOf("") }
+    var playing by remember(msgId) { mutableStateOf(false) }
+    var fullscreen by remember(msgId) { mutableStateOf(false) }
+
+    // Обложка = первый кадр. Достаём в фоне: MediaMetadataRetriever
+    // раскодирует кадр, на главном потоке это заметная пауза.
+    LaunchedEffect(file) {
+        val f = file ?: return@LaunchedEffect
+        if (cover != null) return@LaunchedEffect
+        cover = withContext(Dispatchers.IO) { firstFrame(f) }
+    }
+
+    DisposableEffect(msgId) {
+        onDispose { cover?.let { runCatching { it.recycle() } } }
+    }
+
+    fun open() {
+        if (loading) return
+        if (file != null) {
+            playing = true
+            return
+        }
+        scope.launch {
+            loading = true
+            status = "Загрузка видео…"
+            val data = runCatching {
+                ChatRepository.loadFile(msgId, scopeKind, fileName)
+            }.getOrNull()
+            loading = false
+            if (data == null) {
+                status = "Не удалось загрузить"
+                return@launch
+            }
+            status = ""
+            file = MediaCache.fileFor(msgId, "file", fileName)
+            if (file != null) playing = true else status = "Не удалось сохранить во временную папку"
+        }
+    }
+
+    Column(Modifier.widthIn(max = 280.dp)) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .aspectRatio(if (playing) 16f / 10f else 4f / 3f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(PismoColors.BgDarkest)
+                .then(if (playing) Modifier else Modifier.clickable { open() }),
+            contentAlignment = Alignment.Center,
+        ) {
+            val f = file
+            if (playing && f != null) {
+                VideoSurface(
+                    file = f,
+                    startAtMs = 0,
+                    autoPlay = true,
+                    onFullscreen = { fullscreen = true },
+                    onSave = {
+                        scope.launch {
+                            status = "Сохранение…"
+                            val ok = MediaSaver.saveVideo(context, fileName, f.readBytes())
+                            status = if (ok) "Сохранено в галерею" else "Не удалось сохранить"
+                        }
+                    },
+                )
+            } else {
+                cover?.let {
+                    Image(
+                        bitmap = it.asImageBitmap(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    // Затемнение, иначе белая ▶ на светлом кадре не читается.
+                    Box(Modifier.fillMaxSize().background(Color(0x55000000)))
+                }
+                if (loading) {
+                    CircularProgressIndicator(color = Color.White, strokeWidth = 3.dp)
+                } else {
+                    Box(
+                        Modifier
+                            .size(56.dp)
+                            .clip(RoundedCornerShape(28.dp))
+                            .background(Color(0x99000000)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = "Воспроизвести",
+                            tint = Color.White,
+                            modifier = Modifier.size(34.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(Color(0x22000000))
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    fileName,
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                )
+                Text(
+                    status.ifBlank { sizeLabel(file) ?: "Видео" },
+                    color = PismoColors.TextMuted,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                )
+            }
+            IconButton(
+                onClick = {
+                    val f = file
+                    scope.launch {
+                        status = "Сохранение…"
+                        val bytes = if (f != null) withContext(Dispatchers.IO) { f.readBytes() }
+                        else runCatching {
+                            ChatRepository.loadFile(msgId, scopeKind, fileName)
+                        }.getOrNull()
+                        status = when {
+                            bytes == null -> "Не удалось загрузить"
+                            MediaSaver.saveVideo(context, fileName, bytes) -> "Сохранено в галерею"
+                            else -> "Не удалось сохранить"
+                        }
+                        if (file == null) file = MediaCache.fileFor(msgId, "file", fileName)
+                    }
+                },
+                modifier = Modifier.size(28.dp),
+            ) {
+                Icon(
+                    Icons.Default.Download,
+                    contentDescription = "Сохранить в галерею",
+                    tint = PismoColors.TextSecondary,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+    }
+
+    if (fullscreen) {
+        val f = file
+        Dialog(
+            onDismissRequest = { fullscreen = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Box(Modifier.fillMaxSize().background(Color.Black)) {
+                if (f != null) {
+                    VideoSurface(
+                        file = f,
+                        startAtMs = 0,
+                        autoPlay = true,
+                        onFullscreen = null,
+                        onSave = {
+                            scope.launch {
+                                MediaSaver.saveVideo(context, fileName, f.readBytes())
+                            }
+                        },
+                    )
+                }
+                IconButton(
+                    onClick = { fullscreen = false },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+                ) {
+                    Icon(Icons.Default.Close, "Закрыть", tint = Color.White)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Сам проигрыватель: поверхность VideoView плюс свои элементы управления.
+ *
+ * Своя панель, а не системный MediaController, по двум причинам: тот всплывает
+ * поверх на три секунды и пропадает (в пузыре чата это неудобно), и он рисуется
+ * системной темой — в мессенджере с двумя палитрами это выглядит инородно.
+ * Набор кнопок повторяет то, что даёт HTML5-плеер на ПК: пуск/пауза, перемотка,
+ * громкость, полный экран.
+ */
+@Composable
+private fun VideoSurface(
+    file: File,
+    startAtMs: Int,
+    autoPlay: Boolean,
+    onFullscreen: (() -> Unit)?,
+    onSave: (() -> Unit)?,
+) {
+    val context = LocalContext.current
+    val view = remember(file.absolutePath) { VideoView(context) }
+
+    var prepared by remember(file.absolutePath) { mutableStateOf(false) }
+    var isPlaying by remember(file.absolutePath) { mutableStateOf(autoPlay) }
+    var muted by remember(file.absolutePath) { mutableStateOf(false) }
+    var durationMs by remember(file.absolutePath) { mutableIntStateOf(0) }
+    var positionMs by remember(file.absolutePath) { mutableIntStateOf(0) }
+    var dragging by remember(file.absolutePath) { mutableStateOf(false) }
+    var dragValue by remember(file.absolutePath) { mutableFloatStateOf(0f) }
+    var player by remember(file.absolutePath) { mutableStateOf<MediaPlayer?>(null) }
+    var failed by remember(file.absolutePath) { mutableStateOf(false) }
+
+    DisposableEffect(file.absolutePath) {
+        onDispose {
+            runCatching { view.stopPlayback() }
+            player = null
+        }
+    }
+
+    // Тикер позиции. Крутится только пока идёт воспроизведение: иначе он
+    // будил бы композицию пять раз в секунду на каждом видимом видео.
+    LaunchedEffect(isPlaying, prepared) {
+        if (!prepared) return@LaunchedEffect
+        while (isPlaying) {
+            if (!dragging) positionMs = runCatching { view.currentPosition }.getOrDefault(0)
+            kotlinx.coroutines.delay(200)
+        }
+    }
+
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        AndroidView(
+            factory = { v ->
+                view.apply {
+                    setOnPreparedListener { mp ->
+                        player = mp
+                        prepared = true
+                        durationMs = duration.coerceAtLeast(0)
+                        mp.setVolume(if (muted) 0f else 1f, if (muted) 0f else 1f)
+                        if (startAtMs > 0) seekTo(startAtMs)
+                        if (autoPlay) start()
+                    }
+                    setOnCompletionListener {
+                        isPlaying = false
+                        positionMs = durationMs
+                    }
+                    setOnErrorListener { _, _, _ ->
+                        failed = true
+                        isPlaying = false
+                        true   // сообщение об ошибке показываем своё
+                    }
+                    setVideoPath(file.absolutePath)
+                }
+                view
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
+
+        if (failed) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.background(Color(0xAA000000)).padding(12.dp),
+            ) {
+                Text("Не удалось воспроизвести", color = Color.White, fontSize = 13.sp)
+                Text(
+                    "Кодек этого файла не поддерживается устройством — " +
+                            "сохраните и откройте во внешнем плеере.",
+                    color = PismoColors.TextMuted,
+                    fontSize = 11.sp,
+                )
+            }
+        }
+
+        Row(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(Color(0x99000000))
+                .padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(
+                onClick = {
+                    if (isPlaying) {
+                        runCatching { view.pause() }
+                        isPlaying = false
+                    } else {
+                        runCatching { view.start() }
+                        isPlaying = true
+                    }
+                },
+                modifier = Modifier.size(34.dp),
+            ) {
+                Icon(
+                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (isPlaying) "Пауза" else "Воспроизвести",
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+
+            Text(
+                formatClock(if (dragging) (dragValue * durationMs).toInt() else positionMs),
+                color = Color.White,
+                fontSize = 10.sp,
+            )
+
+            Slider(
+                value = if (dragging) dragValue
+                else if (durationMs > 0) positionMs.toFloat() / durationMs else 0f,
+                onValueChange = { dragging = true; dragValue = it },
+                onValueChangeFinished = {
+                    runCatching { view.seekTo((dragValue * durationMs).toInt()) }
+                    positionMs = (dragValue * durationMs).toInt()
+                    dragging = false
+                },
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = PismoColors.Blurple,
+                ),
+                modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
+            )
+
+            Text(formatClock(durationMs), color = Color.White, fontSize = 10.sp)
+
+            IconButton(
+                onClick = {
+                    muted = !muted
+                    player?.setVolume(if (muted) 0f else 1f, if (muted) 0f else 1f)
+                },
+                modifier = Modifier.size(30.dp),
+            ) {
+                Icon(
+                    if (muted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                    contentDescription = if (muted) "Включить звук" else "Выключить звук",
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+
+            if (onSave != null) {
+                IconButton(onClick = onSave, modifier = Modifier.size(30.dp)) {
+                    Icon(
+                        Icons.Default.Download,
+                        contentDescription = "Сохранить",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+
+            if (onFullscreen != null) {
+                IconButton(onClick = onFullscreen, modifier = Modifier.size(30.dp)) {
+                    Icon(
+                        Icons.Default.Fullscreen,
+                        contentDescription = "Во весь экран",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Музыкальное вложение (mp3, m4a, flac…): строка с пуском и перемоткой.
+ *
+ * На ПК такой файл открывается тем же встроенным проигрывателем, что и видео;
+ * держать для него отдельное окно на телефоне незачем — достаточно строки в
+ * пузыре, как у голосового сообщения.
+ */
+@Composable
+fun InlineAudioBubble(
+    msgId: Int,
+    scopeKind: Scope,
+    fileName: String,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var file by remember(msgId) { mutableStateOf(MediaCache.fileFor(msgId, "file", fileName)) }
+    var loading by remember(msgId) { mutableStateOf(false) }
+    var status by remember(msgId) { mutableStateOf("") }
+    var player by remember(msgId) { mutableStateOf<MediaPlayer?>(null) }
+    var isPlaying by remember(msgId) { mutableStateOf(false) }
+    var durationMs by remember(msgId) { mutableIntStateOf(0) }
+    var positionMs by remember(msgId) { mutableIntStateOf(0) }
+
+    DisposableEffect(msgId) {
+        onDispose {
+            runCatching { player?.release() }
+            player = null
+        }
+    }
+
+    LaunchedEffect(isPlaying) {
+        while (isPlaying) {
+            positionMs = runCatching { player?.currentPosition ?: 0 }.getOrDefault(0)
+            kotlinx.coroutines.delay(300)
+        }
+    }
+
+    fun startFrom(f: File) {
+        runCatching {
+            val mp = player ?: MediaPlayer().also { m ->
+                m.setDataSource(f.absolutePath)
+                m.prepare()
+                m.setOnCompletionListener { isPlaying = false; positionMs = 0 }
+                player = m
+                durationMs = m.duration.coerceAtLeast(0)
+            }
+            mp.start()
+            isPlaying = true
+        }.onFailure { status = "Не удалось воспроизвести" }
+    }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .widthIn(max = 280.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0x22000000))
+            .clickable {
+                if (loading) return@clickable
+                val f = file
+                when {
+                    isPlaying -> { runCatching { player?.pause() }; isPlaying = false }
+                    f != null -> startFrom(f)
+                    else -> scope.launch {
+                        loading = true
+                        status = "Загрузка…"
+                        val data = runCatching {
+                            ChatRepository.loadFile(msgId, scopeKind, fileName)
+                        }.getOrNull()
+                        loading = false
+                        if (data == null) {
+                            status = "Не удалось загрузить"
+                        } else {
+                            status = ""
+                            file = MediaCache.fileFor(msgId, "file", fileName)
+                            file?.let { startFrom(it) }
+                        }
+                    }
+                }
+            }
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+    ) {
+        if (loading) {
+            CircularProgressIndicator(
+                color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(20.dp)
+            )
+        } else {
+            Icon(
+                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                contentDescription = if (isPlaying) "Пауза" else "Воспроизвести",
+                tint = Color.White,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(fileName, color = Color.White, fontSize = 13.sp, maxLines = 1)
+            Text(
+                status.ifBlank {
+                    if (durationMs > 0) "${formatClock(positionMs)} / ${formatClock(durationMs)}"
+                    else sizeLabel(file) ?: "Аудио"
+                },
+                color = PismoColors.TextMuted,
+                fontSize = 11.sp,
+            )
+        }
+        IconButton(
+            onClick = {
+                val f = file
+                scope.launch {
+                    status = "Сохранение…"
+                    val bytes = if (f != null) withContext(Dispatchers.IO) { f.readBytes() }
+                    else runCatching {
+                        ChatRepository.loadFile(msgId, scopeKind, fileName)
+                    }.getOrNull()
+                    status = when {
+                        bytes == null -> "Не удалось загрузить"
+                        MediaSaver.saveFile(context, fileName, bytes) -> "Сохранено"
+                        else -> "Не удалось сохранить"
+                    }
+                }
+            },
+            modifier = Modifier.size(28.dp),
+        ) {
+            Icon(
+                Icons.Default.Download,
+                contentDescription = "Сохранить",
+                tint = PismoColors.TextSecondary,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    }
+}
+
+/** Размер уже скачанного вложения; до загрузки он нам неоткуда взяться. */
+private fun sizeLabel(file: File?): String? =
+    file?.takeIf { it.exists() }?.let { formatBytesShort(it.length()) }
+
+/** Первый кадр видео — обложка до запуска плеера. */
+private fun firstFrame(file: File): Bitmap? = runCatching {
+    val r = MediaMetadataRetriever()
+    try {
+        r.setDataSource(file.absolutePath)
+        r.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+    } finally {
+        runCatching { r.release() }
+    }
+}.getOrNull()
+
+/** мм:сс — как на шкале любого плеера. */
+internal fun formatClock(ms: Int): String {
+    val total = (ms / 1000).coerceAtLeast(0)
+    return "%d:%02d".format(total / 60, total % 60)
+}

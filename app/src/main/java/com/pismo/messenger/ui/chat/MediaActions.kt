@@ -51,6 +51,7 @@ import com.pismo.messenger.data.model.GroupSummary
 import com.pismo.messenger.data.model.Scope
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.ServerRepository
+import com.pismo.messenger.media.MediaSaver
 import com.pismo.messenger.ui.components.LetterAvatar
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.Dispatchers
@@ -63,10 +64,17 @@ import java.io.File
  * из ПК-версии (там окно с PictureBox.Zoom).
  */
 @Composable
-fun FullscreenImageViewer(bytes: ByteArray, onDismiss: () -> Unit) {
+fun FullscreenImageViewer(
+    bytes: ByteArray,
+    onDismiss: () -> Unit,
+    fileName: String? = null,
+) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
+    var saveStatus by remember { mutableStateOf("") }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -103,11 +111,32 @@ fun FullscreenImageViewer(bytes: ByteArray, onDismiss: () -> Unit) {
                     ),
             )
 
-            IconButton(
-                onClick = onDismiss,
-                modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+            Row(
+                Modifier.align(Alignment.TopEnd).padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Default.Close, "Закрыть", tint = Color.White)
+                if (saveStatus.isNotBlank()) {
+                    Text(saveStatus, color = Color.White, fontSize = 12.sp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                // «Скачать» на телефоне — это положить файл в галерею:
+                // приватный каталог приложения пользователю не показывают
+                // ни один файловый менеджер, ни просмотрщик фото.
+                IconButton(onClick = {
+                    scope.launch {
+                        saveStatus = "Сохранение…"
+                        val name = fileName?.takeIf { it.isNotBlank() }
+                            ?: "pismo_${System.currentTimeMillis()}.jpg"
+                        saveStatus =
+                            if (MediaSaver.saveImage(context, name, bytes)) "Сохранено в галерею"
+                            else "Не удалось сохранить"
+                    }
+                }) {
+                    Icon(Icons.Default.Download, "Сохранить в галерею", tint = Color.White)
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, "Закрыть", tint = Color.White)
+                }
             }
         }
     }

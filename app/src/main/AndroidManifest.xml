@@ -9,6 +9,11 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Сохранение вложений в галерею. До Android 10 общих коллекций
+         MediaStore с песочницей не было, файл пишется в публичный
+         каталог напрямую — только там и нужно это разрешение. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Полноэкранное уведомление о звонке поверх блокировки. Без него
          входящий с ПК приходит обычной строкой в шторке и легко теряется. -->
