@@ -16,8 +16,10 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -102,6 +104,12 @@ fun InlineVideoBubble(
     var status by remember(msgId) { mutableStateOf("") }
     var playing by remember(msgId) { mutableStateOf(false) }
     var fullscreen by remember(msgId) { mutableStateOf(false) }
+    // Позиция, с которой продолжает следующий плеер. Одновременно живым
+    // должен быть РОВНО ОДИН: пока их было два, инлайновый продолжал играть
+    // за диалогом, и слышно было обе дорожки с расхождением в пару секунд —
+    // это и есть «рассинхрон звука в полном экране».
+    var handoffMs by remember(msgId) { mutableIntStateOf(0) }
+    var livePosMs by remember(msgId) { mutableIntStateOf(0) }
 
     // Обложка = первый кадр. Достаём в фоне: MediaMetadataRetriever
     // раскодирует кадр, на главном потоке это заметная пауза.
@@ -142,7 +150,10 @@ fun InlineVideoBubble(
         Box(
             Modifier
                 .fillMaxWidth()
-                .aspectRatio(if (playing) 16f / 10f else 4f / 3f)
+                // Пропорции ОДИНАКОВЫ до и после запуска. Пока они менялись,
+                // нажатие на видео меняло высоту пузыря, лента пересчитывала
+                // раскладку и уезжала вниз.
+                .aspectRatio(4f / 3f)
                 .clip(RoundedCornerShape(8.dp))
                 .background(PismoColors.BgDarkest)
                 .then(if (playing) Modifier else Modifier.clickable { open() }),
@@ -152,9 +163,17 @@ fun InlineVideoBubble(
             if (playing && f != null) {
                 VideoSurface(
                     file = f,
-                    startAtMs = 0,
+                    startAtMs = handoffMs,
                     autoPlay = true,
-                    onFullscreen = { fullscreen = true },
+                    onPositionChange = { livePosMs = it },
+                    // Инлайновый плеер именно ЗАКРЫВАЕТСЯ, а не остаётся
+                    // играть под диалогом: уход из композиции вызывает
+                    // stopPlayback, и второй дорожки просто не возникает.
+                    onFullscreen = {
+                        handoffMs = livePosMs
+                        playing = false
+                        fullscreen = true
+                    },
                     onSave = {
                         scope.launch {
                             status = "Сохранение…"
@@ -249,16 +268,28 @@ fun InlineVideoBubble(
 
     if (fullscreen) {
         val f = file
+        // Закрытие в одном месте: и крестик, и системная «назад» должны
+        // вернуть инлайновый плеер на ту же секунду.
+        fun closeFullscreen() {
+            handoffMs = livePosMs
+            fullscreen = false
+            playing = true
+        }
         Dialog(
-            onDismissRequest = { fullscreen = false },
+            onDismissRequest = { closeFullscreen() },
             properties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
             Box(Modifier.fillMaxSize().background(Color.Black)) {
                 if (f != null) {
                     VideoSurface(
                         file = f,
-                        startAtMs = 0,
+                        startAtMs = handoffMs,
                         autoPlay = true,
+                        onPositionChange = { livePosMs = it },
+                        // Панель управления во весь экран прижата к самому
+                        // низу, а там жестовая полоса и кнопки навигации —
+                        // ползунок перемотки оказывался под ними.
+                        insetBottom = true,
                         onFullscreen = null,
                         onSave = {
                             scope.launch {
@@ -268,8 +299,11 @@ fun InlineVideoBubble(
                     )
                 }
                 IconButton(
-                    onClick = { fullscreen = false },
-                    modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+                    onClick = { closeFullscreen() },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .statusBarsPadding()
+                        .padding(12.dp),
                 ) {
                     Icon(Icons.Default.Close, "Закрыть", tint = Color.White)
                 }
@@ -294,6 +328,8 @@ private fun VideoSurface(
     autoPlay: Boolean,
     onFullscreen: (() -> Unit)?,
     onSave: (() -> Unit)?,
+    onPositionChange: (Int) -> Unit = {},
+    insetBottom: Boolean = false,
 ) {
     val context = LocalContext.current
     val view = remember(file.absolutePath) { VideoView(context) }
@@ -320,7 +356,10 @@ private fun VideoSurface(
     LaunchedEffect(isPlaying, prepared) {
         if (!prepared) return@LaunchedEffect
         while (isPlaying) {
-            if (!dragging) positionMs = runCatching { view.currentPosition }.getOrDefault(0)
+            if (!dragging) {
+                positionMs = runCatching { view.currentPosition }.getOrDefault(0)
+                onPositionChange(positionMs)
+            }
             kotlinx.coroutines.delay(200)
         }
     }
@@ -329,6 +368,12 @@ private fun VideoSurface(
         AndroidView(
             factory = { v ->
                 view.apply {
+                    // VideoView по умолчанию забирает фокус по касанию, а
+                    // Compose послушно подтягивает сфокусированную View в
+                    // видимую область — из-за этого нажатие на видео дёргало
+                    // ленту чата. Фокус нам не нужен: управление своё.
+                    isFocusable = false
+                    isFocusableInTouchMode = false
                     setOnPreparedListener { mp ->
                         player = mp
                         prepared = true
@@ -373,7 +418,17 @@ private fun VideoSurface(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .background(Color(0x99000000))
-                .padding(horizontal = 4.dp),
+                // navigationBarsPadding отступает от жестовой полосы, если
+                // диалог рисуется под ней; фиксированные 20.dp снизу нужны
+                // всё равно — иначе ползунок липнет к самому краю экрана и
+                // тащить его пальцем невозможно, палец попадает в систему.
+                .then(if (insetBottom) Modifier.navigationBarsPadding() else Modifier)
+                .padding(
+                    start = 4.dp,
+                    end = 4.dp,
+                    top = if (insetBottom) 6.dp else 0.dp,
+                    bottom = if (insetBottom) 20.dp else 0.dp,
+                ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(
