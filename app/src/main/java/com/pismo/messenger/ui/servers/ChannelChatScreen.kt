@@ -8,12 +8,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.CircularProgressIndicator
@@ -38,6 +41,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pismo.messenger.core.ellipsize
@@ -84,6 +89,7 @@ fun ChannelChatScreen(
     var lastCount by remember { mutableStateOf(0) }
 
     val listState = rememberLazyListState()
+    var showSearch by remember { mutableStateOf(false) }
 
     suspend fun reload(scrollToEnd: Boolean = false) {
         runCatching {
@@ -96,7 +102,14 @@ fun ChannelChatScreen(
             ServerRepository.markChannelRead(channelId)
         }
         loading = false
-        if (scrollToEnd && messages.isNotEmpty()) listState.scrollToItem(messages.lastIndex)
+        // Прокручиваем вниз, только если пользователь и так был у конца
+        // ленты: иначе новое сообщение выдёргивало бы его из середины
+        // истории, которую он читает.
+        val atBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()
+            ?.index?.let { it >= listState.layoutInfo.totalItemsCount - 3 } ?: true
+        if (scrollToEnd && messages.isNotEmpty() && atBottom) {
+            listState.scrollToItem(messages.lastIndex)
+        }
     }
 
     LaunchedEffect(channelId) {
@@ -158,12 +171,25 @@ fun ChannelChatScreen(
                         Icon(Icons.Default.ArrowBack, "Назад", tint = PismoColors.TextSecondary)
                     }
                 },
+                actions = {
+                    IconButton(onClick = { showSearch = true }) {
+                        Icon(Icons.Default.Search, "Поиск по каналу", tint = PismoColors.TextSecondary)
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = PismoColors.BgDarkest),
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
-            Box(Modifier.weight(1f)) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+                // Клавиатура наезжала на строку ввода — ровно как в ЛС.
+                .imePadding()
+        ) {
+            // fillMaxWidth: без него ширину задаёт самый широкий ребёнок, и
+            // на время загрузки им был сам индикатор — кружок уезжал влево.
+            Box(Modifier.fillMaxWidth().weight(1f)) {
                 if (loading) {
                     CircularProgressIndicator(
                         Modifier.align(Alignment.Center), color = PismoColors.Blurple,
@@ -276,6 +302,12 @@ fun ChannelChatScreen(
                         Text("Сообщение в #$channelName", color = PismoColors.TextMuted, fontSize = 14.sp)
                     },
                     maxLines = 5,
+                    // ImeAction.None даёт обычный Enter, переводящий строку:
+                    // с действием по умолчанию там «Готово», и переноса не набрать.
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Sentences,
+                        imeAction = ImeAction.None,
+                    ),
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent,
@@ -292,4 +324,18 @@ fun ChannelChatScreen(
             }
         }
     }
+
+    if (showSearch) {
+        ChannelSearchDialog(
+            channelId = channelId,
+            onDismiss = { showSearch = false },
+            onJump = { found ->
+                showSearch = false
+                // Прыгаем к сообщению, если оно есть на загруженной странице.
+                val idx = messages.indexOfFirst { it.id == found.id }
+                if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
+            },
+        )
+    }
+
 }

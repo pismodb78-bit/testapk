@@ -1,7 +1,9 @@
 package com.pismo.messenger.ui.servers
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +26,7 @@ import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.HeadsetOff
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
@@ -71,6 +74,7 @@ import kotlinx.coroutines.launch
  * каналы выбранного сервера с бейджами непрочитанного, упоминаний и
  * списком тех, кто сейчас в голосовом канале.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ServersScreen(
     onOpenChannel: (serverId: Int, channelId: Int, channelName: String) -> Unit,
@@ -89,6 +93,8 @@ fun ServersScreen(
     var showCreate by remember { mutableStateOf(false) }
     var showJoin by remember { mutableStateOf(false) }
     var showAddChannel by remember { mutableStateOf(false) }
+    var showServerSettings by remember { mutableStateOf(false) }
+    var editChannel by remember { mutableStateOf<ServerChannel?>(null) }
     var error by remember { mutableStateOf("") }
 
     suspend fun reloadServers() {
@@ -248,6 +254,9 @@ fun ServersScreen(
                         Icon(Icons.Default.Add, "Новый канал", tint = PismoColors.TextSecondary)
                     }
                 }
+                IconButton(onClick = { showServerSettings = true }) {
+                    Icon(Icons.Default.Settings, "Настройки сервера", tint = PismoColors.TextSecondary)
+                }
             }
 
             LazyColumn(Modifier.fillMaxSize()) {
@@ -264,6 +273,7 @@ fun ServersScreen(
                             mentions = b?.mentions ?: 0,
                             muted = b?.muted == true,
                             onClick = { onOpenChannel(s.id, ch.id, ch.name) },
+                            onLongClick = { if (perms.isAdminLike) editChannel = ch },
                         )
                     }
                 }
@@ -275,6 +285,7 @@ fun ServersScreen(
                         VoiceChannelRow(
                             channel = ch,
                             participants = here,
+                            onLongClick = { if (perms.isAdminLike) editChannel = ch },
                             onJoin = {
                                 // Лимит вместимости (миграция 14): 0 — без ограничения.
                                 scope.launch {
@@ -294,6 +305,37 @@ fun ServersScreen(
                 item { Spacer(Modifier.height(24.dp)) }
             }
         }
+    }
+
+    selected?.let { s ->
+        if (showServerSettings) {
+            ServerSettingsDialog(
+                serverId = s.id,
+                serverName = s.name,
+                perms = perms,
+                onDismiss = { showServerSettings = false },
+                onChanged = { scope.launch { reloadServers(); reloadChannels() } },
+                onLeft = {
+                    showServerSettings = false
+                    scope.launch {
+                        selected = null
+                        reloadServers()
+                        selected = servers.firstOrNull()
+                    }
+                },
+            )
+        }
+    }
+
+    editChannel?.let { ch ->
+        ChannelSettingsDialog(
+            channelId = ch.id,
+            channelName = ch.name,
+            isVoice = ch.type == ChannelType.VOICE,
+            userLimit = ch.userLimit,
+            onDismiss = { editChannel = null },
+            onChanged = { scope.launch { reloadChannels() } },
+        )
     }
 
     if (showCreate) {
@@ -372,6 +414,7 @@ private fun CategoryLabel(text: String) {
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChannelRow(
     channel: ServerChannel,
@@ -379,11 +422,12 @@ private fun ChannelRow(
     mentions: Int,
     muted: Boolean,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
 ) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 14.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -414,17 +458,19 @@ private fun ChannelRow(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun VoiceChannelRow(
     channel: ServerChannel,
     participants: List<VoiceParticipant>,
     onJoin: () -> Unit,
+    onLongClick: () -> Unit,
 ) {
     Column {
         Row(
             Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onJoin)
+                .combinedClickable(onClick = onJoin, onLongClick = onLongClick)
                 .padding(horizontal = 14.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

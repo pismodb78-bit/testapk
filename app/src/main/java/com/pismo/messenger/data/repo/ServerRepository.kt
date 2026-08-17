@@ -126,6 +126,10 @@ object ServerRepository {
         "SELECT name, owner_id FROM servers WHERE id=?", serverId
     ) { rs -> rs.str("name") to rs.getInt("owner_id") }
 
+    suspend fun renameServer(serverId: Int, name: String) {
+        runCatching { Db.exec("UPDATE servers SET name=? WHERE id=?", name.trim(), serverId) }
+    }
+
     suspend fun deleteServer(serverId: Int) {
         runCatching {
             Db.exec(
