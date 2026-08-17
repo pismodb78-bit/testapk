@@ -1,5 +1,6 @@
 package com.pismo.messenger.data.repo
 
+import com.pismo.messenger.core.MessagePreview
 import com.pismo.messenger.core.Crypto
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.buildName
@@ -271,6 +272,72 @@ object ChatRepository {
             GROUP BY m.sender_id
         """.trimIndent()
         return Db.query(sql, me, me, me) { rs -> rs.getInt("sender_id") to rs.getInt("cnt") }.toMap()
+    }
+
+    /**
+     * Описание последнего непрочитанного сообщения от отправителя — для
+     * текста уведомления. Раньше в шторке было безликое «Новых сообщений: N»,
+     * по которому нельзя понять, прислали текст, фото или документ.
+     *
+     * BLOB-ы не тянем: только флаги наличия через IS NOT NULL, иначе
+     * уведомление о присланном архиве качало бы этот архив целиком.
+     */
+    suspend fun previewOfLatestFrom(senderId: Int): String {
+        val me = UserSession.effectiveId
+        val sql = """
+            SELECT text, file_name,
+                   image_data IS NOT NULL AS has_img,
+                   audio_data IS NOT NULL AS has_aud,
+                   video_data IS NOT NULL AS has_vid,
+                   file_data  IS NOT NULL AS has_file
+            FROM messages
+            WHERE receiver_id=? AND sender_id=? AND is_read=0
+            ORDER BY id DESC LIMIT 1
+        """.trimIndent()
+        return runCatching {
+            Db.queryFirst(sql, me, senderId) { rs ->
+                MessagePreview.describe(
+                    text = Crypto.dec(rs.getString("text").orEmpty()),
+                    hasImage = rs.bool("has_img"),
+                    hasAudio = rs.bool("has_aud"),
+                    hasVideo = rs.bool("has_vid"),
+                    hasFile = rs.bool("has_file"),
+                    fileName = rs.getString("file_name"),
+                )
+            }
+        }.getOrNull() ?: "Новое сообщение"
+    }
+
+    /** То же для группы — по последнему чужому сообщению. */
+    suspend fun previewOfLatestInGroup(groupId: Int): String {
+        val me = UserSession.effectiveId
+        val sql = """
+            SELECT gm.text, gm.file_name,
+                   gm.image_data IS NOT NULL AS has_img,
+                   gm.audio_data IS NOT NULL AS has_aud,
+                   gm.video_data IS NOT NULL AS has_vid,
+                   gm.file_data  IS NOT NULL AS has_file,
+                   TRIM(CONCAT(u.Name,' ',u.Surname)) AS sender_name, u.login
+            FROM group_messages gm
+            JOIN users u ON u.id = gm.sender_id
+            WHERE gm.group_id=? AND gm.sender_id<>? AND gm.is_deleted=0
+            ORDER BY gm.id DESC LIMIT 1
+        """.trimIndent()
+        return runCatching {
+            Db.queryFirst(sql, groupId, me) { rs ->
+                MessagePreview.withSender(
+                    rs.str("sender_name").trim().ifBlank { rs.str("login") },
+                    MessagePreview.describe(
+                        text = Crypto.dec(rs.getString("text").orEmpty()),
+                        hasImage = rs.bool("has_img"),
+                        hasAudio = rs.bool("has_aud"),
+                        hasVideo = rs.bool("has_vid"),
+                        hasFile = rs.bool("has_file"),
+                        fileName = rs.getString("file_name"),
+                    ),
+                )
+            }
+        }.getOrNull() ?: "Новое сообщение"
     }
 
     /** Максимальный id чужого сообщения по каждой группе — база для пушей. */

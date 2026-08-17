@@ -1,6 +1,7 @@
 package com.pismo.messenger.data.repo
 
 import com.pismo.messenger.core.Crypto
+import com.pismo.messenger.core.MessagePreview
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.MediaCache
 import com.pismo.messenger.data.db.Db
@@ -594,6 +595,68 @@ object ServerRepository {
      * SELECT, затем (опционально) параметр подзапроса про ответ, и только
      * потом три `?` для JOIN/WHERE. Именно в этом порядке они и передаются.
      */
+    /**
+     * Упоминания меня среди новых сообщений канала — запасной путь для
+     * уведомлений, когда таблицы server_mentions на сервере нет.
+     *
+     * Она заводится миграцией 15, а у приложения нет прав на CREATE TABLE:
+     * её применяют руками (sql/2026-08-16_server_mentions.sql). Пока этого
+     * не сделали, bейдж упоминаний всегда ноль — и уведомление «вас
+     * упомянули» не приходило бы никогда. Здесь разбираем расшифрованный
+     * текст на месте: дороже, зато работает на любой схеме.
+     *
+     * Правила те же, что при записи: @логин, @название-роли и @все/@all/
+     * @everyone; свои сообщения не считаем.
+     */
+    suspend fun mentionsAmongNew(channelId: Int, sinceUnread: Int): Int {
+        if (sinceUnread < 0) return 0
+        val me = UserSession.effectiveId
+
+        val recent = runCatching { channelMessages(channelId, limit = 20) }
+            .getOrDefault(emptyList())
+        if (recent.isEmpty()) return 0
+
+        val myLogin = runCatching {
+            Db.scalarString("SELECT login FROM users WHERE id=?", me).orEmpty().lowercase()
+        }.getOrDefault("")
+
+        val myRole = runCatching {
+            Db.scalarString(
+                "SELECT r.name FROM server_channels sc " +
+                        "JOIN server_members m ON m.server_id = sc.server_id AND m.user_id = ? " +
+                        "JOIN server_roles r ON r.id = m.role_id WHERE sc.id = ?",
+                me, channelId
+            ).orEmpty().lowercase()
+        }.getOrDefault("")
+
+        return recent.count { msg ->
+            if (msg.senderId == me) return@count false
+            val lower = msg.text.lowercase()
+            if (!lower.contains('@')) return@count false
+            lower.contains("@все") || lower.contains("@all") || lower.contains("@everyone") ||
+                    (myLogin.isNotEmpty() && lower.contains("@$myLogin")) ||
+                    (myRole.isNotBlank() && lower.contains("@$myRole"))
+        }
+    }
+
+    /** Описание последнего сообщения канала — для текста уведомления. */
+    suspend fun previewOfLatestInChannel(channelId: Int): String {
+        val last = runCatching { channelMessages(channelId, limit = 1) }
+            .getOrDefault(emptyList())
+            .lastOrNull() ?: return "Новое сообщение"
+        return MessagePreview.withSender(
+            last.senderName,
+            MessagePreview.describe(
+                text = last.text,
+                hasImage = last.hasImage,
+                hasAudio = last.hasAudio,
+                hasVideo = last.hasVideo,
+                hasFile = last.hasFile,
+                fileName = last.fileName,
+            ),
+        )
+    }
+
     suspend fun searchInChannel(channelId: Int, query: String, limit: Int = 50): List<ChatMessage> {
         // Текст в БД зашифрован, поэтому LIKE по нему не работает: выбираем
         // страницу сообщений и фильтруем уже расшифрованные на клиенте.

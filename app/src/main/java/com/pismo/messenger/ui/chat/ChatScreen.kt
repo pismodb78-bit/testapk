@@ -69,11 +69,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.pismo.messenger.core.PresenceReporter
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.ellipsize
 import com.pismo.messenger.core.fileBadge
 import com.pismo.messenger.core.fileColor
 import com.pismo.messenger.core.formatDateSeparator
+import com.pismo.messenger.core.formatDuration
 import com.pismo.messenger.core.formatTime
 import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.data.MediaCache
@@ -97,6 +99,12 @@ import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+/**
+ * Потолок длительности голосового — 3 минуты. Запись целиком держится в
+ * памяти и уходит в БД одним BLOB'ом, поэтому верхняя граница обязательна.
+ */
+private const val VOICE_MAX_SECONDS = 180
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -128,6 +136,7 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val recorder = remember { WavRecorder(scope) }
     var recording by remember { mutableStateOf(false) }
+    var recordSeconds by remember { mutableStateOf(0) }
     var showCircleRecorder by remember { mutableStateOf(false) }
     var showPins by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
@@ -158,7 +167,13 @@ fun ChatScreen(
                 val state = ChatRepository.blockState(targetId)
                 iBlocked = state.first
                 theyBlocked = state.second
-                ChatRepository.markAsRead(targetId)
+                // Читать за пользователя можно только когда он и правда
+                // смотрит на экран. Опрос composable продолжает крутиться и
+                // со свёрнутым приложением (активити остановлена, но не
+                // уничтожена), и раньше он молча помечал всё прочитанным —
+                // из-за этого от собеседника, чат с которым остался открыт,
+                // уведомления не приходили вообще.
+                if (PresenceReporter.isForeground) ChatRepository.markAsRead(targetId)
             }
         }
         loading = false
@@ -169,6 +184,41 @@ fun ChatScreen(
         if (scrollToEnd && messages.isNotEmpty() && atBottom) {
             listState.scrollToItem(messages.lastIndex)
         }
+    }
+
+    fun sendVoice(wav: ByteArray?) {
+        recording = false
+        if (wav == null) return
+        scope.launch {
+            runCatching {
+                ChatRepository.sendMessage(
+                    scope = scopeKind,
+                    target = targetId,
+                    text = "",
+                    audio = wav,
+                    replyToId = replyTo?.id ?: 0,
+                )
+                notifyPeers(isGroup, targetId)
+            }
+            replyTo = null
+            reload(scrollToEnd = true)
+        }
+    }
+
+    // Таймер записи и жёсткий потолок в 3 минуты. Голосовое целиком лежит в
+    // памяти и уходит в БД одним BLOB'ом, поэтому без верхней границы
+    // забытая запись раздувает и приложение, и таблицу.
+    LaunchedEffect(recording) {
+        if (!recording) {
+            recordSeconds = 0
+            return@LaunchedEffect
+        }
+        recordSeconds = 0
+        while (isActive && recording && recordSeconds < VOICE_MAX_SECONDS) {
+            delay(1000)
+            recordSeconds++
+        }
+        if (recording && recordSeconds >= VOICE_MAX_SECONDS) sendVoice(recorder.stop())
     }
 
     // reconnects в ключе: после восстановления связи с базой экран
@@ -458,7 +508,48 @@ fun ChatScreen(
                 }
             }
 
-            if (!readOnly) {
+            // Во время записи строку ввода подменяет панель с таймером и
+            // явной кнопкой отмены. Скрытый свайп-жест здесь не подходит:
+            // запись включается тапом, а не удержанием, и «смахнуть» просто
+            // нечего — отменить надо чем-то видимым.
+            if (recording) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(PismoColors.BgDarkest)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier
+                            .size(10.dp)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .background(PismoColors.Red)
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        formatDuration(recordSeconds.toLong()),
+                        color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        "Запись голосового · максимум ${VOICE_MAX_SECONDS / 60} мин",
+                        color = PismoColors.TextMuted, fontSize = 12.sp,
+                        modifier = Modifier.weight(1f), maxLines = 1,
+                    )
+                    androidx.compose.material3.TextButton(onClick = {
+                        // cancel(), а не stop(): записанное надо выбросить,
+                        // а не отправить.
+                        recorder.cancel()
+                        recording = false
+                    }) { Text("Отмена", color = PismoColors.Red, fontSize = 13.sp) }
+                    IconButton(onClick = { sendVoice(recorder.stop()) }) {
+                        Icon(Icons.Default.Send, "Отправить", tint = PismoColors.Blurple)
+                    }
+                }
+            }
+
+            if (!readOnly && !recording) {
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -504,28 +595,8 @@ fun ChatScreen(
                         // Удержание — запись голосового, как кнопка 🎤 на ПК.
                         IconButton(
                             onClick = {
-                                if (recording) {
-                                    val wav = recorder.stop()
-                                    recording = false
-                                    if (wav != null) {
-                                        scope.launch {
-                                            runCatching {
-                                                ChatRepository.sendMessage(
-                                                    scope = scopeKind,
-                                                    target = targetId,
-                                                    text = "",
-                                                    audio = wav,
-                                                    replyToId = replyTo?.id ?: 0,
-                                                )
-                                                notifyPeers(isGroup, targetId)
-                                            }
-                                            replyTo = null
-                                            reload(scrollToEnd = true)
-                                        }
-                                    }
-                                } else {
-                                    recording = recorder.start()
-                                }
+                                if (recording) sendVoice(recorder.stop())
+                                else recording = recorder.start()
                             },
                         ) {
                             Icon(

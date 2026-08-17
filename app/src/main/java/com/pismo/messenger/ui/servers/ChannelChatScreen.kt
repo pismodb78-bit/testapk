@@ -52,6 +52,7 @@ import com.pismo.messenger.data.model.Scope
 import com.pismo.messenger.data.model.ServerPermissions
 import com.pismo.messenger.data.repo.ReactionsRepository
 import com.pismo.messenger.data.repo.ServerRepository
+import com.pismo.messenger.core.PresenceReporter
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.formatDateSeparator
 import com.pismo.messenger.net.SignalingClient
@@ -99,7 +100,9 @@ fun ChannelChatScreen(
             reactions = ReactionsRepository.forMessages(loaded.map { it.id }, Scope.SERVER)
             ServerRepository.prefetchChannelMedia(loaded)
             perms = ServerRepository.permissions(serverId)
-            ServerRepository.markChannelRead(channelId)
+            // То же, что в личных чатах: свёрнутое приложение не должно
+            // «прочитывать» канал за пользователя и глушить уведомления.
+            if (PresenceReporter.isForeground) ServerRepository.markChannelRead(channelId)
         }
         loading = false
         // Прокручиваем вниз, только если пользователь и так был у конца

@@ -107,17 +107,22 @@ object Notifications {
     }
 
     /** Сообщение в канале сервера. Упоминание — отдельным текстом, как на ПК. */
-    fun showChannelMessage(context: Context, channelId: Int, channelName: String, mentions: Int) {
+    fun showChannelMessage(
+        context: Context,
+        channelId: Int,
+        channelName: String,
+        mentions: Int,
+        preview: String = "Новое сообщение в канале",
+    ) {
         if (!Prefs.notificationsEnabled) return
         if (!hasPermission(context)) return
 
         val extras = Bundle().apply { putInt("open_channel", channelId) }
         val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("# $channelName")
-            .setContentText(
-                if (mentions > 0) "Вас упомянули ($mentions)" else "Новое сообщение в канале"
-            )
+            .setContentTitle(if (mentions > 0) "@ # $channelName" else "# $channelName")
+            .setContentText(if (mentions > 0) "@ Вас упомянули · $preview" else preview)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(preview))
             .setPriority(
                 if (mentions > 0) NotificationCompat.PRIORITY_HIGH
                 else NotificationCompat.PRIORITY_DEFAULT

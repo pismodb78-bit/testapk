@@ -54,8 +54,10 @@ import com.pismo.messenger.media.VideoCircleCodec
 import com.pismo.messenger.media.WavRecorder
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -68,7 +70,15 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 private const val CIRCLE_SIZE = 240      // сторона кадра в пикселях
 private const val TARGET_FPS = 10
-private const val MAX_SECONDS = 60
+/**
+ * Потолок длительности кружка — 3 минуты.
+ *
+ * Не косметика: кадры копятся в ПАМЯТИ как Bitmap'ы и целиком уходят в БД
+ * одним BLOB'ом. На старой минуте контейнер уже весил заметно, а без
+ * верхней границы длинная запись просто уронила бы приложение по памяти
+ * ещё до отправки.
+ */
+private const val MAX_SECONDS = 180
 
 @Composable
 fun VideoCircleRecorderDialog(
@@ -89,6 +99,12 @@ fun VideoCircleRecorderDialog(
     var frontCamera by remember { mutableStateOf(Prefs.frontCamera) }
     var busy by remember { mutableStateOf(false) }
 
+    // PreviewView создаётся один раз, а вот привязка камеры — на каждую
+    // смену frontCamera. Раньше bindToLifecycle сидел внутри AndroidView.factory,
+    // который выполняется единожды, при пустом update: кнопка переключения
+    // меняла флаг, и на этом всё заканчивалось — картинка не менялась.
+    val previewView = remember { PreviewView(context) }
+
     // Кадры прореживаем до TARGET_FPS: анализатор отдаёт их гораздо чаще,
     // а в контейнер нужен ровный поток, иначе на ПК кружочек играет рывками.
     val frameIntervalMs = 1000L / TARGET_FPS
@@ -101,6 +117,54 @@ fun VideoCircleRecorderDialog(
             analysisExecutor.shutdown()
             frames.forEach { runCatching { it.recycle() } }
             frames.clear()
+        }
+    }
+
+    // Привязка камеры. Ключ — frontCamera: переключатель обязан
+    // перепривязать провайдер, иначе картинка остаётся от старой камеры.
+    LaunchedEffect(frontCamera) {
+        runCatching {
+            // get() блокирующий, поэтому уводим его с главного потока.
+            // await() из kotlinx-coroutines-guava не берём — ради одного
+            // вызова тянуть Guava в APK не стоит.
+            val provider = withContext(Dispatchers.IO) {
+                ProcessCameraProvider.getInstance(context).get()
+            }
+
+            val preview = Preview.Builder().build().also {
+                it.setSurfaceProvider(previewView.surfaceProvider)
+            }
+
+            val analysis = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+
+            analysis.setAnalyzer(analysisExecutor) { proxy ->
+                try {
+                    if (capturing.get()) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastFrameAt >= frameIntervalMs) {
+                            lastFrameAt = now
+                            toCircleFrame(
+                                proxy.toBitmap(),
+                                proxy.imageInfo.rotationDegrees,
+                            )?.let { frames.add(it) }
+                        }
+                    }
+                } catch (_: Throwable) {
+                } finally {
+                    proxy.close()
+                }
+            }
+
+            provider.unbindAll()
+            provider.bindToLifecycle(
+                lifecycleOwner,
+                if (frontCamera) CameraSelector.DEFAULT_FRONT_CAMERA
+                else CameraSelector.DEFAULT_BACK_CAMERA,
+                preview,
+                analysis,
+            )
         }
     }
 
@@ -142,63 +206,15 @@ fun VideoCircleRecorderDialog(
                 contentAlignment = Alignment.Center,
             ) {
                 AndroidView(
-                    factory = { ctx ->
-                        val previewView = PreviewView(ctx)
-                        val providerFuture = ProcessCameraProvider.getInstance(ctx)
-
-                        providerFuture.addListener({
-                            runCatching {
-                                val provider = providerFuture.get()
-
-                                val preview = Preview.Builder().build().also {
-                                    it.setSurfaceProvider(previewView.surfaceProvider)
-                                }
-
-                                val analysis = ImageAnalysis.Builder()
-                                    .setBackpressureStrategy(
-                                        ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
-                                    )
-                                    .build()
-
-                                analysis.setAnalyzer(analysisExecutor) { proxy ->
-                                    try {
-                                        if (capturing.get()) {
-                                            val now = System.currentTimeMillis()
-                                            if (now - lastFrameAt >= frameIntervalMs) {
-                                                lastFrameAt = now
-                                                toCircleFrame(
-                                                    proxy.toBitmap(),
-                                                    proxy.imageInfo.rotationDegrees,
-                                                )?.let { frames.add(it) }
-                                            }
-                                        }
-                                    } catch (_: Throwable) {
-                                    } finally {
-                                        proxy.close()
-                                    }
-                                }
-
-                                provider.unbindAll()
-                                provider.bindToLifecycle(
-                                    lifecycleOwner,
-                                    if (frontCamera) CameraSelector.DEFAULT_FRONT_CAMERA
-                                    else CameraSelector.DEFAULT_BACK_CAMERA,
-                                    preview,
-                                    analysis,
-                                )
-                            }
-                        }, ContextCompat.getMainExecutor(ctx))
-
-                        previewView
-                    },
-                    update = { },
+                    factory = { previewView },
                     modifier = Modifier.fillMaxSize(),
                 )
             }
 
             Spacer(Modifier.height(24.dp))
             Text(
-                "Максимум $MAX_SECONDS секунд",
+                if (recording) "‹ Отмена — крестик слева. Максимум ${MAX_SECONDS / 60} мин"
+                else "Максимум ${MAX_SECONDS / 60} мин",
                 color = PismoColors.TextMuted,
                 fontSize = 12.sp,
             )
