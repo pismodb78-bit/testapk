@@ -104,7 +104,7 @@ fun UserProfileDialog(
                     Column(Modifier.padding(start = 12.dp)) {
                         Text(
                             profile?.let { fullName(it) } ?: fallbackName,
-                            color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                            color = PismoColors.TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold,
                         )
                         profile?.login?.takeIf { it.isNotBlank() }?.let {
                             Text("@$it", color = PismoColors.TextMuted, fontSize = 13.sp)

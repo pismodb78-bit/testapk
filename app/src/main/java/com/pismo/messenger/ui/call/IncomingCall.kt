@@ -63,7 +63,7 @@ fun IncomingCallDialog() {
                 UserAvatar(current.callerId, current.callerName, 72.dp)
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    current.callerName, color = Color.White, fontSize = 20.sp,
+                    current.callerName, color = PismoColors.TextPrimary, fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(

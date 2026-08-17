@@ -121,7 +121,7 @@ fun LoginScreen(
             }
 
             Spacer(Modifier.height(20.dp))
-            Text("PISMO", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Black)
+            Text("PISMO", color = PismoColors.TextPrimary, fontSize = 30.sp, fontWeight = FontWeight.Black)
             Text(
                 "С возвращением!",
                 color = PismoColors.TextSecondary,
@@ -268,7 +268,7 @@ fun RegisterScreen(onDone: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Spacer(Modifier.height(32.dp))
-        Text("Создать аккаунт", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Black)
+        Text("Создать аккаунт", color = PismoColors.TextPrimary, fontSize = 26.sp, fontWeight = FontWeight.Black)
         Spacer(Modifier.height(24.dp))
 
         PismoField(name, { name = it; error = "" }, "Имя", !busy)

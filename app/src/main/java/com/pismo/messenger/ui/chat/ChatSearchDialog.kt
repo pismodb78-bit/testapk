@@ -70,7 +70,7 @@ fun ChatSearchDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,
-        title = { Text("Поиск по переписке", color = Color.White) },
+        title = { Text("Поиск по переписке", color = PismoColors.TextPrimary) },
         text = {
             Column {
                 PismoField(query, { query = it }, "Что ищем")

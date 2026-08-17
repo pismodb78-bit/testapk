@@ -155,7 +155,12 @@ fun ChatScreen(
     var showSearch by remember { mutableStateOf(false) }
     var showCalendar by remember { mutableStateOf(false) }
     // Статус собеседника в шапке — «в сети» / «бездействует N» / «был в сети N».
-    var peerPresence by remember(targetId) { mutableStateOf<Presence?>(null) }
+    // Стартуем с того, что уже знает общая память: список чатов опросил
+    // статусы секунду назад, и заново ждать ответа базы, показывая пустой
+    // подзаголовок, незачем.
+    var peerPresence by remember(targetId) {
+        mutableStateOf(PresenceRepository.cached(targetId))
+    }
     var jumpNote by remember { mutableStateOf("") }
     var menuOpen by remember { mutableStateOf(false) }
     // Прикреплённый, но ещё не отправленный файл — аналог «подготовки к
@@ -380,7 +385,7 @@ fun ChatScreen(
                         Column {
                             Text(
                                 if (isGroup) "👥 $title" else title,
-                                color = Color.White,
+                                color = PismoColors.TextPrimary,
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
@@ -610,7 +615,8 @@ fun ChatScreen(
                     Spacer(Modifier.width(10.dp))
                     Text(
                         formatDuration(recordSeconds.toLong()),
-                        color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                        color = PismoColors.TextPrimary, fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
                     )
                     Spacer(Modifier.width(12.dp))
                     // «максимум 3» без единицы читалось как угодно — от секунд
@@ -750,7 +756,7 @@ fun ChatScreen(
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { jumpNote = "" },
             containerColor = PismoColors.BgSidebar,
-            title = { Text("PISMO", color = Color.White) },
+            title = { Text("PISMO", color = PismoColors.TextPrimary) },
             text = { Text(jumpNote, color = PismoColors.TextSecondary) },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = { jumpNote = "" }) {

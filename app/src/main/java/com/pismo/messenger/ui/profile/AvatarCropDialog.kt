@@ -109,7 +109,7 @@ fun AvatarCropDialog(
     AlertDialog(
         onDismissRequest = onCancel,
         containerColor = PismoColors.BgSidebar,
-        title = { Text("Обрезка аватара", color = Color.White) },
+        title = { Text("Обрезка аватара", color = PismoColors.TextPrimary) },
         text = {
             Column {
                 Box(

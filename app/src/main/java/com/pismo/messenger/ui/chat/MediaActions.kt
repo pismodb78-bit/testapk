@@ -223,7 +223,7 @@ fun ForwardDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,
-        title = { Text("Переслать", color = Color.White) },
+        title = { Text("Переслать", color = PismoColors.TextPrimary) },
         text = {
             LazyColumn(Modifier.heightIn(max = 380.dp)) {
                 if (groups.isNotEmpty()) {

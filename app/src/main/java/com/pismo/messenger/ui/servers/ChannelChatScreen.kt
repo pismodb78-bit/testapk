@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -27,6 +28,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -50,13 +53,16 @@ import com.pismo.messenger.data.model.ChatMessage
 import com.pismo.messenger.data.model.ReactionSummary
 import com.pismo.messenger.data.model.Scope
 import com.pismo.messenger.data.model.ServerPermissions
+import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.ReactionsRepository
 import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.core.PresenceReporter
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.formatDateSeparator
 import com.pismo.messenger.net.SignalingClient
+import com.pismo.messenger.ui.chat.DateJumpDialog
 import com.pismo.messenger.ui.chat.MessageBubble
+import com.pismo.messenger.ui.chat.PinnedMessagesDialog
 import com.pismo.messenger.ui.components.DateSeparator
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.delay
@@ -91,10 +97,17 @@ fun ChannelChatScreen(
 
     val listState = rememberLazyListState()
     var showSearch by remember { mutableStateOf(false) }
+    var showCalendar by remember { mutableStateOf(false) }
+    var showPins by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+    var jumpNote by remember { mutableStateOf("") }
+    // Размер загружаемой страницы. Обычно хватает сорока последних, но
+    // прыжок на старую дату требует дотянуть ленту до неё.
+    var pageLimit by remember(channelId) { mutableStateOf(40) }
 
     suspend fun reload(scrollToEnd: Boolean = false) {
         runCatching {
-            val loaded = ServerRepository.channelMessages(channelId)
+            val loaded = ServerRepository.channelMessages(channelId, limit = pageLimit)
             messages = loaded
             lastCount = loaded.size
             reactions = ReactionsRepository.forMessages(loaded.map { it.id }, Scope.SERVER)
@@ -166,7 +179,7 @@ fun ChannelChatScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text("# $channelName", color = Color.White, fontSize = 16.sp,
+                    Text("# $channelName", color = PismoColors.TextPrimary, fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold)
                 },
                 navigationIcon = {
@@ -175,8 +188,27 @@ fun ChannelChatScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showSearch = true }) {
-                        Icon(Icons.Default.Search, "Поиск по каналу", tint = PismoColors.TextSecondary)
+                    // Ровно то же меню, что и в личных чатах: поиск, прыжок
+                    // на дату и закреплённые. Раньше здесь висела одна лупа,
+                    // и два других действия в канале были недоступны вовсе.
+                    Box {
+                        IconButton(onClick = { menuOpen = true }) {
+                            Icon(Icons.Default.MoreVert, "Ещё", tint = PismoColors.TextSecondary)
+                        }
+                        DropdownMenu(menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Поиск по каналу") },
+                                onClick = { menuOpen = false; showSearch = true },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Перейти к дате") },
+                                onClick = { menuOpen = false; showCalendar = true },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Закреплённые") },
+                                onClick = { menuOpen = false; showPins = true },
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = PismoColors.BgDarkest),
@@ -341,4 +373,54 @@ fun ChannelChatScreen(
         )
     }
 
+    if (showCalendar) {
+        DateJumpDialog(
+            onDismiss = { showCalendar = false },
+            onPick = { dayStartMs ->
+                showCalendar = false
+                scope.launch {
+                    val need = ChatRepository.countSince(Scope.SERVER, channelId, dayStartMs)
+                    if (need <= 0) {
+                        jumpNote = "За выбранную дату и позже сообщений нет."
+                        return@launch
+                    }
+                    // Тянем на пяток больше нужного: иначе целевое сообщение
+                    // окажется первым в ленте, без строчки контекста над ним.
+                    if (need + 5 > messages.size) {
+                        pageLimit = need + 5
+                        loading = true
+                        reload()
+                    }
+                    val idx = messages.indexOfFirst { it.createdAtMs >= dayStartMs }
+                    if (idx >= 0) {
+                        listState.animateScrollToItem(idx)
+                        jumpNote = ""
+                    } else {
+                        jumpNote = "Не удалось найти сообщения за эту дату."
+                    }
+                }
+            },
+        )
+    }
+
+    if (showPins) {
+        PinnedMessagesDialog(
+            scopeKind = Scope.SERVER,
+            targetId = channelId,
+            onDismiss = { showPins = false },
+        )
+    }
+
+    if (jumpNote.isNotBlank()) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { jumpNote = "" },
+            containerColor = PismoColors.BgSidebar,
+            text = { Text(jumpNote, color = PismoColors.TextPrimary) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { jumpNote = "" }) {
+                    Text("Понятно", color = PismoColors.Cyan)
+                }
+            },
+        )
+    }
 }

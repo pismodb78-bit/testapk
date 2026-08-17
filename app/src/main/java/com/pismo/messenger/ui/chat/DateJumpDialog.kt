@@ -48,7 +48,7 @@ fun DateJumpDialog(
     ) {
         DatePicker(
             state = state,
-            title = { Text("  Перейти к дате", color = Color.White) },
+            title = { Text("  Перейти к дате", color = PismoColors.TextPrimary) },
             colors = androidx.compose.material3.DatePickerDefaults.colors(
                 containerColor = PismoColors.BgSidebar,
             ),

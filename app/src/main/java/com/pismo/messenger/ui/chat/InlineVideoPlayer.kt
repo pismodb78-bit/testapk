@@ -91,6 +91,7 @@ fun InlineVideoBubble(
     msgId: Int,
     scopeKind: Scope,
     fileName: String,
+    isMine: Boolean = false,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -204,7 +205,9 @@ fun InlineVideoBubble(
             Column(Modifier.weight(1f)) {
                 Text(
                     fileName,
-                    color = Color.White,
+                    // Подпись лежит уже НЕ на видео, а на самом пузыре, и в
+                    // светлой теме белым по светлому её не видно.
+                    color = PismoColors.onBubble(isMine),
                     fontSize = 12.sp,
                     maxLines = 1,
                 )
@@ -469,6 +472,7 @@ fun InlineAudioBubble(
     msgId: Int,
     scopeKind: Scope,
     fileName: String,
+    isMine: Boolean = false,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -542,19 +546,26 @@ fun InlineAudioBubble(
     ) {
         if (loading) {
             CircularProgressIndicator(
-                color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(20.dp)
+                color = PismoColors.onBubble(isMine),
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(20.dp),
             )
         } else {
             Icon(
                 if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                 contentDescription = if (isPlaying) "Пауза" else "Воспроизвести",
-                tint = Color.White,
+                tint = PismoColors.onBubble(isMine),
                 modifier = Modifier.size(22.dp),
             )
         }
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
-            Text(fileName, color = Color.White, fontSize = 13.sp, maxLines = 1)
+            Text(
+                fileName,
+                color = PismoColors.onBubble(isMine),
+                fontSize = 13.sp,
+                maxLines = 1,
+            )
             Text(
                 status.ifBlank {
                     if (durationMs > 0) "${formatClock(positionMs)} / ${formatClock(durationMs)}"

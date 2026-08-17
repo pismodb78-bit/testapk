@@ -184,7 +184,7 @@ fun ProfileScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit) {
             Column(Modifier.padding(start = 14.dp)) {
                 Text(
                     UserSession.effectiveName,
-                    color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                    color = PismoColors.TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold,
                 )
                 Text(
                     if (UserSession.isAdmin) "Роль: администратор" else "Роль: пользователь",
@@ -417,7 +417,7 @@ private fun ProfileBanner(
 private fun SectionTitle(text: String) {
     Text(
         text,
-        color = Color.White,
+        color = PismoColors.TextPrimary,
         fontSize = 16.sp,
         fontWeight = FontWeight.Bold,
         modifier = Modifier.padding(bottom = 8.dp),

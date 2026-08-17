@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -86,8 +87,13 @@ fun UnreadBadge(count: Int, modifier: Modifier = Modifier, color: Color = PismoC
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = if (count > 9) "9+" else count.toString(),
-            color = Color.White,
+            // 9+ было слишком рано: «сколько именно непрочитано» — весь
+            // смысл цифры, а до сотни счёт вполне читаемый.
+            text = if (count > 99) "99+" else count.toString(),
+            // Бейдж бывает и красным, и светло-серым (просто непрочитанное),
+            // а в светлой теме серый становится почти белым — цифру на нём
+            // белым не увидеть. Контраст выбираем по яркости подложки.
+            color = if (color.luminance() > 0.5f) PismoColors.TextPrimary else Color.White,
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
         )

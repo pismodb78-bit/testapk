@@ -128,7 +128,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         containerColor = PismoColors.BgMain,
         topBar = {
             TopAppBar(
-                title = { Text("Настройки", color = Color.White, fontSize = 18.sp) },
+                title = { Text("Настройки", color = PismoColors.TextPrimary, fontSize = 18.sp) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, "Назад", tint = PismoColors.TextSecondary)
@@ -424,7 +424,7 @@ fun SettingsScreen(onBack: () -> Unit) {
 private fun Section(title: String) {
     Text(
         title,
-        color = Color.White,
+        color = PismoColors.TextPrimary,
         fontSize = 16.sp,
         fontWeight = FontWeight.Bold,
         modifier = Modifier.padding(bottom = 6.dp),

@@ -159,7 +159,8 @@ fun ServersScreen(
                         ) {
                             Text(
                                 s.name.take(2).uppercase(),
-                                color = Color.White,
+                                color = if (isSelected) Color.White
+                                else PismoColors.TextPrimary,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 15.sp,
                             )
@@ -233,7 +234,7 @@ fun ServersScreen(
                 Column(Modifier.weight(1f)) {
                     Text(
                         s.name,
-                        color = Color.White,
+                        color = PismoColors.TextPrimary,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
@@ -283,9 +284,13 @@ fun ServersScreen(
                     item { CategoryLabel("ГОЛОСОВЫЕ КАНАЛЫ") }
                     items(voiceChannels, key = { "v${it.id}" }) { ch ->
                         val here = voice[ch.id].orEmpty()
+                        val vb = badges.firstOrNull { it.channelId == ch.id }
                         VoiceChannelRow(
                             channel = ch,
                             participants = here,
+                            unread = vb?.unread ?: 0,
+                            mentions = vb?.mentions ?: 0,
+                            muted = vb?.muted == true,
                             // У голосового канала свой чат — на ПК он
                             // открывается значком 💬 справа, БЕЗ входа в
                             // звонок. На телефоне его не было вовсе: нажатие
@@ -452,15 +457,11 @@ private fun ChannelRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        // Красная цифра — упоминания, серая — просто непрочитанные.
+        // Раньше на месте второй была безликая точка: было видно, что
+        // «что-то есть», но не сколько и где именно.
         if (mentions > 0) UnreadBadge(mentions)
-        else if (unread > 0 && !muted) {
-            Box(
-                Modifier
-                    .size(8.dp)
-                    .clip(CircleShape)
-                    .background(Color.White)
-            )
-        }
+        else if (unread > 0 && !muted) UnreadBadge(unread, color = PismoColors.BgElevated)
     }
 }
 
@@ -469,6 +470,9 @@ private fun ChannelRow(
 private fun VoiceChannelRow(
     channel: ServerChannel,
     participants: List<VoiceParticipant>,
+    unread: Int,
+    mentions: Int,
+    muted: Boolean,
     onJoin: () -> Unit,
     onOpenChat: () -> Unit,
     onLongClick: () -> Unit,
@@ -489,12 +493,19 @@ private fun VoiceChannelRow(
             Spacer(Modifier.width(8.dp))
             Text(
                 channel.name,
-                color = PismoColors.TextSecondary,
+                color = if (unread > 0 && !muted) Color.White else PismoColors.TextSecondary,
                 fontSize = 15.sp,
+                fontWeight = if (unread > 0 && !muted) FontWeight.Bold else FontWeight.Normal,
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            // У голосового канала есть своя переписка, и непрочитанное в ней
+            // копилось молча: счётчик стоял только у текстовых каналов, так
+            // что написанное в чате голосового не было видно вообще ниоткуда.
+            if (mentions > 0) UnreadBadge(mentions)
+            else if (unread > 0 && !muted) UnreadBadge(unread, color = PismoColors.BgElevated)
+            Spacer(Modifier.width(4.dp))
             // Значок чата справа — как 💬 в ServersForm: открывает
             // переписку канала, НЕ подключая к разговору.
             IconButton(onClick = onOpenChat, modifier = Modifier.size(28.dp)) {
@@ -560,7 +571,7 @@ private fun NameDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,
-        title = { Text(title, color = Color.White) },
+        title = { Text(title, color = PismoColors.TextPrimary) },
         text = { PismoField(value, { value = it }, label) },
         confirmButton = {
             TextButton(onClick = { if (value.isNotBlank()) onConfirm(value.trim()) }) {
@@ -584,7 +595,7 @@ private fun ChannelDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,
-        title = { Text("Новый канал", color = Color.White) },
+        title = { Text("Новый канал", color = PismoColors.TextPrimary) },
         text = {
             Column {
                 PismoField(name, { name = it }, "Название канала")

@@ -63,7 +63,7 @@ fun CreateGroupDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,
-        title = { Text("Новая группа", color = Color.White) },
+        title = { Text("Новая группа", color = PismoColors.TextPrimary) },
         text = {
             Column {
                 PismoField(name, { name = it; error = "" }, "Название группы")
@@ -147,7 +147,7 @@ fun GroupMembersDialog(
         title = {
             Text(
                 if (adding) "Добавить участников" else "👥 $groupName (${members.size})",
-                color = Color.White,
+                color = PismoColors.TextPrimary,
             )
         },
         text = {

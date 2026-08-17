@@ -65,7 +65,7 @@ fun ChannelSearchDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,
-        title = { Text("Поиск по каналу", color = Color.White) },
+        title = { Text("Поиск по каналу", color = PismoColors.TextPrimary) },
         text = {
             Column {
                 PismoField(query, { query = it }, "Что ищем")

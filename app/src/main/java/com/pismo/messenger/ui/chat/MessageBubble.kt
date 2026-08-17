@@ -188,7 +188,7 @@ fun MessageBubble(
                         }
 
                         if (msg.hasAudio) {
-                            VoiceRow(msg.id, audio)
+                            VoiceRow(msg.id, audio, isMine)
                             Spacer(Modifier.height(6.dp))
                         }
 
@@ -203,10 +203,10 @@ fun MessageBubble(
                         val playableVideo = msg.hasFile && MediaKinds.isVideo(msg.fileName)
                         val playableAudio = msg.hasFile && MediaKinds.isAudio(msg.fileName)
                         if (playableVideo) {
-                            InlineVideoBubble(msg.id, scopeKind, msg.fileName!!)
+                            InlineVideoBubble(msg.id, scopeKind, msg.fileName!!, isMine)
                             Spacer(Modifier.height(6.dp))
                         } else if (playableAudio) {
-                            InlineAudioBubble(msg.id, scopeKind, msg.fileName!!)
+                            InlineAudioBubble(msg.id, scopeKind, msg.fileName!!, isMine)
                             Spacer(Modifier.height(6.dp))
                         }
 
@@ -240,7 +240,7 @@ fun MessageBubble(
                                 Column {
                                     Text(
                                         msg.fileName,
-                                        color = Color.White,
+                                        color = PismoColors.onBubble(isMine),
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         maxLines = 1,
@@ -395,7 +395,7 @@ fun MessageBubble(
 }
 
 @Composable
-private fun VoiceRow(msgId: Int, audio: ByteArray?) {
+private fun VoiceRow(msgId: Int, audio: ByteArray?, isMine: Boolean) {
     val playing = WavPlayer.playingId == msgId
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -408,14 +408,14 @@ private fun VoiceRow(msgId: Int, audio: ByteArray?) {
         Icon(
             if (playing) Icons.Default.Stop else Icons.Default.PlayArrow,
             contentDescription = if (playing) "Остановить" else "Воспроизвести",
-            tint = Color.White,
+            tint = PismoColors.onBubble(isMine),
             modifier = Modifier.size(22.dp),
         )
         Spacer(Modifier.width(8.dp))
         Text(
             if (audio == null) "Загрузка…"
             else "Голосовое · ${WavPlayer.durationSecondsOf(audio)} с",
-            color = Color.White,
+            color = PismoColors.onBubble(isMine),
             fontSize = 13.sp,
         )
     }

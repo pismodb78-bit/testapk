@@ -87,12 +87,20 @@ fun FriendsScreen(onOpenChat: (Int, String) -> Unit) {
 
     LaunchedEffect(Unit) { reload() }
 
-    LaunchedEffect(Unit) {
+    // Ключ — сам список идентификаторов, а НЕ Unit. С Unit цикл стартовал
+    // один раз, когда список ещё пуст: первый проход не делал ничего и
+    // уходил в шестисекундную паузу, поэтому точки статусов появлялись
+    // через шесть секунд после самого списка. Теперь приход данных
+    // перезапускает цикл, и запрос уходит сразу же. А до ответа рисуем то,
+    // что уже знает общая память — обычно это соседний экран, открытый
+    // секунду назад.
+    val presenceKey = friends.joinToString(",") { it.userId.toString() }
+    LaunchedEffect(presenceKey) {
+        val ids = friends.map { it.userId }
+        if (ids.isEmpty()) return@LaunchedEffect
+        PresenceRepository.cachedFor(ids).takeIf { it.isNotEmpty() }?.let { presence = it }
         while (isActive) {
-            val ids = friends.map { it.userId }
-            if (ids.isNotEmpty()) {
-                runCatching { presence = PresenceRepository.presenceFor(ids) }
-            }
+            runCatching { presence = PresenceRepository.presenceFor(ids) }
             delay(6000)
         }
     }

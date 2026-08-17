@@ -72,18 +72,22 @@ class PollingService : LifecycleService() {
         // базовую точку держим в памяти — как _prevGroupMax на ПК.
         val groupMax = ChatRepository.groupMaxIncoming()
         if (!groupBaselineReady) {
+            // Первый проход только запоминает состояние, иначе при каждом
+            // запуске сервиса сыпались бы уведомления о давно прочитанном.
+            // Раньше здесь стоял return, и он обрывал ВЕСЬ обход: каналы и
+            // заявки в друзья на первом тике не опрашивались вовсе.
             groupMax.forEach { (gid, v) -> previousGroupMax[gid] = v.first }
             groupBaselineReady = true
-            return
-        }
-        for ((gid, value) in groupMax) {
-            val (maxId, name) = value
-            val before = previousGroupMax[gid] ?: 0
-            if (maxId > before) {
-                val preview = ChatRepository.previewOfLatestInGroup(gid)
-                Notifications.showGroupMessage(this, gid, name, preview)
+        } else {
+            for ((gid, value) in groupMax) {
+                val (maxId, name) = value
+                val before = previousGroupMax[gid] ?: 0
+                if (maxId > before) {
+                    val preview = ChatRepository.previewOfLatestInGroup(gid)
+                    Notifications.showGroupMessage(this, gid, name, preview)
+                }
+                previousGroupMax[gid] = maxId
             }
-            previousGroupMax[gid] = maxId
         }
 
         pollChannels()

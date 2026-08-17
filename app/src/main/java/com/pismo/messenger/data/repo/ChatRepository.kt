@@ -159,6 +159,16 @@ object ChatRepository {
                             "WHERE group_id=? AND UNIX_TIMESTAMP(created_at) >= ?",
                     target, seconds
                 )
+            } else if (scope == Scope.SERVER) {
+                // Для канала target — это channel_id. Раньше эта ветка
+                // проваливалась в личные сообщения и считала переписку с
+                // пользователем под номером канала: «перейти к дате» в
+                // канале уводило в никуда.
+                Db.scalarInt(
+                    "SELECT COUNT(*) FROM server_messages " +
+                            "WHERE channel_id=? AND UNIX_TIMESTAMP(created_at) >= ?",
+                    target, seconds
+                )
             } else {
                 Db.scalarInt(
                     "SELECT COUNT(*) FROM messages WHERE ((sender_id=? AND receiver_id=?) " +

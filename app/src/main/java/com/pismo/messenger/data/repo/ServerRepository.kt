@@ -510,7 +510,12 @@ object ServerRepository {
                     "FROM server_channels ch " +
                     "JOIN server_members m ON m.server_id = ch.server_id AND m.user_id = ? " +
                     "LEFT JOIN server_messages sm ON sm.channel_id = ch.id AND sm.sender_id <> ? " +
-                    "WHERE ch.type <> 'voice' " +
+                    // Голосовые каналы отсюда БОЛЬШЕ НЕ ИСКЛЮЧАЮТСЯ. У них
+                    // есть своя переписка (на ПК она открывается значком 💬),
+                    // и написанное в ней — такое же сообщение, как в любом
+                    // другом канале. Из-за старого условия упоминание в чате
+                    // голосового канала не давало уведомления вообще: с ПК
+                    // пингуют, а на телефоне тишина.
                     "GROUP BY ch.id",
             me, me
         ) { rs -> rs.getInt("id") to rs.getInt("max_id") }.toMap()

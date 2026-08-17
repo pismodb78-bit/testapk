@@ -89,14 +89,14 @@ fun ServerSettingsDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,
-        title = { Text("Настройки сервера", color = Color.White) },
+        title = { Text("Настройки сервера", color = PismoColors.TextPrimary) },
         text = {
             Column {
                 if (perms.isAdminLike) {
                     PismoField(name, { name = it }, "Название")
                     Spacer(Modifier.height(10.dp))
                 } else {
-                    Text(name, color = Color.White, fontSize = 15.sp)
+                    Text(name, color = PismoColors.TextPrimary, fontSize = 15.sp)
                     Spacer(Modifier.height(6.dp))
                 }
 
@@ -197,7 +197,7 @@ fun ChannelSettingsDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,
-        title = { Text("Настройки канала", color = Color.White) },
+        title = { Text("Настройки канала", color = PismoColors.TextPrimary) },
         text = {
             Column {
                 PismoField(name, { name = it }, "Название")
@@ -247,7 +247,7 @@ private fun ConfirmDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,
-        title = { Text(title, color = Color.White) },
+        title = { Text(title, color = PismoColors.TextPrimary) },
         text = { Text(message, color = PismoColors.TextSecondary, fontSize = 13.sp) },
         confirmButton = {
             TextButton(onClick = onConfirm) { Text(confirmText, color = PismoColors.Red) }

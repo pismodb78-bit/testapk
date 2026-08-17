@@ -49,7 +49,7 @@ fun UserActionsDialog(
         AlertDialog(
             onDismissRequest = { confirmClear = false },
             containerColor = PismoColors.BgSidebar,
-            title = { Text("Очистить переписку?", color = Color.White) },
+            title = { Text("Очистить переписку?", color = PismoColors.TextPrimary) },
             text = {
                 Text(
                     "Вся переписка с «${conversation.name}» будет удалена у обеих сторон. " +
@@ -78,7 +78,7 @@ fun UserActionsDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,
-        title = { Text(conversation.name, color = Color.White) },
+        title = { Text(conversation.name, color = PismoColors.TextPrimary) },
         text = {
             Column {
                 Action("💬  Написать", onClick = onOpenChat)

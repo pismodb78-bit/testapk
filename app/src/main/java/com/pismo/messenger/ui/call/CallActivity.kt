@@ -320,7 +320,7 @@ private fun RingingScreen(
         Spacer(Modifier.height(20.dp))
         Text(
             callerName.ifBlank { "Входящий звонок" },
-            color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold,
+            color = PismoColors.TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold,
         )
         Text(
             if (hasVideo) "Входящий видеозвонок" else "Входящий звонок",
@@ -392,7 +392,7 @@ private fun CallScreen(
         AlertDialog(
             onDismissRequest = { showShareOptions = false },
             containerColor = PismoColors.BgSidebar,
-            title = { Text("Демонстрация экрана", color = Color.White) },
+            title = { Text("Демонстрация экрана", color = PismoColors.TextPrimary) },
             text = {
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -403,7 +403,7 @@ private fun CallScreen(
                                 Prefs.shareScreenAudio = it
                             },
                         )
-                        Text("Передавать системный звук", color = Color.White, fontSize = 14.sp)
+                        Text("Передавать системный звук", color = PismoColors.TextPrimary, fontSize = 14.sp)
                     }
                     Text(
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
@@ -441,7 +441,7 @@ private fun CallScreen(
     ) {
         Text(
             peerName.ifBlank { "Звонок" },
-            color = Color.White,
+            color = PismoColors.TextPrimary,
             fontSize = 20.sp,
             fontWeight = FontWeight.Bold,
         )
@@ -634,7 +634,7 @@ private fun ParticipantVolumeDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,
-        title = { Text(p.name, color = Color.White) },
+        title = { Text(p.name, color = PismoColors.TextPrimary) },
         text = {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -645,7 +645,7 @@ private fun ParticipantVolumeDialog(
                             engine.setParticipantMuted(p.identity, it)
                         },
                     )
-                    Text("Заглушить голос", color = Color.White, fontSize = 14.sp)
+                    Text("Заглушить голос", color = PismoColors.TextPrimary, fontSize = 14.sp)
                 }
 
                 Text(

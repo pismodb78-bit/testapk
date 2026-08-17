@@ -80,7 +80,7 @@ fun PinnedMessagesDialog(
                 Icon(Icons.Default.PushPin, null, tint = PismoColors.Yellow,
                     modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Закреплённые (${items.size})", color = Color.White)
+                Text("Закреплённые (${items.size})", color = PismoColors.TextPrimary)
             }
         },
         text = {
@@ -143,7 +143,7 @@ fun EditHistoryDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,
-        title = { Text("История изменений", color = Color.White) },
+        title = { Text("История изменений", color = PismoColors.TextPrimary) },
         text = {
             when {
                 loading -> Text("Загрузка…", color = PismoColors.TextMuted, fontSize = 13.sp)
@@ -195,7 +195,7 @@ fun EmojiPickerDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,
-        title = { Text("Выберите реакцию", color = Color.White) },
+        title = { Text("Выберите реакцию", color = PismoColors.TextPrimary) },
         text = {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(8),

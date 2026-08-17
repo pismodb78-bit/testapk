@@ -107,12 +107,20 @@ fun ChatListScreen(
     // Присутствие обновляем отдельным лёгким запросом с тем же периодом, что
     // и ПК (6 с). Держать его в общей перезагрузке списка нельзя: тот идёт
     // только при изменении непрочитанного, и точки бы застывали.
-    LaunchedEffect(Unit) {
+    // Ключ — сам список идентификаторов, а НЕ Unit. С Unit цикл стартовал
+    // один раз, когда список ещё пуст: первый проход не делал ничего и
+    // уходил в шестисекундную паузу, поэтому точки статусов появлялись
+    // через шесть секунд после самого списка. Теперь приход данных
+    // перезапускает цикл, и запрос уходит сразу же. А до ответа рисуем то,
+    // что уже знает общая память — обычно это соседний экран, открытый
+    // секунду назад.
+    val presenceKey = conversations.joinToString(",") { it.userId.toString() }
+    LaunchedEffect(presenceKey) {
+        val ids = conversations.map { it.userId }
+        if (ids.isEmpty()) return@LaunchedEffect
+        PresenceRepository.cachedFor(ids).takeIf { it.isNotEmpty() }?.let { presence = it }
         while (isActive) {
-            val ids = conversations.map { it.userId }
-            if (ids.isNotEmpty()) {
-                runCatching { presence = PresenceRepository.presenceFor(ids) }
-            }
+            runCatching { presence = PresenceRepository.presenceFor(ids) }
             delay(6000)
         }
     }
@@ -158,7 +166,7 @@ fun ChatListScreen(
                         Text(
                             if (UserSession.isImpersonating) "За: ${UserSession.effectiveName}"
                             else "PISMO",
-                            color = Color.White,
+                            color = PismoColors.TextPrimary,
                             fontWeight = FontWeight.Bold,
                             fontSize = 18.sp,
                         )
