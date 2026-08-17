@@ -196,7 +196,12 @@ fun MessageBubble(
                             Spacer(Modifier.height(6.dp))
                         }
 
-                        if (!msg.fileName.isNullOrBlank() && msg.hasFile) {
+                        // Карточку файла показываем ТОЛЬКО когда предпросмотра
+                        // нет. Если картинка уже нарисована в пузыре, вторая
+                        // строка «Нажмите для загрузки» — дубль того же
+                        // вложения: на ПК её там нет, там просто изображение.
+                        val previewShown = image != null || msg.hasAudio || msg.hasVideo
+                        if (!msg.fileName.isNullOrBlank() && msg.hasFile && !previewShown) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier

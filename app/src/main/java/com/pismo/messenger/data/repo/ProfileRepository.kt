@@ -42,6 +42,22 @@ object ProfileRepository {
         avatarLoadedAt.remove(userId)
     }
 
+    /**
+     * Память профилей.
+     *
+     * Профиль — это четыре текстовых поля, которые почти не меняются, но за
+     * каждым открытием чужой карточки шёл запрос к удалённой базе, и
+     * карточка секунду висела пустой. Держим последнее известное значение и
+     * показываем его сразу, а свежее подтягиваем фоном.
+     */
+    private val profileCache = HashMap<Int, UserProfile>()
+
+    fun cachedProfile(userId: Int): UserProfile? = synchronized(profileCache) {
+        profileCache[userId]
+    }
+
+    fun clearProfileCache() = synchronized(profileCache) { profileCache.clear() }
+
     suspend fun load(userId: Int): UserProfile? = runCatching {
         Db.queryFirst(
             "SELECT Name, Surname, login, about, social_links FROM users WHERE id=?", userId
@@ -57,9 +73,14 @@ object ProfileRepository {
         }
     }.getOrElse {
         // На базах без колонок about/social_links берём урезанный вариант.
-        Db.queryFirst("SELECT Name, Surname, login FROM users WHERE id=?", userId) { rs ->
-            UserProfile(userId, rs.str("Name"), rs.str("Surname"), rs.str("login"), "", "")
-        }
+        runCatching {
+            Db.queryFirst("SELECT Name, Surname, login FROM users WHERE id=?", userId) { rs ->
+                UserProfile(userId, rs.str("Name"), rs.str("Surname"), rs.str("login"), "", "")
+            }
+        // Связь моргнула — отдаём последнее известное, а не пустоту.
+        }.getOrNull() ?: cachedProfile(userId)
+    }?.also { loaded ->
+        synchronized(profileCache) { profileCache[userId] = loaded }
     }
 
     suspend fun isLoginTaken(login: String, exceptId: Int): Boolean =
@@ -73,7 +94,10 @@ object ProfileRepository {
                 profile.about, profile.socialLinks, profile.id
             )
         }
-        if (full.isSuccess) return true
+        if (full.isSuccess) {
+            synchronized(profileCache) { profileCache[profile.id] = profile }
+            return true
+        }
 
         // Колонок about/social_links может не быть — сохраняем что можем.
         return runCatching {
@@ -140,16 +164,31 @@ object ProfileRepository {
         return ok
     }
 
-    suspend fun banner(userId: Int): ByteArray? = runCatching {
-        Db.scalarBytes("SELECT banner_data FROM users WHERE id=?", userId)
-    }.getOrNull()
+    private val bannerCache = HashMap<Int, ByteArray?>()
+
+    /**
+     * Баннер профиля. Кэшируем так же, как аватар: это картинка, и без
+     * памяти она перекачивалась при каждом открытии карточки.
+     */
+    suspend fun banner(userId: Int): ByteArray? {
+        synchronized(bannerCache) { if (bannerCache.containsKey(userId)) return bannerCache[userId] }
+        val data = runCatching {
+            Db.scalarBytes("SELECT banner_data FROM users WHERE id=?", userId)
+        }.getOrElse { return synchronized(bannerCache) { bannerCache[userId] } }
+        synchronized(bannerCache) { bannerCache[userId] = data }
+        return data
+    }
 
     suspend fun setBanner(data: ByteArray?): Boolean = runCatching {
         Db.exec("UPDATE users SET banner_data=? WHERE id=?", data, UserSession.effectiveId)
-    }.isSuccess
+    }.isSuccess.also { ok ->
+        if (ok) synchronized(bannerCache) { bannerCache[UserSession.effectiveId] = data }
+    }
 
     fun clearAvatarCache() {
         avatarCache.clear()
         avatarLoadedAt.clear()
+        synchronized(bannerCache) { bannerCache.clear() }
+        clearProfileCache()
     }
 }

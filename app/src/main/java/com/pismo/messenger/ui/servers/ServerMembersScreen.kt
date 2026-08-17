@@ -1,5 +1,6 @@
 package com.pismo.messenger.ui.servers
 
+import com.pismo.messenger.ui.profile.UserProfileDialog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -76,6 +77,7 @@ fun ServerMembersScreen(serverId: Int, onBack: () -> Unit) {
     var creatingRole by remember { mutableStateOf(false) }
     // Точки статуса у участников — то же присутствие, что в списке чатов.
     var presence by remember { mutableStateOf<Map<Int, Presence>>(emptyMap()) }
+    var profileOf by remember { mutableStateOf<Pair<Int, String>?>(null) }
 
     suspend fun reload() {
         runCatching {
@@ -88,6 +90,14 @@ fun ServerMembersScreen(serverId: Int, onBack: () -> Unit) {
     }
 
     LaunchedEffect(serverId) { reload() }
+
+    profileOf?.let { (uid, name) ->
+        UserProfileDialog(
+            userId = uid,
+            fallbackName = name,
+            onDismiss = { profileOf = null },
+        )
+    }
 
     LaunchedEffect(serverId) {
         while (isActive) {
@@ -138,7 +148,12 @@ fun ServerMembersScreen(serverId: Int, onBack: () -> Unit) {
             when (tab) {
                 0 -> LazyColumn(Modifier.fillMaxSize()) {
                     items(members, key = { it.userId }) { m ->
-                        MemberRow(m, presence[m.userId], roles, perms) { action ->
+                        MemberRow(m, presence[m.userId], roles, perms, onOpenProfile = {
+                            // На ПК профиль участника открывается из его меню
+                            // (ProfileForm(uid, readOnly: true)); здесь — тапом
+                            // по аватарке, меню на телефоне и так занято.
+                            profileOf = m.userId to m.name
+                        }) { action ->
                             scope.launch {
                                 when (action) {
                                     is MemberAction.SetRole ->
@@ -262,6 +277,7 @@ private sealed interface MemberAction {
 private fun MemberRow(
     m: ServerMemberRow,
     presence: Presence?,
+    onOpenProfile: () -> Unit = {},
     roles: List<ServerRole>,
     perms: ServerPermissions,
     onAction: (MemberAction) -> Unit,
@@ -277,7 +293,9 @@ private fun MemberRow(
                 .padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            UserAvatar(m.userId, m.name, 38.dp, presence = presence)
+            Box(Modifier.clickable(onClick = onOpenProfile)) {
+                UserAvatar(m.userId, m.name, 38.dp, presence = presence)
+            }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(

@@ -50,6 +50,7 @@ import com.pismo.messenger.data.model.Conversation
 import com.pismo.messenger.data.model.GroupSummary
 import com.pismo.messenger.data.model.Scope
 import com.pismo.messenger.data.repo.ChatRepository
+import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.ui.components.LetterAvatar
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.Dispatchers
@@ -156,16 +157,21 @@ fun ForwardDialog(
     val scope = rememberCoroutineScope()
     var conversations by remember { mutableStateOf<List<Conversation>>(emptyList()) }
     var groups by remember { mutableStateOf<List<GroupSummary>>(emptyList()) }
+    // Каналы серверов как цель пересылки. Репозиторий умел это с самого
+    // начала (Scope.SERVER), а в списке выбора их просто не было — переслать
+    // из лички на сервер и обратно было нельзя.
+    var channels by remember { mutableStateOf<List<Pair<Int, String>>>(emptyList()) }
     var busy by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         runCatching {
             conversations = ChatRepository.loadConversations()
             groups = ChatRepository.loadGroups()
+            channels = ServerRepository.channelNames().toList().sortedBy { it.second }
         }
     }
 
-    fun forward(target: Int, toGroup: Boolean) {
+    fun forward(target: Int, dstScope: Scope) {
         busy = true
         scope.launch {
             // Текст с указанием исходного отправителя — формат ПК-версии.
@@ -175,7 +181,7 @@ fun ForwardDialog(
                 ChatRepository.forwardMessage(
                     srcScope = srcScope,
                     srcId = srcMessageId,
-                    dstScope = if (toGroup) Scope.GROUP else Scope.DM,
+                    dstScope = dstScope,
                     dstTarget = target,
                     captionText = caption,
                 )
@@ -197,7 +203,7 @@ fun ForwardDialog(
                             modifier = Modifier.padding(vertical = 4.dp))
                     }
                     items(groups, key = { "g${it.id}" }) { g ->
-                        TargetRow(g.id, g.name, enabled = !busy) { forward(g.id, true) }
+                        TargetRow(g.id, g.name, enabled = !busy) { forward(g.id, Scope.GROUP) }
                     }
                 }
                 item {
@@ -205,7 +211,17 @@ fun ForwardDialog(
                         modifier = Modifier.padding(vertical = 4.dp))
                 }
                 items(conversations, key = { "u${it.userId}" }) { c ->
-                    TargetRow(c.userId, c.name, enabled = !busy) { forward(c.userId, false) }
+                    TargetRow(c.userId, c.name, enabled = !busy) { forward(c.userId, Scope.DM) }
+                }
+
+                if (channels.isNotEmpty()) {
+                    item {
+                        Text("КАНАЛЫ СЕРВЕРОВ", color = PismoColors.TextMuted, fontSize = 11.sp,
+                            modifier = Modifier.padding(vertical = 4.dp))
+                    }
+                    items(channels, key = { "c${it.first}" }) { (id, name) ->
+                        TargetRow(id, "# $name", enabled = !busy) { forward(id, Scope.SERVER) }
+                    }
                 }
             }
         },
