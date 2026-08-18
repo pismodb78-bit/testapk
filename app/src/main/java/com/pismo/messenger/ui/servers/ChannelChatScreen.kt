@@ -103,6 +103,12 @@ fun ChannelChatScreen(
     var editing by remember { mutableStateOf<ChatMessage?>(null) }
     var loading by remember(channelId) { mutableStateOf(remembered == null) }
     var lastCount by remember { mutableStateOf(0) }
+    // Множественное выделение — то же, что в личных чатах.
+    var selectMode by remember(channelId) { mutableStateOf(false) }
+    var selectedIds by remember(channelId) { mutableStateOf(setOf<Int>()) }
+    var forwardBatch by remember(channelId) {
+        mutableStateOf<List<com.pismo.messenger.ui.chat.ForwardItem>>(emptyList())
+    }
 
     val listState = rememberLazyListState()
     var showSearch by remember { mutableStateOf(false) }
@@ -234,6 +240,45 @@ fun ChannelChatScreen(
                 // Клавиатура наезжала на строку ввода — ровно как в ЛС.
                 .imePadding()
         ) {
+            if (selectMode) {
+                com.pismo.messenger.ui.chat.SelectionBar(
+                    count = selectedIds.size,
+                    // В канале чужое удаляет модератор — то же правило, что
+                    // и в меню одиночного сообщения.
+                    canDelete = perms.isAdminLike ||
+                        messages.filter { it.id in selectedIds }
+                            .all { it.senderId == UserSession.effectiveId },
+                    onCancel = { selectMode = false; selectedIds = emptySet() },
+                    onForward = {
+                        forwardBatch = messages
+                            .filter { it.id in selectedIds }
+                            .map {
+                                com.pismo.messenger.ui.chat.ForwardItem(
+                                    it.id, it.text, it.senderName
+                                )
+                            }
+                    },
+                    onDelete = {
+                        val ids = selectedIds.toList()
+                        selectMode = false
+                        selectedIds = emptySet()
+                        scope.launch {
+                            ids.forEach { id ->
+                                val mine = messages.firstOrNull { it.id == id }
+                                    ?.senderId == UserSession.effectiveId
+                                runCatching {
+                                    ServerRepository.deleteChannelMessage(
+                                        id,
+                                        asModerator = !mine && perms.isAdminLike,
+                                    )
+                                }
+                            }
+                            reload()
+                        }
+                    },
+                )
+            }
+
             // fillMaxWidth: без него ширину задаёт самый широкий ребёнок, и
             // на время загрузки им был сам индикатор — кружок уезжал влево.
             Box(Modifier.fillMaxWidth().weight(1f)) {
@@ -269,6 +314,18 @@ fun ChannelChatScreen(
                             MessageBubble(
                                 msg = msg,
                                 isGroup = true,          // в канале всегда показываем автора
+                                selectMode = selectMode,
+                                selected = msg.id in selectedIds,
+                                onEnterSelect = {
+                                    selectMode = true
+                                    selectedIds = setOf(msg.id)
+                                },
+                                onToggleSelect = {
+                                    selectedIds =
+                                        if (msg.id in selectedIds) selectedIds - msg.id
+                                        else selectedIds + msg.id
+                                    if (selectedIds.isEmpty()) selectMode = false
+                                },
                                 reactions = reactions[msg.id].orEmpty(),
                                 scopeKind = Scope.SERVER,
                                 onReply = { replyTo = msg },
@@ -370,6 +427,19 @@ fun ChannelChatScreen(
                 }
             }
         }
+    }
+
+    if (forwardBatch.isNotEmpty()) {
+        com.pismo.messenger.ui.chat.ForwardDialog(
+            srcScope = Scope.SERVER,
+            items = forwardBatch,
+            onDismiss = { forwardBatch = emptyList() },
+            onDone = {
+                forwardBatch = emptyList()
+                selectMode = false
+                selectedIds = emptySet()
+            },
+        )
     }
 
     if (showSearch) {

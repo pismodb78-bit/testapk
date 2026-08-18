@@ -165,6 +165,10 @@ fun ChatScreen(
     var recording by remember { mutableStateOf(false) }
     var recordSeconds by remember { mutableStateOf(0) }
     var showCircleRecorder by remember { mutableStateOf(false) }
+    // Режим множественного выделения — порт «Выбрано: N» с ПК.
+    var selectMode by remember(targetId) { mutableStateOf(false) }
+    var selectedIds by remember(targetId) { mutableStateOf(setOf<Int>()) }
+    var forwardBatch by remember(targetId) { mutableStateOf<List<ForwardItem>>(emptyList()) }
     var showPins by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
     var showCalendar by remember { mutableStateOf(false) }
@@ -478,6 +482,36 @@ fun ChatScreen(
                 // Compose не помогает: он двигает окно, а не разметку.
                 .imePadding()
         ) {
+            if (selectMode) {
+                SelectionBar(
+                    count = selectedIds.size,
+                    // Чужие сообщения удаляет только админ — то же правило,
+                    // что и в меню одиночного сообщения.
+                    canDelete = com.pismo.messenger.core.UserSession.isAdmin ||
+                        messages.filter { it.id in selectedIds }.all { it.isMine },
+                    onCancel = { selectMode = false; selectedIds = emptySet() },
+                    onForward = {
+                        forwardBatch = messages
+                            .filter { it.id in selectedIds }
+                            .map { ForwardItem(it.id, it.text, it.senderName) }
+                    },
+                    onDelete = {
+                        val ids = selectedIds.toList()
+                        selectMode = false
+                        selectedIds = emptySet()
+                        scope.launch {
+                            ids.forEach { id ->
+                                val m = messages.firstOrNull { it.id == id }
+                                runCatching {
+                                    ChatRepository.deleteMessage(scopeKind, id, m?.fileName)
+                                }
+                            }
+                            reload()
+                        }
+                    },
+                )
+            }
+
             if (readOnly) {
                 Text(
                     if (iBlocked) "Вы заблокировали этого пользователя — входящие сообщения скрыты."
@@ -539,6 +573,20 @@ fun ChatScreen(
                                     }
                                 },
                                 scopeKind = scopeKind,
+                                selectMode = selectMode,
+                                selected = msg.id in selectedIds,
+                                onEnterSelect = {
+                                    selectMode = true
+                                    selectedIds = setOf(msg.id)
+                                },
+                                onToggleSelect = {
+                                    selectedIds =
+                                        if (msg.id in selectedIds) selectedIds - msg.id
+                                        else selectedIds + msg.id
+                                    // Сняли последнее — режим больше не нужен,
+                                    // как выход из выделения на ПК.
+                                    if (selectedIds.isEmpty()) selectMode = false
+                                },
                             )
                         }
                     }
@@ -796,6 +844,19 @@ fun ChatScreen(
             scopeKind = scopeKind,
             targetId = targetId,
             onDismiss = { showPins = false },
+        )
+    }
+
+    if (forwardBatch.isNotEmpty()) {
+        ForwardDialog(
+            srcScope = scopeKind,
+            items = forwardBatch,
+            onDismiss = { forwardBatch = emptyList() },
+            onDone = {
+                forwardBatch = emptyList()
+                selectMode = false
+                selectedIds = emptySet()
+            },
         )
     }
 

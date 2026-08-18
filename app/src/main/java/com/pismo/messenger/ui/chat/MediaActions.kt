@@ -182,6 +182,28 @@ fun ForwardDialog(
     srcSender: String,
     onDismiss: () -> Unit,
     onDone: () -> Unit,
+) = ForwardDialog(
+    srcScope = srcScope,
+    items = listOf(ForwardItem(srcMessageId, srcText, srcSender)),
+    onDismiss = onDismiss,
+    onDone = onDone,
+)
+
+/** Одно пересылаемое сообщение: что переслать и от кого оно. */
+data class ForwardItem(val messageId: Int, val text: String, val sender: String)
+
+/**
+ * Пересылка пачки сообщений — порт BeginForwardExternalBatch с ПК.
+ *
+ * Порядок сохраняется исходный: пересылка идёт по возрастанию id, иначе
+ * у получателя разговор оказался бы перевёрнутым.
+ */
+@Composable
+fun ForwardDialog(
+    srcScope: Scope,
+    items: List<ForwardItem>,
+    onDismiss: () -> Unit,
+    onDone: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var conversations by remember { mutableStateOf<List<Conversation>>(emptyList()) }
@@ -203,17 +225,19 @@ fun ForwardDialog(
     fun forward(target: Int, dstScope: Scope) {
         busy = true
         scope.launch {
-            // Текст с указанием исходного отправителя — формат ПК-версии.
-            val caption = if (srcSender.isBlank()) "↪ Переслано:\n$srcText"
-            else "↪ Переслано от $srcSender:\n$srcText"
-            runCatching {
-                ChatRepository.forwardMessage(
-                    srcScope = srcScope,
-                    srcId = srcMessageId,
-                    dstScope = dstScope,
-                    dstTarget = target,
-                    captionText = caption,
-                )
+            items.sortedBy { it.messageId }.forEach { item ->
+                // Текст с указанием исходного отправителя — формат ПК-версии.
+                val caption = if (item.sender.isBlank()) "↪ Переслано:\n${item.text}"
+                else "↪ Переслано от ${item.sender}:\n${item.text}"
+                runCatching {
+                    ChatRepository.forwardMessage(
+                        srcScope = srcScope,
+                        srcId = item.messageId,
+                        dstScope = dstScope,
+                        dstTarget = target,
+                        captionText = caption,
+                    )
+                }
             }
             busy = false
             onDone()
@@ -223,7 +247,12 @@ fun ForwardDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,
-        title = { Text("Переслать", color = PismoColors.TextPrimary) },
+        title = {
+            Text(
+                if (items.size > 1) "Переслать ${items.size} сообщ." else "Переслать",
+                color = PismoColors.TextPrimary,
+            )
+        },
         text = {
             LazyColumn(Modifier.heightIn(max = 380.dp)) {
                 if (groups.isNotEmpty()) {
@@ -276,6 +305,49 @@ private fun TargetRow(id: Int, name: String, enabled: Boolean, onClick: () -> Un
         Text(name, color = PismoColors.TextPrimary, fontSize = 14.sp, modifier = Modifier.weight(1f))
         TextButton(onClick = onClick, enabled = enabled) {
             Text("Отправить", color = PismoColors.Blurple, fontSize = 13.sp)
+        }
+    }
+}
+
+
+/**
+ * Панель множественного выделения — порт BuildSelectBar с ПК.
+ *
+ * Появляется поверх ленты, когда включён режим выделения, и повторяет тот же
+ * набор: счётчик, отмена, пересылка, удаление. Удаление красное и стоит
+ * последним — чтобы не попасть в него, целясь в пересылку.
+ */
+@Composable
+fun SelectionBar(
+    count: Int,
+    canDelete: Boolean,
+    onCancel: () -> Unit,
+    onForward: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(PismoColors.BgElevated)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "Выбрано: $count",
+            color = PismoColors.TextPrimary,
+            fontSize = 14.sp,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onCancel) {
+            Text("Отмена", color = PismoColors.TextMuted)
+        }
+        TextButton(onClick = onForward, enabled = count > 0) {
+            Text("↪ Переслать", color = PismoColors.Cyan)
+        }
+        if (canDelete) {
+            TextButton(onClick = onDelete, enabled = count > 0) {
+                Text("🗑 Удалить", color = PismoColors.Red)
+            }
         }
     }
 }

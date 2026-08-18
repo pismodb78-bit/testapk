@@ -75,6 +75,12 @@ fun MessageBubble(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onReact: (String) -> Unit,
+    // Множественное выделение — порт режима «Выбрано: N» с ПК. Пока он
+    // выключен, всё работает ровно как раньше.
+    selectMode: Boolean = false,
+    selected: Boolean = false,
+    onEnterSelect: () -> Unit = {},
+    onToggleSelect: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val isMine = msg.isMine
@@ -110,15 +116,47 @@ fun MessageBubble(
 
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-        horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start,
+        horizontalArrangement = if (isMine && !selectMode) Arrangement.End
+        else Arrangement.Start,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Кружок выделения — слева от пузыря, как ○/✔ на ПК.
+        if (selectMode) {
+            Box(
+                Modifier
+                    .padding(end = 6.dp)
+                    .size(26.dp)
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(if (selected) PismoColors.Green else Color(0x33000000))
+                    .clickable { onToggleSelect() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (selected) "✔" else "",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+
         Column(horizontalAlignment = if (isMine) Alignment.End else Alignment.Start) {
             Box {
                 Column(
                     modifier = Modifier
                         .widthIn(max = 300.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(if (isMine) PismoColors.Blurple else PismoColors.BgBubbleOther)
+                        .background(
+                            when {
+                                // Выбранный пузырь подсвечивается, как на ПК
+                                // через ControlPaint.Light — только там это
+                                // осветление, а здесь наложение белым: на
+                                // светлой теме осветлять уже некуда.
+                                selected -> if (isMine) PismoColors.Blurple else PismoColors.BgHover
+                                isMine -> PismoColors.Blurple
+                                else -> PismoColors.BgBubbleOther
+                            }
+                        )
                         // canFocus = false ОБЯЗАН стоять ПЕРЕД clickable.
                         // combinedClickable делает пузырь фокусируемым, а
                         // Compose, получив фокус, подтягивает элемент в
@@ -128,8 +166,10 @@ fun MessageBubble(
                         // навигация по пузырям чата нам не нужна.
                         .focusProperties { canFocus = false }
                         .combinedClickable(
-                            onClick = { },
-                            onLongClick = { menuOpen = true },
+                            // В режиме выделения нажатие отмечает сообщение,
+                            // а не открывает меню: так же ведёт себя ПК.
+                            onClick = { if (selectMode) onToggleSelect() },
+                            onLongClick = { if (!selectMode) menuOpen = true },
                         )
                         .padding(10.dp),
                 ) {
@@ -300,6 +340,10 @@ fun MessageBubble(
                     DropdownMenuItem(
                         text = { Text("↪  Переслать") },
                         onClick = { showForward = true; menuOpen = false },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("☑  Выделить") },
+                        onClick = { menuOpen = false; onEnterSelect() },
                     )
                     DropdownMenuItem(
                         text = { Text("😀  Ещё реакции…") },
