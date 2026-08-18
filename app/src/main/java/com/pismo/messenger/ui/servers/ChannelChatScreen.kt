@@ -45,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -98,7 +99,9 @@ fun ChannelChatScreen(
         mutableStateOf(remembered?.second ?: emptyMap<Int, List<ReactionSummary>>())
     }
     var perms by remember { mutableStateOf(ServerPermissions()) }
-    var input by remember { mutableStateOf("") }
+    // TextFieldValue, а не String: подсказка @упоминаний обязана знать, где
+    // стоит курсор, иначе непонятно, какое из «@» в строке дополняется.
+    var input by remember { mutableStateOf(TextFieldValue("")) }
     var replyTo by remember { mutableStateOf<ChatMessage?>(null) }
     var editing by remember { mutableStateOf<ChatMessage?>(null) }
     var loading by remember(channelId) { mutableStateOf(remembered == null) }
@@ -170,13 +173,13 @@ fun ChannelChatScreen(
     }
 
     fun send() {
-        val text = input.trim()
+        val text = input.text.trim()
         val edit = editing
         if (edit != null) {
             if (text.isEmpty()) return
             scope.launch {
                 runCatching { ServerRepository.editChannelMessage(edit.id, text) }
-                editing = null; input = ""
+                editing = null; input = TextFieldValue("")
                 reload()
             }
             return
@@ -187,7 +190,7 @@ fun ChannelChatScreen(
                 ServerRepository.sendChannelMessage(channelId, text, replyTo?.id ?: 0)
                 SignalingClient.send("new_message", 0, channelId, "server")
             }
-            input = ""; replyTo = null
+            input = TextFieldValue(""); replyTo = null
             reload(scrollToEnd = true)
         }
     }
@@ -329,7 +332,7 @@ fun ChannelChatScreen(
                                 reactions = reactions[msg.id].orEmpty(),
                                 scopeKind = Scope.SERVER,
                                 onReply = { replyTo = msg },
-                                onEdit = { editing = msg; input = msg.text },
+                                onEdit = { editing = msg; input = TextFieldValue(msg.text) },
                                 onDelete = {
                                     scope.launch {
                                         val mine = msg.senderId == UserSession.effectiveId
@@ -385,10 +388,30 @@ fun ChannelChatScreen(
                             color = PismoColors.TextMuted, fontSize = 12.sp, maxLines = 1,
                         )
                     }
-                    IconButton(onClick = { replyTo = null; editing = null; input = "" }) {
+                    IconButton(onClick = { replyTo = null; editing = null; input = TextFieldValue("") }) {
                         Icon(Icons.Default.Close, "Отменить", tint = PismoColors.TextMuted)
                     }
                 }
+            }
+
+            // Подсказка @упоминаний — прямо над строкой ввода. Позицию «@»
+            // и набранный после него кусок считаем из курсора, как на ПК:
+            // подсказка живёт до пробела и гаснет сама.
+            val mention = mentionPrefix(input.text, input.selection.start)
+            if (mention != null) {
+                MentionSuggestions(
+                    serverId = serverId,
+                    partial = mention.second,
+                    onPick = { option ->
+                        val (text, cursor) = applyMention(
+                            input.text, mention.first, input.selection.start, option.token
+                        )
+                        input = TextFieldValue(
+                            text = text,
+                            selection = androidx.compose.ui.text.TextRange(cursor),
+                        )
+                    },
+                )
             }
 
             Row(
