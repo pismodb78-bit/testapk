@@ -3,6 +3,7 @@ package com.pismo.messenger
 import android.app.Application
 import android.content.Context
 import com.pismo.messenger.call.IncomingCallMonitor
+import com.pismo.messenger.core.EmojiCatalog
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.PresenceReporter
 import com.pismo.messenger.data.MediaCache
@@ -16,6 +17,7 @@ class PismoApp : Application() {
         instance = this
         Prefs.init(this)
         MediaCache.init(this)
+        EmojiCatalog.init(this)
         Notifications.createChannels(this)
         // Палитру ставим до первой отрисовки, иначе светлая тема мигнёт
         // тёмным кадром на старте.

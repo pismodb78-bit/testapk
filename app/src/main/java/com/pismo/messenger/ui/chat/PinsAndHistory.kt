@@ -1,6 +1,9 @@
 package com.pismo.messenger.ui.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,6 +35,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -42,6 +46,7 @@ import com.pismo.messenger.data.model.Scope
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.PinsRepository
 import com.pismo.messenger.ui.theme.PismoColors
+import com.pismo.messenger.core.EmojiCatalog
 import kotlinx.coroutines.launch
 
 /**
@@ -183,39 +188,79 @@ fun EmojiPickerDialog(
     onDismiss: () -> Unit,
     onPick: (String) -> Unit,
 ) {
-    val emojis = remember {
-        listOf(
-            "👍", "👎", "❤️", "🔥", "😂", "😊", "😍", "🤔",
-            "😮", "😢", "😡", "🎉", "👏", "🙏", "💯", "✅",
-            "❌", "⚡", "🚀", "💡", "📌", "👀", "🤝", "🥳",
-            "😅", "😎", "🤯", "🫡", "🙌", "💀", "🍕", "☕",
-        )
-    }
+    // Вкладки поверх полного каталога — порт EmojiPickerForm с ПК. Раньше
+    // здесь лежали 32 эмодзи одним списком, и поставить реакцию, которую
+    // коллега ставит с компьютера, было просто нечем: там каталог на тысячу
+    // с лишним и восемь разделов.
+    val categories = remember { EmojiCatalog.categories }
+    var tab by remember { mutableStateOf(0) }
+    var recent by remember { mutableStateOf(EmojiCatalog.recent()) }
+
+    // Вкладка 0 — «часто используемые», дальше идут разделы каталога.
+    // Имя намеренно не items: рядом вызывается items() из LazyVerticalGrid,
+    // и одноимённая переменная превращала бы вызов в загадку для читателя.
+    val shown = if (tab == 0) recent else categories[tab - 1].items
+    val title = if (tab == 0) "Часто используемые" else categories[tab - 1].title
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,
-        title = { Text("Выберите реакцию", color = PismoColors.TextPrimary) },
+        title = { Text(title, color = PismoColors.TextPrimary, fontSize = 15.sp) },
         text = {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(8),
-                modifier = Modifier.heightIn(max = 260.dp),
-            ) {
-                items(emojis) { emoji ->
-                    Box(
-                        Modifier
-                            .padding(4.dp)
-                            .clickable { onPick(emoji) },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(emoji, fontSize = 24.sp)
+            Column {
+                // Полоса вкладок прокручивается: девять разделов в ширину
+                // экрана телефона не влезают ни при каком размере значка.
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                ) {
+                    EmojiTab("🕘", tab == 0) { tab = 0 }
+                    categories.forEachIndexed { index, c ->
+                        EmojiTab(c.icon, tab == index + 1) { tab = index + 1 }
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(8),
+                    modifier = Modifier.heightIn(min = 200.dp, max = 300.dp),
+                ) {
+                    items(shown) { emoji ->
+                        Box(
+                            Modifier
+                                .padding(4.dp)
+                                .clickable {
+                                    EmojiCatalog.remember(emoji)
+                                    recent = EmojiCatalog.recent()
+                                    onPick(emoji)
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(emoji, fontSize = 24.sp)
+                        }
                     }
                 }
             }
         },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена", color = PismoColors.TextMuted) }
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Закрыть", color = PismoColors.TextMuted) }
         },
     )
+}
+
+/** Значок раздела в полосе вкладок пикера. */
+@Composable
+private fun EmojiTab(icon: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .padding(horizontal = 2.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (selected) PismoColors.Blurple else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(icon, fontSize = 18.sp)
+    }
 }
