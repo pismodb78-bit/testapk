@@ -102,16 +102,55 @@ object ChatRepository {
         )
     }
 
+    /**
+     * Есть ли у group_chats колонка с датой создания. Значение кэшируем:
+     * лезть в information_schema на каждое обновление списка ни к чему.
+     */
+    @Volatile
+    private var groupCreatedCol: String? = null
+    @Volatile
+    private var groupCreatedColChecked = false
+
+    private suspend fun groupCreatedColumn(): String? {
+        if (groupCreatedColChecked) return groupCreatedCol
+        groupCreatedCol = listOf("created_at", "createdAt").firstOrNull { col ->
+            runCatching {
+                Db.scalarInt(
+                    "SELECT COUNT(*) FROM information_schema.COLUMNS " +
+                            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='group_chats' " +
+                            "AND COLUMN_NAME=?",
+                    col
+                ) > 0
+            }.getOrDefault(false)
+        }
+        groupCreatedColChecked = true
+        return groupCreatedCol
+    }
+
     /** Группы, где состоит текущий пользователь. */
     suspend fun loadGroups(): List<GroupSummary> {
         val me = UserSession.effectiveId
+
+        // У пустой группы даты сообщений нет, и строка выглядела так, будто
+        // время потеряли: у одной группы дата есть, у соседних — пусто.
+        // Показываем дату создания группы, если схема её хранит.
+        val createdCol = groupCreatedColumn()
+        val lastTime = if (createdCol == null) {
+            "UNIX_TIMESTAMP((SELECT MAX(gm3.created_at) FROM group_messages gm3 " +
+                    "WHERE gm3.group_id = gc.id))"
+        } else {
+            "COALESCE(" +
+                    "UNIX_TIMESTAMP((SELECT MAX(gm3.created_at) FROM group_messages gm3 " +
+                    "WHERE gm3.group_id = gc.id)), " +
+                    "UNIX_TIMESTAMP(gc.`$createdCol`))"
+        }
+
         val sql = """
             SELECT gc.id, gc.name, gc.avatar_color,
                    (SELECT gm2.text FROM group_messages gm2
                     WHERE gm2.group_id = gc.id
                     ORDER BY gm2.created_at DESC LIMIT 1) AS last_msg,
-                   UNIX_TIMESTAMP((SELECT MAX(gm3.created_at) FROM group_messages gm3
-                                   WHERE gm3.group_id = gc.id)) AS last_time,
+                   $lastTime AS last_time,
                    (SELECT COUNT(*) FROM group_members gmem2
                     WHERE gmem2.group_id = gc.id) AS member_count
             FROM group_chats gc

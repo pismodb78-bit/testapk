@@ -50,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -156,6 +157,9 @@ fun InlineVideoBubble(
                 .aspectRatio(4f / 3f)
                 .clip(RoundedCornerShape(8.dp))
                 .background(PismoColors.BgDarkest)
+                // Ни обложка, ни элементы плеера не должны забирать фокус:
+                // из-за него лента чата подтягивала пузырь в видимую область.
+                .focusProperties { canFocus = false }
                 .then(if (playing) Modifier else Modifier.clickable { open() }),
             contentAlignment = Alignment.Center,
         ) {
@@ -417,6 +421,7 @@ private fun VideoSurface(
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
+                .focusProperties { canFocus = false }
                 .background(Color(0x99000000))
                 // navigationBarsPadding отступает от жестовой полосы, если
                 // диалог рисуется под ней; фиксированные 20.dp снизу нужны
@@ -427,7 +432,7 @@ private fun VideoSurface(
                     start = 4.dp,
                     end = 4.dp,
                     top = if (insetBottom) 6.dp else 0.dp,
-                    bottom = if (insetBottom) 20.dp else 0.dp,
+                    bottom = if (insetBottom) 44.dp else 0.dp,
                 ),
             verticalAlignment = Alignment.CenterVertically,
         ) {

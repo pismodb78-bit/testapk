@@ -17,14 +17,17 @@ import io.livekit.android.events.collect
 import io.livekit.android.room.Room
 import io.livekit.android.room.participant.Participant
 import io.livekit.android.room.participant.RemoteParticipant
+import io.livekit.android.room.participant.VideoTrackPublishDefaults
 import io.livekit.android.room.track.CameraPosition
 import io.livekit.android.room.track.LocalAudioTrack
 import io.livekit.android.room.track.LocalAudioTrackOptions
 import io.livekit.android.room.track.LocalVideoTrack
 import io.livekit.android.room.track.LocalVideoTrackOptions
 import io.livekit.android.room.track.RemoteAudioTrack
+import io.livekit.android.room.track.ScreenSharePresets
 import io.livekit.android.room.track.RemoteTrackPublication
 import io.livekit.android.room.track.Track
+import io.livekit.android.room.track.VideoEncoding
 import io.livekit.android.room.track.VideoTrack
 import io.livekit.android.room.track.screencapture.ScreenCaptureParams
 import kotlinx.coroutines.CoroutineScope
@@ -195,6 +198,36 @@ class CallEngine(
                     videoTrackCaptureDefaults = LocalVideoTrackOptions(
                         position = if (Prefs.frontCamera) CameraPosition.FRONT
                         else CameraPosition.BACK,
+                    ),
+
+                    // ── Качество демонстрации экрана ──
+                    //
+                    // Захват оставляем ORIGINAL: это родное разрешение
+                    // экрана без масштабирования И БЕЗ ОБРЕЗКИ. Пресеты вроде
+                    // H1080_FPS15 трогать нельзя — у них adaptOutputToDimensions,
+                    // то есть кадр подгоняется под 16:9 обрезанием, а экран
+                    // телефона вертикальный: у зрителя пропали бы верх и низ.
+                    // Меняем только частоту кадров.
+                    screenShareTrackCaptureDefaults = LocalVideoTrackOptions(
+                        isScreencast = true,
+                        captureParams = ScreenSharePresets.ORIGINAL.capture.copy(
+                            maxFps = Prefs.screenShareFps,
+                        ),
+                    ),
+                    screenShareTrackPublishDefaults = VideoTrackPublishDefaults(
+                        videoEncoding = VideoEncoding(
+                            maxBitrate = Prefs.screenShareBitrate,
+                            maxFps = Prefs.screenShareFps,
+                        ),
+                        // SIMULCAST ВЫКЛЮЧЕН, и это главная правка про
+                        // качество. С ним телефон кодирует экран в НЕСКОЛЬКО
+                        // потоков разом: на вертикальном экране это три
+                        // энкодера по паре мегапикселей каждый. Аппаратный
+                        // кодировщик такого не тянет, начинает пропускать
+                        // кадры и резать битрейт, и картинка расплывается.
+                        // Зрителей у демки один-два, слои никому не нужны —
+                        // отдаём весь битрейт одному потоку.
+                        simulcast = false,
                     ),
                 ),
             )

@@ -32,6 +32,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,6 +50,7 @@ import androidx.compose.ui.unit.sp
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.data.MediaCache
 import com.pismo.messenger.data.db.Db
+import com.pismo.messenger.media.MicLevelMonitor
 import com.pismo.messenger.ui.login.PismoField
 import com.pismo.messenger.ui.theme.PismoColors
 import com.pismo.messenger.ui.theme.ThemeMode
@@ -81,6 +84,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     var echoCancellation by remember { mutableStateOf(Prefs.echoCancellation) }
     var autoGain by remember { mutableStateOf(Prefs.autoGainControl) }
     var screenGain by remember { mutableStateOf(Prefs.screenAudioGain) }
+    var screenQuality by remember { mutableStateOf(Prefs.screenShareQuality) }
     var denoiseStrength by remember { mutableStateOf(Prefs.denoiseStrength) }
     var voiceAuto by remember { mutableStateOf(Prefs.voiceAutoSensitivity) }
     var voiceThreshold by remember { mutableStateOf(Prefs.voiceThresholdDb.toFloat()) }
@@ -116,6 +120,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         Prefs.echoCancellation = echoCancellation
         Prefs.autoGainControl = autoGain
         Prefs.screenAudioGain = screenGain
+        Prefs.screenShareQuality = screenQuality
         Prefs.denoiseStrength = denoiseStrength
         Prefs.voiceAutoSensitivity = voiceAuto
         Prefs.voiceThresholdDb = voiceThreshold.toInt()
@@ -318,10 +323,16 @@ fun SettingsScreen(onBack: () -> Unit) {
                     valueRange = -60f..0f,
                     colors = SliderDefaults.colors(thumbColor = PismoColors.Blurple),
                 )
+                // Живая полоса под ползунком — как в тесте микрофона на ПК.
+                // Без неё порог ставится наугад: «−31 дБ» само по себе ничего
+                // не значит, надо видеть, где относительно этой черты
+                // оказывается своя речь, а где фон комнаты.
+                MicLevelBar(thresholdDb = voiceThreshold)
                 Text(
-                    "Звук тише порога в эфир не уходит — этим отрезаются шорохи и " +
-                            "разговоры из другой комнаты. Ближе к нулю — строже. " +
-                            "Тот же ползунок, что и в настройках ПК-версии.",
+                    "Полоса показывает текущую громкость с микрофона. Зелёное — " +
+                            "громче порога, такой звук уходит собеседнику; серое " +
+                            "слева от чёрточки отсекается. Говорите и двигайте " +
+                            "ползунок так, чтобы речь была зелёной, а фон комнаты — нет.",
                     color = PismoColors.TextMuted, fontSize = 11.sp,
                 )
             } else {
@@ -358,6 +369,37 @@ fun SettingsScreen(onBack: () -> Unit) {
                         "не выключать: без него собеседник слышит собственный голос.",
                 color = PismoColors.TextMuted, fontSize = 12.sp,
             )
+            Spacer(Modifier.height(16.dp))
+            Section("Демонстрация экрана")
+            Text("Качество", color = PismoColors.TextSecondary, fontSize = 13.sp)
+            Spacer(Modifier.height(6.dp))
+            Row(Modifier.fillMaxWidth()) {
+                ThemeChip("Экономно", screenQuality == 0) { screenQuality = 0 }
+                Spacer(Modifier.width(8.dp))
+                ThemeChip("Чётко", screenQuality == 1) { screenQuality = 1 }
+                Spacer(Modifier.width(8.dp))
+                ThemeChip("Плавно", screenQuality == 2) { screenQuality = 2 }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                when (screenQuality) {
+                    0 -> "10 кадров в секунду, до 1,2 Мбит/с — для слабой сети."
+                    2 -> "30 кадров в секунду, до 6 Мбит/с — для игр и видео."
+                    else -> "15 кадров в секунду, до 4 Мбит/с. Экран почти всегда " +
+                            "показывают ради интерфейса и текста, а там важнее " +
+                            "чёткость, чем частота кадров."
+                },
+                color = PismoColors.TextMuted, fontSize = 11.sp,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Разрешение всегда родное, без обрезки: экран телефона " +
+                        "вертикальный, и подгонка под 16:9 срезала бы верх и низ. " +
+                        "При нехватке канала WebRTC жертвует кадрами, а не " +
+                        "чёткостью. Применяется со следующего звонка.",
+                color = PismoColors.TextMuted, fontSize = 11.sp,
+            )
+
             Spacer(Modifier.height(10.dp))
             Text(
                 "Громкость системного звука в демонстрации: ${(screenGain * 100).toInt()}%",
@@ -471,6 +513,76 @@ private fun RowScope.ThemeChip(label: String, selected: Boolean, onClick: () -> 
             color = if (selected) Color.White else PismoColors.TextSecondary,
             fontSize = 13.sp,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        )
+    }
+}
+
+
+/**
+ * Индикатор уровня микрофона под ползунком порога — порт полосы из
+ * MicTestForm ПК-версии.
+ *
+ * Шкала совпадает со шкалой ползунка (−60…0 дБ), поэтому положение
+ * чёрточки-порога и высота уровня сравниваются напрямую. Захват держится
+ * только пока индикатор на экране: микрофон — общий ресурс, и оставлять его
+ * занятым после ухода из настроек нельзя.
+ */
+@Composable
+private fun MicLevelBar(thresholdDb: Float) {
+    val scope = rememberCoroutineScope()
+    val level by MicLevelMonitor.levelDb.collectAsState()
+
+    // В звонке микрофон уже занят движком: второй AudioRecord либо не
+    // откроется, либо отберёт поток у разговора.
+    val busy = com.pismo.messenger.call.IncomingCallMonitor.inCall
+
+    DisposableEffect(busy) {
+        if (!busy) MicLevelMonitor.acquire(scope)
+        onDispose { if (!busy) MicLevelMonitor.release() }
+    }
+
+    val floor = MicLevelMonitor.FLOOR_DB
+    val fraction = ((level - floor) / -floor).coerceIn(0f, 1f)
+    val thresholdFraction = ((thresholdDb - floor) / -floor).coerceIn(0f, 1f)
+    val open = level >= thresholdDb
+
+    Column {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(10.dp)
+                .clip(RoundedCornerShape(5.dp))
+                .background(PismoColors.BgDarkest)
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(fraction)
+                    .height(10.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(if (open) PismoColors.Green else PismoColors.TextMuted)
+            )
+            // Чёрточка порога: всё, что левее неё, в эфир не уходит.
+            Box(
+                Modifier
+                    .fillMaxWidth(thresholdFraction)
+                    .height(10.dp),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                Box(
+                    Modifier
+                        .width(2.dp)
+                        .height(14.dp)
+                        .background(PismoColors.TextPrimary)
+                )
+            }
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            if (busy) "Идёт звонок — микрофон занят разговором"
+            else if (level <= floor + 0.5f) "Тишина"
+            else "${level.toInt()} дБ",
+            color = if (busy) PismoColors.Yellow else PismoColors.TextMuted,
+            fontSize = 10.sp,
         )
     }
 }
