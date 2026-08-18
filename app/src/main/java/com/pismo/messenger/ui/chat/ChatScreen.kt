@@ -81,6 +81,7 @@ import com.pismo.messenger.core.formatDuration
 import com.pismo.messenger.core.formatTime
 import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.data.MediaCache
+import com.pismo.messenger.data.MessageMemory
 import com.pismo.messenger.data.model.ChatMessage
 import com.pismo.messenger.data.model.ReactionSummary
 import com.pismo.messenger.data.model.Presence
@@ -131,10 +132,23 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val scopeKind = if (isGroup) Scope.GROUP else Scope.DM
 
-    var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
-    var reactions by remember { mutableStateOf<Map<Int, List<ReactionSummary>>>(emptyMap()) }
+    // Лента берётся из памяти СИНХРОННО, до первого кадра. Раньше открытие
+    // чата всегда начиналось с пустого экрана и кружка, даже если из него
+    // вышли секунду назад: экран уходит из композиции целиком, и всё
+    // грузилось заново. На ПК окно чата не уничтожается вовсе, поэтому там
+    // такого нет.
+    val remembered = remember(targetId, isGroup) {
+        MessageMemory.peek(if (isGroup) Scope.GROUP else Scope.DM, targetId)
+    }
+    var messages by remember(targetId) {
+        mutableStateOf(remembered?.first ?: emptyList())
+    }
+    var reactions by remember(targetId) {
+        mutableStateOf(remembered?.second ?: emptyMap<Int, List<ReactionSummary>>())
+    }
     var input by remember { mutableStateOf("") }
-    var loading by remember { mutableStateOf(true) }
+    // Кружок нужен, только когда показать нечего.
+    var loading by remember(targetId) { mutableStateOf(remembered == null) }
     var sending by remember { mutableStateOf(false) }
     var lastCount by remember { mutableStateOf(0) }
 
@@ -187,6 +201,7 @@ fun ChatScreen(
             messages = loaded
             lastCount = loaded.size
             reactions = ReactionsRepository.forMessages(loaded.map { it.id }, scopeKind)
+            MessageMemory.put(scopeKind, targetId, loaded, reactions)
             ChatRepository.prefetchPageMedia(loaded, scopeKind)
             if (!isGroup) {
                 val state = ChatRepository.blockState(targetId)
@@ -252,8 +267,18 @@ fun ChatScreen(
     // количество и на нуле ничего не менял.
     val reconnects by Db.reconnects.collectAsState()
 
+    // Счётчик переподключений монотонный, поэтому «был ли это реконнект»
+    // определяется сравнением с запомненным значением, а не проверкой > 0:
+    // иначе после первого же обрыва связи кружок появлялся бы навсегда.
+    var seenReconnects by remember(targetId) { mutableStateOf(reconnects) }
+
     LaunchedEffect(targetId, reconnects) {
-        loading = true
+        val isReconnect = reconnects != seenReconnects
+        seenReconnects = reconnects
+        // Кружок ставим, только если показать нечего: с запомненной лентой
+        // он перекрыл бы уже нарисованные сообщения ради того же результата.
+        // После переподключения — ставим всегда, лента могла устареть.
+        if (remembered == null || isReconnect) loading = true
         reload(scrollToEnd = true)
     }
 

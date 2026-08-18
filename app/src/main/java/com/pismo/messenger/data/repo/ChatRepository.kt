@@ -5,6 +5,7 @@ import com.pismo.messenger.core.Crypto
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.buildName
 import com.pismo.messenger.data.MediaCache
+import com.pismo.messenger.data.MessageMemory
 import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.data.db.bool
 import com.pismo.messenger.data.db.epochMillis
@@ -606,6 +607,9 @@ object ChatRepository {
             "DELETE FROM messages WHERE (sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?)",
             me, partnerId, partnerId, me
         )
+        // Иначе очищенная переписка ещё раз мелькнёт из памяти при
+        // следующем открытии чата — до того, как приедет пустой ответ.
+        MessageMemory.invalidate(Scope.DM, partnerId)
     }
 
     // ════════════════════════════════════════════════════════════════

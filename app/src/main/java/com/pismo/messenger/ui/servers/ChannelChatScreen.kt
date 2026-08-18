@@ -53,6 +53,7 @@ import com.pismo.messenger.data.model.ChatMessage
 import com.pismo.messenger.data.model.ReactionSummary
 import com.pismo.messenger.data.model.Scope
 import com.pismo.messenger.data.model.ServerPermissions
+import com.pismo.messenger.data.MessageMemory
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.ReactionsRepository
 import com.pismo.messenger.data.repo.ServerRepository
@@ -86,13 +87,21 @@ fun ChannelChatScreen(
 ) {
     val scope = rememberCoroutineScope()
 
-    var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
-    var reactions by remember { mutableStateOf<Map<Int, List<ReactionSummary>>>(emptyMap()) }
+    // То же, что в личных чатах: запомненная лента показывается сразу,
+    // свежая подтягивается фоном. Объявление обязано стоять ПЕРЕД messages —
+    // из него берётся начальное значение.
+    val remembered = remember(channelId) { MessageMemory.peek(Scope.SERVER, channelId) }
+    var messages by remember(channelId) {
+        mutableStateOf(remembered?.first ?: emptyList())
+    }
+    var reactions by remember(channelId) {
+        mutableStateOf(remembered?.second ?: emptyMap<Int, List<ReactionSummary>>())
+    }
     var perms by remember { mutableStateOf(ServerPermissions()) }
     var input by remember { mutableStateOf("") }
     var replyTo by remember { mutableStateOf<ChatMessage?>(null) }
     var editing by remember { mutableStateOf<ChatMessage?>(null) }
-    var loading by remember { mutableStateOf(true) }
+    var loading by remember(channelId) { mutableStateOf(remembered == null) }
     var lastCount by remember { mutableStateOf(0) }
 
     val listState = rememberLazyListState()
@@ -111,6 +120,7 @@ fun ChannelChatScreen(
             messages = loaded
             lastCount = loaded.size
             reactions = ReactionsRepository.forMessages(loaded.map { it.id }, Scope.SERVER)
+            MessageMemory.put(Scope.SERVER, channelId, loaded, reactions)
             ServerRepository.prefetchChannelMedia(loaded)
             perms = ServerRepository.permissions(serverId)
             // То же, что в личных чатах: свёрнутое приложение не должно
@@ -129,7 +139,9 @@ fun ChannelChatScreen(
     }
 
     LaunchedEffect(channelId) {
-        loading = true
+        // Кружок ставим, только если показать нечего: с запомненной лентой
+        // он перекрыл бы уже нарисованные сообщения ради того же результата.
+        if (remembered == null) loading = true
         reload(scrollToEnd = true)
     }
 

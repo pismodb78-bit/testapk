@@ -46,6 +46,7 @@ import com.pismo.messenger.data.model.DmPrivacy
 import com.pismo.messenger.data.model.UserProfile
 import com.pismo.messenger.data.repo.AuthRepository
 import com.pismo.messenger.data.repo.FriendsRepository
+import com.pismo.messenger.data.MessageMemory
 import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.data.repo.ProfileRepository
 import com.pismo.messenger.net.SignalingClient
@@ -348,6 +349,12 @@ fun ProfileScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit) {
                     runCatching { PresenceRepository.markOffline() }
                     SignalingClient.disconnect()
                     Db.closeAll()
+                    // Память чатов, статусов и профилей — чужой переписке
+                    // нельзя мелькнуть после входа под другим логином даже
+                    // на один кадр.
+                    MessageMemory.clear()
+                    PresenceRepository.clearCache()
+                    ProfileRepository.clearAvatarCache()
                     Prefs.clearSavedCredentials()
                     UserSession.clear()
                     onLoggedOut()
