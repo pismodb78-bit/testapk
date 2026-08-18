@@ -84,6 +84,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.filled.FlipCameraAndroid
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Slider
 import androidx.compose.material3.TextButton
@@ -620,6 +621,12 @@ private fun CallScreen(
     }
 
     // Плитка во весь экран — прежде всего ради чужой демонстрации.
+    //
+    // Участник, пропавший из списка, закрывает просмотр сразу. А вот
+    // исчезнувшая дорожка — НЕТ: на ПК это отдельный механизм (_resumeWatch),
+    // который помнит просмотр 15 секунд и сам возобновляет его при быстром
+    // перезапуске демонстрации, чтобы не пришлось заново жать «Смотреть».
+    // Здесь то же самое: держим окно открытым и ждём новую дорожку.
     fullscreenOf?.let { id ->
         val p = participants.firstOrNull { it.identity == id }
         if (p == null) {
@@ -644,6 +651,14 @@ private fun FullscreenTile(
     onDismiss: () -> Unit,
 ) {
     val track = p.screenTrack ?: p.cameraTrack
+
+    // Сколько ждать возвращения дорожки, прежде чем закрыть просмотр.
+    // 15 секунд — то же окно, что и у _resumeWatch на ПК.
+    LaunchedEffect(track == null) {
+        if (track != null) return@LaunchedEffect
+        kotlinx.coroutines.delay(15_000)
+        onDismiss()
+    }
 
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onDismiss,
@@ -677,6 +692,24 @@ private fun FullscreenTile(
                     modifier = Modifier.fillMaxSize(),
                 )
             }
+            if (track == null) {
+                // Дорожки нет — демонстрацию перезапускают. Окно не
+                // закрываем: новая дорожка подхватится сама, и просмотр
+                // продолжится с того же места.
+                Column(
+                    Modifier.align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    CircularProgressIndicator(color = PismoColors.Blurple)
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "Демонстрация перезапускается…",
+                        color = PismoColors.TextMuted,
+                        fontSize = 13.sp,
+                    )
+                }
+            }
+
             Text(
                 p.name,
                 color = Color.White,

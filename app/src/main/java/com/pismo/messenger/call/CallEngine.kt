@@ -84,6 +84,14 @@ class CallEngine(
          * бывает — WebRTC шлёт повтор кадра, даже когда картинка не менялась.
          */
         private const val FRAME_SILENCE_MS = 1_500L
+
+        /**
+         * Как часто пере-подписываться на чужую демонстрацию, пока кадры не
+         * пошли, и когда сдаться. Значения с ПК: 3 секунды между попытками,
+         * 15 секунд всего.
+         */
+        private const val RESUBSCRIBE_EVERY_MS = 3_000L
+        private const val RESUBSCRIBE_GIVE_UP_MS = 15_000L
     }
 
     /** Участник звонка в виде, пригодном для отрисовки плитки. */
@@ -166,6 +174,31 @@ class CallEngine(
     /** true — идут чёрные кадры вместо настоящего экрана. */
     private val _screenFrozen = MutableStateFlow(false)
     val screenFrozen: StateFlow<Boolean> = _screenFrozen.asStateFlow()
+
+    // ── Авто-переподключение к ЧУЖОЙ демонстрации ─────────────────────
+    //
+    // Порт сторожа ArmWatchTimeout из CallForm_Tiles.cs. Ситуация с ПК
+    // дословно: «сервер поставил трек на паузу после перезапуска демки /
+    // смены кодека» — подписка есть, дорожка есть, а кадры не идут. Лечится
+    // повторной подпиской: она ничего не рвёт, а просто будит сервер, и тот
+    // возобновляет отправку. На ПК это делается каждые 3 секунды до 15,
+    // здесь ровно так же.
+    //
+    // На Android это нужнее, чем кажется: наша же заглушка чёрным кадром
+    // ПЕРЕПУБЛИКУЕТ дорожку демонстрации, а для зрителя это и есть
+    // «перезапуск демки» — тот самый случай, под который сторож и написан.
+    private class ScreenWatch(
+        val track: VideoTrack,
+        /** Пишется из потока WebRTC, читается из сторожа — отсюда Atomic. */
+        val lastFrameAt: AtomicLong,
+        val startedAt: Long,
+        var gaveUp: Boolean = false,
+    ) {
+        lateinit var sink: VideoSink
+    }
+
+    private val screenWatches = HashMap<String, ScreenWatch>()
+    private var remoteScreenWatchdog: Job? = null
 
     // Громкости входящего звука — модель один в один с NativeCallTransport.
     // Голос и звук демки живут по РАЗНЫМ правилам, и путать их нельзя:
@@ -287,6 +320,10 @@ class CallEngine(
             publishVoiceState()
 
             _state.value = State.CONNECTED
+            // Демонстрацию может начать кто угодно и когда угодно, а пауза
+            // трека случается как раз в момент подключения к нему — поэтому
+            // сторож живёт весь звонок, а не только пока смотрим.
+            startRemoteScreenWatchdog()
             refreshParticipants()
         } catch (e: Exception) {
             Log.e(TAG, "connect failed", e)
@@ -311,6 +348,7 @@ class CallEngine(
         blackTrack = null
         blackCapturer = null
         _screenFrozen.value = false
+        stopRemoteScreenWatchdog()
         audio.screenMixer = null
         _screenAudioOn.value = false
         runCatching { CallForegroundService.stop(appContext) }
@@ -606,6 +644,91 @@ class CallEngine(
             Log.e(TAG, "не удалось поставить чёрную заглушку демонстрации", it)
             _screenFrozen.value = false
         }
+    }
+
+    /**
+     * Сторож чужих демонстраций — порт ArmWatchTimeout.
+     *
+     * Запускается на весь звонок: демонстрацию может начать кто угодно и
+     * когда угодно, а пауза трека случается как раз в момент подключения к
+     * нему. Держать сторож только на время просмотра, как это сделано на
+     * ПК с кнопкой «Смотреть», здесь нельзя — у нас плитка подключается
+     * сама, отдельного «начала просмотра» просто нет.
+     */
+    private fun startRemoteScreenWatchdog() {
+        remoteScreenWatchdog?.cancel()
+        remoteScreenWatchdog = scope.launch {
+            while (isActive) {
+                delay(RESUBSCRIBE_EVERY_MS)
+                runCatching { pollRemoteScreens() }
+            }
+        }
+    }
+
+    private fun pollRemoteScreens() {
+        val r = room ?: return
+        val now = System.currentTimeMillis()
+        val alive = HashSet<String>()
+
+        r.remoteParticipants.values.forEach { p ->
+            val identity = p.identity?.value.orEmpty()
+            if (identity.isEmpty()) return@forEach
+
+            val pub = runCatching {
+                p.getTrackPublication(Track.Source.SCREEN_SHARE) as? RemoteTrackPublication
+            }.getOrNull() ?: return@forEach
+            alive.add(identity)
+
+            val track = pub.track as? VideoTrack
+            val watch = screenWatches[identity]
+
+            // Дорожки ещё не было или она сменилась — вешаем приёмник заново.
+            // Смена дорожки и есть перезапуск демонстрации у показывающего.
+            if (track != null && (watch == null || watch.track !== track)) {
+                watch?.let { old -> runCatching { old.track.removeRenderer(old.sink) } }
+                val stamp = AtomicLong(0L)
+                val fresh = ScreenWatch(track = track, lastFrameAt = stamp, startedAt = now)
+                fresh.sink = VideoSink { stamp.set(System.currentTimeMillis()) }
+                runCatching { track.addRenderer(fresh.sink) }
+                screenWatches[identity] = fresh
+                // Только что подписались — дать кадрам шанс прийти.
+                return@forEach
+            }
+
+            if (watch == null || track == null) return@forEach
+            if (watch.gaveUp) return@forEach
+
+            val stampValue = watch.lastFrameAt.get()
+            val silentSince = if (stampValue > 0) stampValue else watch.startedAt
+            val silence = now - silentSince
+            if (silence < RESUBSCRIBE_EVERY_MS) return@forEach
+
+            if (now - watch.startedAt > RESUBSCRIBE_GIVE_UP_MS && stampValue == 0L) {
+                Log.w(TAG, "демонстрация $identity молчит ${silence} мс — прекращаем будить")
+                watch.gaveUp = true
+                return@forEach
+            }
+
+            // Пере-подписка БЕЗ отписки: ничего не рвём, просто будим сервер,
+            // чтобы он возобновил поставленный на паузу трек. Ровно то же
+            // делает WatchScreen на ПК.
+            Log.d(TAG, "демонстрация $identity без кадров $silence мс — пере-подписка")
+            runCatching { pub.setSubscribed(true) }
+        }
+
+        // Участник ушёл или закончил показ — снимаем приёмник.
+        val gone = screenWatches.keys.filter { it !in alive }
+        gone.forEach { id ->
+            val w = screenWatches.remove(id) ?: return@forEach
+            runCatching { w.track.removeRenderer(w.sink) }
+        }
+    }
+
+    private fun stopRemoteScreenWatchdog() {
+        remoteScreenWatchdog?.cancel()
+        remoteScreenWatchdog = null
+        screenWatches.values.forEach { w -> runCatching { w.track.removeRenderer(w.sink) } }
+        screenWatches.clear()
     }
 
     private suspend fun stopBlackKeepalive(r: Room) {
