@@ -2,6 +2,8 @@ package com.pismo.messenger.ui.servers
 
 import com.pismo.messenger.ui.profile.UserProfileDialog
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,6 +54,8 @@ import com.pismo.messenger.ui.components.LetterAvatar
 import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.components.Pill
 import com.pismo.messenger.ui.login.PismoField
+import com.pismo.messenger.ui.components.ColorPalettePicker
+import com.pismo.messenger.ui.components.ColorPreviewRow
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -364,10 +368,22 @@ private fun RoleDialog(
         containerColor = PismoColors.BgSidebar,
         title = { Text(if (role == null) "Новая роль" else "Роль «${role.name}»", color = PismoColors.TextPrimary) },
         text = {
-            Column {
+            // Палитра с превью и четырьмя правами уже не помещается на
+            // маленьком экране — диалог должен прокручиваться.
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 PismoField(name, { name = it }, "Название")
+                Spacer(Modifier.height(10.dp))
+
+                Text("Цвет роли", color = PismoColors.TextSecondary, fontSize = 13.sp)
+                Spacer(Modifier.height(6.dp))
+                // Палитра вместо обязательного ввода кода — как на ПК, где
+                // рядом с полем HEX лежит ряд готовых образцов. Набор цветов
+                // взят оттуда один в один: цвет хранится строкой в базе и
+                // рисуется обоими клиентами.
+                ColorPalettePicker(selected = color, onPick = { color = it })
+                ColorPreviewRow(hex = color, sample = name)
                 Spacer(Modifier.height(8.dp))
-                PismoField(color, { color = it }, "Цвет (#RRGGBB)")
+                PismoField(color, { color = it }, "Свой код (#RRGGBB)")
                 Spacer(Modifier.height(8.dp))
                 PermCheck("Управление сервером", canManage) { canManage = it }
                 PermCheck("Банить", canBan) { canBan = it }

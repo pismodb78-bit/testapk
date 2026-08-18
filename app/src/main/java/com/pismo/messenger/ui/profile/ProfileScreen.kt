@@ -7,8 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.key
 import androidx.compose.ui.platform.LocalContext
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -98,27 +96,31 @@ fun ProfileScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit) {
         ActivityResultContracts.GetContent()
     ) { uri -> if (uri != null) cropUri = uri }
 
+    // Фон тоже проходит через обрезку. Раньше он заливался ОРИГИНАЛОМ:
+    // вертикальный снимок с камеры потом обрезался по центру при отрисовке,
+    // и в полосу попадало что попало — выбрать кадр было нельзя.
+    var bannerCropUri by remember { mutableStateOf<android.net.Uri?>(null) }
+
     val bannerPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            val data = withContext(Dispatchers.IO) {
-                runCatching {
-                    context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                }.getOrNull()
-            }
-            when {
-                data == null -> report("Не удалось прочитать изображение.", true)
-                data.size > 3 * 1024 * 1024 ->
-                    report("Файл больше 3 МБ — выберите изображение поменьше.", true)
-                ProfileRepository.setBanner(data) -> {
-                    bannerVersion++
-                    report("Фон профиля обновлён.", false)
+    ) { uri -> if (uri != null) bannerCropUri = uri }
+
+    bannerCropUri?.let { uri ->
+        BannerCropDialog(
+            uri = uri,
+            onCancel = { bannerCropUri = null },
+            onDone = { png ->
+                bannerCropUri = null
+                scope.launch {
+                    if (ProfileRepository.setBanner(png)) {
+                        bannerVersion++
+                        report("Фон профиля обновлён.", false)
+                    } else {
+                        report("Не удалось сохранить фон.", true)
+                    }
                 }
-                else -> report("Не удалось сохранить фон.", true)
-            }
-        }
+            },
+        )
     }
 
     cropUri?.let { uri ->

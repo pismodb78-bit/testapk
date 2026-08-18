@@ -51,6 +51,14 @@ import kotlin.math.min
 /** Итоговая сторона аватара — та же, что OUT в AvatarCropForm.cs. */
 private const val OUT_SIZE = 256
 
+/**
+ * Размер фона профиля. Пропорция 3:1 — под ту же полосу, которой баннер
+ * рисуется в карточке; 900 пикселей по ширине хватает любому экрану
+ * телефона, а весить такая картинка будет заметно меньше оригинала с камеры.
+ */
+private const val BANNER_W = 900
+private const val BANNER_H = 300
+
 /** Верхняя граница стороны исходника в памяти: 12 Мп фото иначе кладут процесс. */
 private const val MAX_SOURCE = 1600
 
@@ -67,6 +75,50 @@ fun AvatarCropDialog(
     uri: Uri,
     onCancel: () -> Unit,
     onDone: (ByteArray) -> Unit,
+) = ImageCropDialog(
+    uri = uri,
+    title = "Обрезка аватара",
+    aspect = 1f,
+    outWidth = OUT_SIZE,
+    outHeight = OUT_SIZE,
+    roundPreview = true,
+    onCancel = onCancel,
+    onDone = onDone,
+)
+
+/**
+ * Обрезка фона профиля — та же механика, только рамка широкая.
+ *
+ * Раньше фон заливался ОРИГИНАЛОМ: вертикальное фото с камеры обрезалось
+ * потом при отрисовке, по центру, и в полосу попадало что попало. Здесь
+ * пользователь сам решает, какая часть картинки станет фоном.
+ */
+@Composable
+fun BannerCropDialog(
+    uri: Uri,
+    onCancel: () -> Unit,
+    onDone: (ByteArray) -> Unit,
+) = ImageCropDialog(
+    uri = uri,
+    title = "Обрезка фона профиля",
+    aspect = BANNER_W.toFloat() / BANNER_H,
+    outWidth = BANNER_W,
+    outHeight = BANNER_H,
+    roundPreview = false,
+    onCancel = onCancel,
+    onDone = onDone,
+)
+
+@Composable
+private fun ImageCropDialog(
+    uri: Uri,
+    title: String,
+    aspect: Float,
+    outWidth: Int,
+    outHeight: Int,
+    roundPreview: Boolean,
+    onCancel: () -> Unit,
+    onDone: (ByteArray) -> Unit,
 ) {
     val context = LocalContext.current
 
@@ -77,7 +129,8 @@ fun AvatarCropDialog(
     // Геометрия в пикселях области предпросмотра: scale — во сколько раз
     // пиксель картинки крупнее пикселя экрана, offset — где лежит её левый
     // верхний угол. Так же считает ПК-версия.
-    var viewSize by remember { mutableStateOf(0) }
+    var viewW by remember { mutableStateOf(0) }
+    var viewH by remember { mutableStateOf(0) }
     var scale by remember(uri) { mutableStateOf(1f) }
     var minScale by remember(uri) { mutableStateOf(1f) }
     var offX by remember(uri) { mutableStateOf(0f) }
@@ -90,38 +143,42 @@ fun AvatarCropDialog(
 
     fun clamp() {
         val bmp = source ?: return
-        if (viewSize <= 0) return
+        if (viewW <= 0 || viewH <= 0) return
         val w = bmp.width * scale
         val h = bmp.height * scale
-        // Картинка обязана перекрывать всю область: иначе в кружок попадут
-        // прозрачные поля, и аватар получится с «дырой» по краю.
-        offX = offX.coerceIn(min(viewSize - w, 0f), max(viewSize - w, 0f).coerceAtLeast(0f))
-        offY = offY.coerceIn(min(viewSize - h, 0f), max(viewSize - h, 0f).coerceAtLeast(0f))
+        // Картинка обязана перекрывать всю рамку: иначе в неё попадут
+        // прозрачные поля, и на краю получится «дыра».
+        offX = offX.coerceIn(min(viewW - w, 0f), max(viewW - w, 0f).coerceAtLeast(0f))
+        offY = offY.coerceIn(min(viewH - h, 0f), max(viewH - h, 0f).coerceAtLeast(0f))
     }
 
-    fun fit(bmp: Bitmap, size: Int) {
-        minScale = max(size.toFloat() / bmp.width, size.toFloat() / bmp.height)
+    fun fit(bmp: Bitmap, w: Int, h: Int) {
+        minScale = max(w.toFloat() / bmp.width, h.toFloat() / bmp.height)
         scale = minScale
-        offX = (size - bmp.width * scale) / 2f
-        offY = (size - bmp.height * scale) / 2f
+        offX = (w - bmp.width * scale) / 2f
+        offY = (h - bmp.height * scale) / 2f
     }
 
     AlertDialog(
         onDismissRequest = onCancel,
         containerColor = PismoColors.BgSidebar,
-        title = { Text("Обрезка аватара", color = PismoColors.TextPrimary) },
+        title = { Text(title, color = PismoColors.TextPrimary) },
         text = {
             Column {
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .aspectRatio(1f)
-                        .clip(CircleShape)
+                        .aspectRatio(aspect)
+                        .clip(
+                            if (roundPreview) CircleShape
+                            else androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                        )
                         .background(PismoColors.BgDarkest)
                         .onSizeChanged { s ->
-                            if (s.width != viewSize) {
-                                viewSize = s.width
-                                source?.let { fit(it, viewSize) }
+                            if (s.width != viewW || s.height != viewH) {
+                                viewW = s.width
+                                viewH = s.height
+                                source?.let { fit(it, viewW, viewH) }
                             }
                         }
                         .pointerInput(source) {
@@ -131,9 +188,10 @@ fun AvatarCropDialog(
                                 scale = (scale * zoom).coerceIn(minScale, minScale * 5f)
                                 // Зум к центру области — иначе картинка
                                 // «убегает» из-под пальцев при масштабировании.
-                                val c = viewSize / 2f
-                                offX = c - (c - offX) * (scale / old) + pan.x
-                                offY = c - (c - offY) * (scale / old) + pan.y
+                                val cx = viewW / 2f
+                                val cy = viewH / 2f
+                                offX = cx - (cx - offX) * (scale / old) + pan.x
+                                offY = cy - (cy - offY) * (scale / old) + pan.y
                                 if (bmp.width > 0) clamp()
                             }
                         },
@@ -172,9 +230,10 @@ fun AvatarCropDialog(
                     onValueChange = { v ->
                         val old = scale
                         scale = (minScale * v).coerceIn(minScale, minScale * 5f)
-                        val c = viewSize / 2f
-                        offX = c - (c - offX) * (scale / old)
-                        offY = c - (c - offY) * (scale / old)
+                        val cx = viewW / 2f
+                        val cy = viewH / 2f
+                        offX = cx - (cx - offX) * (scale / old)
+                        offY = cy - (cy - offY) * (scale / old)
                         clamp()
                     },
                     valueRange = 1f..5f,
@@ -192,7 +251,7 @@ fun AvatarCropDialog(
                 onClick = {
                     val bmp = source ?: return@TextButton
                     busy = true
-                    val png = renderCrop(bmp, viewSize, scale, offX, offY)
+                    val png = renderCrop(bmp, viewW, viewH, scale, offX, offY, outWidth, outHeight)
                     busy = false
                     if (png != null) onDone(png) else onCancel()
                 },
@@ -227,34 +286,38 @@ private fun decodeScaled(context: Context, uri: Uri): Bitmap? = runCatching {
 }.getOrNull()
 
 /**
- * Переводит область предпросмотра обратно в координаты исходника и рисует
- * квадрат 256×256. Кружком картинка становится при ОТРИСОВКЕ — в БД, как и
- * на ПК, лежит квадрат: так аватар можно показать и квадратным.
+ * Переводит рамку предпросмотра обратно в координаты исходника и рисует
+ * картинку нужного размера. Кружком аватар становится при ОТРИСОВКЕ — в БД,
+ * как и на ПК, лежит квадрат: так его можно показать и квадратным.
  */
 private fun renderCrop(
     source: Bitmap,
-    viewSize: Int,
+    viewW: Int,
+    viewH: Int,
     scale: Float,
     offX: Float,
     offY: Float,
+    outWidth: Int,
+    outHeight: Int,
 ): ByteArray? = runCatching {
-    if (viewSize <= 0 || scale <= 0f) return@runCatching null
+    if (viewW <= 0 || viewH <= 0 || scale <= 0f) return@runCatching null
 
     val srcX = (-offX / scale)
     val srcY = (-offY / scale)
-    val srcSide = viewSize / scale
+    val srcW = viewW / scale
+    val srcH = viewH / scale
 
     val src = Rect(
         srcX.toInt().coerceIn(0, source.width),
         srcY.toInt().coerceIn(0, source.height),
-        (srcX + srcSide).toInt().coerceIn(0, source.width),
-        (srcY + srcSide).toInt().coerceIn(0, source.height),
+        (srcX + srcW).toInt().coerceIn(0, source.width),
+        (srcY + srcH).toInt().coerceIn(0, source.height),
     )
     if (src.width() <= 0 || src.height() <= 0) return@runCatching null
 
-    val out = Bitmap.createBitmap(OUT_SIZE, OUT_SIZE, Bitmap.Config.ARGB_8888)
+    val out = Bitmap.createBitmap(outWidth, outHeight, Bitmap.Config.ARGB_8888)
     Canvas(out).drawBitmap(
-        source, src, RectF(0f, 0f, OUT_SIZE.toFloat(), OUT_SIZE.toFloat()),
+        source, src, RectF(0f, 0f, outWidth.toFloat(), outHeight.toFloat()),
         Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG),
     )
 
