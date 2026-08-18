@@ -2,6 +2,8 @@ package com.pismo.messenger.call
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Color as AndroidColor
 import android.os.Build
 import android.util.Log
 import com.pismo.messenger.core.Prefs
@@ -28,14 +30,21 @@ import io.livekit.android.room.track.ScreenSharePresets
 import io.livekit.android.room.track.RemoteTrackPublication
 import io.livekit.android.room.track.Track
 import io.livekit.android.room.track.VideoEncoding
+import io.livekit.android.room.track.VideoCaptureParameter
 import io.livekit.android.room.track.VideoTrack
+import io.livekit.android.room.track.video.BitmapFrameCapturer
+import io.livekit.android.room.participant.VideoTrackPublishOptions
 import io.livekit.android.room.track.screencapture.ScreenCaptureParams
+import livekit.org.webrtc.VideoSink
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Движок звонков поверх LiveKit — Android-аналог NativeCallBridge/
@@ -67,6 +76,14 @@ class CallEngine(
          * пару килогерц сдвинула бы срез фильтра, но не сломала обработку.
          */
         private const val SAMPLE_RATE_HINT = 48000
+
+        /**
+         * Сколько молчать потоку кадров, чтобы счесть демонстрацию
+         * оборванной. Полторы секунды: на неподвижном экране кадры и так
+         * идут редко, а вот полутора секунд тишины при живом захвате не
+         * бывает — WebRTC шлёт повтор кадра, даже когда картинка не менялась.
+         */
+        private const val FRAME_SILENCE_MS = 1_500L
     }
 
     /** Участник звонка в виде, пригодном для отрисовки плитки. */
@@ -123,6 +140,32 @@ class CallEngine(
 
     /** Захватчик системного звука. Не null — значит демка идёт со звуком. */
     private var screenCapturer: ScreenAudioCapturer? = null
+
+    // ── Живучесть демонстрации ────────────────────────────────────────
+    //
+    // Android умеет прекращать захват экрана без нашего участия. Самый
+    // частый случай: в системном диалоге выбрана ОДНА программа, а не весь
+    // экран, — стоит её свернуть, и проекция останавливается. Дальше по
+    // цепочке: кадры перестают идти, дорожка уходит в mute, и у зрителя на
+    // ПК демонстрация сначала чернеет, а потом плитка пропадает совсем.
+    //
+    // Обрывать показ из-за того, что человек на секунду свернул окно,
+    // неправильно. Поэтому за потоком кадров следит сторож, и если они
+    // прекратились, на место мёртвой дорожки встаёт живая с чёрным кадром:
+    // зритель видит чёрный экран, но плитка на месте, звук демонстрации
+    // продолжает идти, и возвращение к показу не требует переподключения.
+    private var screenFrameSink: VideoSink? = null
+    private val lastScreenFrameAt = AtomicLong(0)
+    private var screenWatchdog: Job? = null
+    private var blackCapturer: BitmapFrameCapturer? = null
+    private var blackTrack: LocalVideoTrack? = null
+    private var blackJob: Job? = null
+    private var lastScreenWidth = 720
+    private var lastScreenHeight = 1280
+
+    /** true — идут чёрные кадры вместо настоящего экрана. */
+    private val _screenFrozen = MutableStateFlow(false)
+    val screenFrozen: StateFlow<Boolean> = _screenFrozen.asStateFlow()
 
     // Громкости входящего звука — модель один в один с NativeCallTransport.
     // Голос и звук демки живут по РАЗНЫМ правилам, и путать их нельзя:
@@ -258,6 +301,16 @@ class CallEngine(
         // означает, что AudioRecord продолжит писать звук после конца звонка.
         runCatching { screenCapturer?.releaseAudioResources() }
         screenCapturer = null
+        screenWatchdog?.cancel()
+        screenWatchdog = null
+        screenFrameSink = null
+        blackJob?.cancel()
+        blackJob = null
+        runCatching { blackTrack?.stopCapture() }
+        runCatching { blackTrack?.dispose() }
+        blackTrack = null
+        blackCapturer = null
+        _screenFrozen.value = false
         audio.screenMixer = null
         _screenAudioOn.value = false
         runCatching { CallForegroundService.stop(appContext) }
@@ -403,15 +456,154 @@ class CallEngine(
         }
 
         if (withAudio && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) attachScreenAudio(r)
+        watchScreenFrames(r)
         refreshParticipants()
     }
 
     suspend fun stopScreenShare() {
         val r = room ?: return
+        stopScreenWatchdog()
+        stopBlackKeepalive(r)
         detachScreenAudio(r)
         runCatching { r.localParticipant.setScreenShareEnabled(false) }
         _screenSharing.value = false
+        _screenFrozen.value = false
         refreshParticipants()
+    }
+
+    // ── Живучесть демонстрации ────────────────────────────────────────
+
+    /**
+     * Сторож потока кадров.
+     *
+     * Узнать «проекция остановлена» напрямую нельзя: MediaProjection создаёт
+     * и держит внутри себя SDK, наружу объект не отдаётся. Зато видно
+     * следствие — кадры перестают приходить. Вешаем на дорожку лёгкий приёмник,
+     * который только отмечает время последнего кадра, и раз в секунду
+     * проверяем, не затянулась ли тишина.
+     */
+    private fun watchScreenFrames(r: Room) {
+        stopScreenWatchdog()
+
+        val track = r.localParticipant
+            .getTrackPublication(Track.Source.SCREEN_SHARE)?.track as? VideoTrack ?: return
+
+        lastScreenFrameAt.set(System.currentTimeMillis())
+        val sink = VideoSink { frame ->
+            lastScreenFrameAt.set(System.currentTimeMillis())
+            // Запоминаем геометрию: чёрный кадр должен быть той же формы,
+            // иначе у зрителя на месте вертикального экрана вдруг окажется
+            // горизонтальный прямоугольник.
+            val w = frame.rotatedWidth
+            val h = frame.rotatedHeight
+            if (w > 0 && h > 0) {
+                lastScreenWidth = w
+                lastScreenHeight = h
+            }
+        }
+        runCatching { track.addRenderer(sink) }
+        screenFrameSink = sink
+
+        screenWatchdog = scope.launch {
+            while (isActive && _screenSharing.value) {
+                delay(1_000)
+                if (!_screenSharing.value || blackTrack != null) continue
+                val silence = System.currentTimeMillis() - lastScreenFrameAt.get()
+                if (silence > FRAME_SILENCE_MS) {
+                    Log.w(TAG, "кадры экрана не идут $silence мс — переходим на чёрный кадр")
+                    startBlackKeepalive(r)
+                }
+            }
+        }
+    }
+
+    private fun stopScreenWatchdog() {
+        screenWatchdog?.cancel()
+        screenWatchdog = null
+        val sink = screenFrameSink ?: return
+        screenFrameSink = null
+        val track = room?.localParticipant
+            ?.getTrackPublication(Track.Source.SCREEN_SHARE)?.track as? VideoTrack
+        runCatching { track?.removeRenderer(sink) }
+    }
+
+    /**
+     * Ставит на место умершей демонстрации дорожку с чёрным кадром.
+     *
+     * Порядок «сначала снять мёртвую, потом опубликовать живую» вынужденный:
+     * источник SCREEN_SHARE у участника один, и две дорожки под ним
+     * одновременно не живут. Пауза выходит меньше секунды — несравнимо с
+     * тем, что было раньше, когда плитка пропадала насовсем.
+     */
+    private suspend fun startBlackKeepalive(r: Room) {
+        if (blackTrack != null) return
+
+        val w = (lastScreenWidth / 2) * 2
+        val h = (lastScreenHeight / 2) * 2
+
+        runCatching {
+            stopScreenWatchdog()
+            r.localParticipant.setScreenShareEnabled(false)
+
+            val capturer = BitmapFrameCapturer()
+            val track = r.localParticipant.createVideoTrack(
+                name = "screen_keepalive",
+                capturer = capturer,
+                options = LocalVideoTrackOptions(
+                    isScreencast = true,
+                    // adaptOutputToDimensions = false: подгонять нечего,
+                    // кадр уже нужного размера, а включённая подгонка
+                    // прогнала бы его через масштабирование впустую.
+                    captureParams = VideoCaptureParameter(w, h, 2, adaptOutputToDimensions = false),
+                ),
+            )
+            track.startCapture()
+
+            blackCapturer = capturer
+            blackTrack = track
+
+            // Кадры начинаем гнать ДО публикации: дорожка, которая ни разу
+            // не отдала кадр, уходит в mute сразу после подписки.
+            val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply {
+                eraseColor(AndroidColor.BLACK)
+            }
+            blackJob = scope.launch {
+                while (isActive) {
+                    runCatching { capturer.pushBitmap(bitmap, 0) }
+                    delay(500)
+                }
+            }
+
+            r.localParticipant.publishVideoTrack(
+                track,
+                VideoTrackPublishOptions(
+                    source = Track.Source.SCREEN_SHARE,
+                    simulcast = false,
+                    // Чёрный кадр раз в полсекунды сжимается почти в ничто,
+                    // но потолок ставим явно: незачем резервировать под него
+                    // полосу, нужную голосу.
+                    videoEncoding = VideoEncoding(150_000, 2),
+                ),
+            )
+
+            _screenFrozen.value = true
+            refreshParticipants()
+        }.onFailure {
+            Log.e(TAG, "не удалось поставить чёрную заглушку демонстрации", it)
+            _screenFrozen.value = false
+        }
+    }
+
+    private suspend fun stopBlackKeepalive(r: Room) {
+        blackJob?.cancel()
+        blackJob = null
+        val track = blackTrack ?: return
+        blackTrack = null
+        blackCapturer = null
+        runCatching { r.localParticipant.unpublishTrack(track) }
+        runCatching { track.stopCapture() }
+        runCatching { track.dispose() }
+        _screenFrozen.value = false
     }
 
     /**

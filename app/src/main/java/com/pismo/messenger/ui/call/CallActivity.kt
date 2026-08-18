@@ -12,6 +12,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -20,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -28,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.HeadsetOff
 import androidx.compose.material.icons.filled.Mic
@@ -50,6 +55,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -379,6 +385,16 @@ private fun CallScreen(
     var denoise by remember { mutableStateOf(Prefs.noiseSuppression) }
     var shareAudio by remember { mutableStateOf(Prefs.shareScreenAudio) }
     var volumeFor by remember { mutableStateOf<CallEngine.ParticipantState?>(null) }
+    // Плитка, развёрнутая во весь экран. Ради демонстрации это и делается:
+    // чужой экран в четверти телефона не читается вообще.
+    var fullscreenOf by remember { mutableStateOf<String?>(null) }
+    val screenFrozen by engine.screenFrozen.collectAsState()
+
+    // Альбомная ориентация приходит сама: активность объявлена с
+    // configChanges, так что поворот её не пересоздаёт, а Compose видит
+    // новую конфигурацию и перекладывает экран.
+    val landscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
+        android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
     val screenCaptureLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -433,12 +449,7 @@ private fun CallScreen(
 
     volumeFor?.let { p -> ParticipantVolumeDialog(engine, p) { volumeFor = null } }
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(PismoColors.BgDarkest)
-            .padding(12.dp)
-    ) {
+    val header: @Composable () -> Unit = {
         Text(
             peerName.ifBlank { "Звонок" },
             color = PismoColors.TextPrimary,
@@ -458,27 +469,49 @@ private fun CallScreen(
             color = if (state == CallEngine.State.FAILED) PismoColors.Red else PismoColors.TextMuted,
             fontSize = 13.sp,
         )
+        if (screenFrozen) {
+            // Android остановил захват сам — чаще всего потому, что показывали
+            // одну программу и свернули её. Дорожку мы держим живой чёрным
+            // кадром, но человек должен понимать, почему у собеседника чернота.
+            Text(
+                "Захват экрана остановлен системой — собеседник видит чёрный " +
+                        "экран. Нажмите «Экран», чтобы начать показ заново.",
+                color = PismoColors.Yellow,
+                fontSize = 12.sp,
+            )
+        }
+    }
 
-        Spacer(Modifier.height(12.dp))
-
+    val grid: @Composable (Modifier) -> Unit = { mod ->
         LazyVerticalGrid(
-            columns = GridCells.Fixed(if (participants.size <= 2) 1 else 2),
-            modifier = Modifier.weight(1f),
+            // В альбомной ориентации по высоте места мало, зато по ширине
+            // много: плитки идут в два столбца уже с двух участников.
+            columns = GridCells.Fixed(
+                when {
+                    participants.size <= 1 -> 1
+                    landscape -> 2
+                    participants.size <= 2 -> 1
+                    else -> 2
+                }
+            ),
+            modifier = mod,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(participants, key = { it.identity }) { p ->
-                ParticipantTile(engine, p, onLongPress = { if (!p.isLocal) volumeFor = p })
+                ParticipantTile(
+                    engine = engine,
+                    p = p,
+                    landscape = landscape,
+                    onClick = { if (p.screenTrack != null || p.cameraTrack != null) fullscreenOf = p.identity },
+                    onLongPress = { if (!p.isLocal) volumeFor = p },
+                )
             }
         }
+    }
 
-        Spacer(Modifier.height(12.dp))
-
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    val controls: @Composable (Boolean) -> Unit = { vertical ->
+        val buttons: @Composable () -> Unit = {
             CallButton(
                 icon = if (micMuted) Icons.Default.MicOff else Icons.Default.Mic,
                 active = !micMuted,
@@ -542,6 +575,127 @@ private fun CallScreen(
                 }
             }
         }
+
+        if (vertical) {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) { buttons() }
+        } else {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically,
+            ) { buttons() }
+        }
+    }
+
+    if (landscape) {
+        // Шапку в альбомной убираем совсем: две строки текста съедали треть
+        // и без того невысокого экрана, а имя собеседника и так на плитке.
+        Row(
+            Modifier
+                .fillMaxSize()
+                .background(PismoColors.BgDarkest)
+                .padding(10.dp)
+        ) {
+            grid(Modifier.weight(1f))
+            Spacer(Modifier.width(10.dp))
+            controls(true)
+        }
+    } else {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(PismoColors.BgDarkest)
+                .padding(12.dp)
+        ) {
+            header()
+            Spacer(Modifier.height(12.dp))
+            grid(Modifier.weight(1f))
+            Spacer(Modifier.height(12.dp))
+            controls(false)
+        }
+    }
+
+    // Плитка во весь экран — прежде всего ради чужой демонстрации.
+    fullscreenOf?.let { id ->
+        val p = participants.firstOrNull { it.identity == id }
+        if (p == null) {
+            fullscreenOf = null
+        } else {
+            FullscreenTile(engine, p) { fullscreenOf = null }
+        }
+    }
+}
+
+/**
+ * Плитка во весь экран. Нужна для демонстрации: чужой экран, ужатый в
+ * четверть телефона, нечитаем в принципе, а вертикальный экран телефона
+ * внутри горизонтальной плитки превращается в узкую полоску. Здесь картинка
+ * занимает всё, что есть, и в альбомной ориентации это наконец нормальный
+ * просмотр.
+ */
+@Composable
+private fun FullscreenTile(
+    engine: CallEngine,
+    p: CallEngine.ParticipantState,
+    onDismiss: () -> Unit,
+) {
+    val track = p.screenTrack ?: p.cameraTrack
+
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        // Приёмник кадров обязателен к снятию: без этого закрытый полный
+        // экран продолжает получать кадры и держать поверхность, а на
+        // телефоне аппаратных декодеров считанные единицы.
+        var renderer by remember { mutableStateOf<TextureViewRenderer?>(null) }
+        DisposableEffect(track) {
+            onDispose {
+                val r = renderer
+                renderer = null
+                if (r != null) {
+                    runCatching { track?.removeRenderer(r) }
+                    runCatching { r.release() }
+                }
+            }
+        }
+
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            if (track != null) {
+                AndroidView(
+                    factory = { ctx ->
+                        TextureViewRenderer(ctx).also { view ->
+                            engine.initRenderer(view)
+                            runCatching { track.addRenderer(view) }
+                            renderer = view
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            Text(
+                p.name,
+                color = Color.White,
+                fontSize = 13.sp,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .statusBarsPadding()
+                    .padding(12.dp),
+            )
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(12.dp),
+            ) {
+                Icon(Icons.Default.Close, "Закрыть", tint = Color.White)
+            }
+        }
     }
 }
 
@@ -550,6 +704,8 @@ private fun CallScreen(
 private fun ParticipantTile(
     engine: CallEngine,
     p: CallEngine.ParticipantState,
+    landscape: Boolean,
+    onClick: () -> Unit,
     onLongPress: () -> Unit,
 ) {
     val track = p.screenTrack ?: p.cameraTrack
@@ -564,13 +720,24 @@ private fun ParticipantTile(
         }
     }
 
+    // Пропорции плитки. 16:9 годится для камеры, но НЕ для демонстрации с
+    // телефона: там кадр вертикальный, и внутри горизонтальной плитки от
+    // него остаётся узкая полоска по центру — отсюда и ощущение, что демка
+    // «мыльная», хотя на самом деле она просто крошечная.
+    val ratio = when {
+        track == null -> 1f
+        p.screenTrack != null && !landscape -> 3f / 4f
+        else -> 16f / 9f
+    }
+
     Box(
         Modifier
             .fillMaxWidth()
-            .aspectRatio(if (track != null) 16f / 9f else 1f)
+            .aspectRatio(ratio)
             .clip(RoundedCornerShape(12.dp))
             .background(PismoColors.BgSidebar)
-            .combinedClickable(onClick = {}, onLongClick = onLongPress),
+            .focusProperties { canFocus = false }
+            .combinedClickable(onClick = onClick, onLongClick = onLongPress),
         contentAlignment = Alignment.Center,
     ) {
         if (track != null) {
