@@ -517,14 +517,26 @@ class CallEngine(
         }
     }
 
-    private fun stopScreenWatchdog() {
-        screenWatchdog?.cancel()
-        screenWatchdog = null
+    /**
+     * Снимает только приёмник кадров, не трогая корутину сторожа.
+     *
+     * Отдельный метод нужен именно потому, что подмена дорожки происходит
+     * ВНУТРИ сторожа: отменить там его собственную корутину — значит
+     * оборвать самого себя на первой же точке приостановки, посреди
+     * публикации новой дорожки.
+     */
+    private fun detachScreenSink() {
         val sink = screenFrameSink ?: return
         screenFrameSink = null
         val track = room?.localParticipant
             ?.getTrackPublication(Track.Source.SCREEN_SHARE)?.track as? VideoTrack
         runCatching { track?.removeRenderer(sink) }
+    }
+
+    private fun stopScreenWatchdog() {
+        screenWatchdog?.cancel()
+        screenWatchdog = null
+        detachScreenSink()
     }
 
     /**
@@ -542,7 +554,9 @@ class CallEngine(
         val h = (lastScreenHeight / 2) * 2
 
         runCatching {
-            stopScreenWatchdog()
+            // Только приёмник: сторож — это корутина, из которой мы сюда и
+            // пришли, отменять её отсюда нельзя.
+            detachScreenSink()
             r.localParticipant.setScreenShareEnabled(false)
 
             val capturer = BitmapFrameCapturer()
