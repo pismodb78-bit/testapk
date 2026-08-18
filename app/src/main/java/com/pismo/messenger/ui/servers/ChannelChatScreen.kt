@@ -59,6 +59,7 @@ import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.ReactionsRepository
 import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.core.PresenceReporter
+import com.pismo.messenger.core.Mentions
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.formatDateSeparator
 import com.pismo.messenger.net.SignalingClient
@@ -106,6 +107,8 @@ fun ChannelChatScreen(
     var editing by remember { mutableStateOf<ChatMessage?>(null) }
     var loading by remember(channelId) { mutableStateOf(remembered == null) }
     var lastCount by remember { mutableStateOf(0) }
+    // Логин и роль — для подсветки сообщений, где упомянули меня.
+    var mentionMe by remember(channelId) { mutableStateOf("" to "") }
     // Множественное выделение — то же, что в личных чатах.
     var selectMode by remember(channelId) { mutableStateOf(false) }
     var selectedIds by remember(channelId) { mutableStateOf(setOf<Int>()) }
@@ -145,6 +148,11 @@ fun ChannelChatScreen(
         if (scrollToEnd && messages.isNotEmpty() && atBottom) {
             listState.scrollToItem(messages.lastIndex)
         }
+    }
+
+    LaunchedEffect(channelId) {
+        mentionMe = runCatching { ServerRepository.mentionIdentity(channelId) }
+            .getOrDefault("" to "")
     }
 
     LaunchedEffect(channelId) {
@@ -317,6 +325,8 @@ fun ChannelChatScreen(
                             MessageBubble(
                                 msg = msg,
                                 isGroup = true,          // в канале всегда показываем автора
+                                mentioned = msg.senderId != UserSession.effectiveId &&
+                                    Mentions.mentionsMe(msg.text, mentionMe.first, mentionMe.second),
                                 selectMode = selectMode,
                                 selected = msg.id in selectedIds,
                                 onEnterSelect = {

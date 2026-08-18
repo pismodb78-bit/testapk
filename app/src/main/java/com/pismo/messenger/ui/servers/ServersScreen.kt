@@ -50,7 +50,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.model.ChannelType
 import com.pismo.messenger.data.model.ServerChannel
 import com.pismo.messenger.data.model.ServerPermissions
@@ -102,7 +101,7 @@ fun ServersScreen(
         runCatching {
             servers = ServerRepository.myServers()
             if (selected == null) selected = servers.firstOrNull()
-            badges = ServerRepository.badges(UserSession.userName)
+            badges = ServerRepository.badges()
         }.onFailure { error = it.message.orEmpty() }
     }
 
@@ -124,7 +123,7 @@ fun ServersScreen(
             delay(5000)
             runCatching {
                 selected?.let { voice = PresenceRepository.voiceForServer(it.id) }
-                badges = ServerRepository.badges(UserSession.userName)
+                badges = ServerRepository.badges()
             }
         }
     }

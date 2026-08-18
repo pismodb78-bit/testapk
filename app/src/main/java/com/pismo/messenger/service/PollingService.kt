@@ -150,7 +150,7 @@ class PollingService : LifecycleService() {
 
         val muted = ServerRepository.mutedChannelIds()
         val names = runCatching { ServerRepository.channelNames() }.getOrDefault(emptyMap())
-        val badges = runCatching { ServerRepository.badges(UserSession.userName) }
+        val badges = runCatching { ServerRepository.badges() }
             .getOrDefault(emptyList())
 
         for ((channelId, _) in fresh) {

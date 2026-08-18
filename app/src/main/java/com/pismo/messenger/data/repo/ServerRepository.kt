@@ -567,7 +567,14 @@ object ServerRepository {
      * Упоминание = @login / @роль-на-этом-сервере / @все|@all|@everyone,
      * либо ответ на моё сообщение.
      */
-    suspend fun badges(myLogin: String): List<Badge> {
+    /**
+     * Раньше метод принимал myLogin, но не использовал его: упоминания
+     * считаются либо по таблице server_mentions, либо по ответам на мои
+     * сообщения — и то и другое по id. Хуже того, на вызовах передавалось
+     * ОТОБРАЖАЕМОЕ ИМЯ вместо логина, так что параметр вводил в заблуждение
+     * при чтении. Убран.
+     */
+    suspend fun badges(): List<Badge> {
         val me = UserSession.effectiveId
         if (hasReplyCol == null) hasReplyCol = columnExists("server_messages", "reply_to_id")
         if (hasDeletedCol == null) hasDeletedCol = columnExists("server_messages", "is_deleted")
@@ -673,6 +680,34 @@ object ServerRepository {
                     (myLogin.isNotEmpty() && lower.contains("@$myLogin")) ||
                     (myRole.isNotBlank() && lower.contains("@$myRole"))
         }
+    }
+
+    /**
+     * Мой логин и название моей роли на сервере этого канала.
+     *
+     * Нужны, чтобы подсветить сообщение, в котором меня упомянули: правило
+     * MentionsMe с ПК смотрит именно на «@логин» и «@название-роли».
+     * Значение кэшируется на канал — оно не меняется, пока не сменят роль.
+     */
+    private val mentionIdentityCache = HashMap<Int, Pair<String, String>>()
+
+    suspend fun mentionIdentity(channelId: Int): Pair<String, String> {
+        synchronized(mentionIdentityCache) { mentionIdentityCache[channelId] }?.let { return it }
+        val me = UserSession.effectiveId
+        val login = runCatching {
+            Db.scalarString("SELECT login FROM users WHERE id=?", me).orEmpty()
+        }.getOrDefault("")
+        val role = runCatching {
+            Db.scalarString(
+                "SELECT r.name FROM server_channels sc " +
+                        "JOIN server_members m ON m.server_id = sc.server_id AND m.user_id = ? " +
+                        "JOIN server_roles r ON r.id = m.role_id WHERE sc.id = ?",
+                me, channelId
+            ).orEmpty()
+        }.getOrDefault("")
+        val pair = login to role
+        synchronized(mentionIdentityCache) { mentionIdentityCache[channelId] = pair }
+        return pair
     }
 
     /**

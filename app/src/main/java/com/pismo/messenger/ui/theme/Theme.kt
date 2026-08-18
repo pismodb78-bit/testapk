@@ -35,6 +35,8 @@ data class PismoPalette(
     val bgMain: Color,
     val bgHover: Color,
     val bgBubbleOther: Color,
+    /** Пузырь, в котором упомянули меня — зеленоватый, как на ПК. */
+    val mentionBubble: Color,
     val bgElevated: Color,
     val textPrimary: Color,
     val textSecondary: Color,
@@ -50,6 +52,7 @@ private val DarkPalette = PismoPalette(
     bgMain = Color(0xFF36393F),
     bgHover = Color(0xFF41444B),
     bgBubbleOther = Color(0xFF40444B),
+    mentionBubble = Color(0xFF2F4437),   // (47,68,55) — значение с ПК
     bgElevated = Color(0xFF2B2D31),
     textPrimary = Color(0xFFDCDDDE),
     textSecondary = Color(0xFFB9BBBE),
@@ -70,6 +73,9 @@ private val LightPalette = PismoPalette(
     bgMain = Color(0xFFFFFFFF),      // область сообщений
     bgHover = Color(0xFFE7E9EC),
     bgBubbleOther = Color(0xFFEDEFF2),
+    // На светлой теме зелень с ПК читалась бы как чёрная плашка,
+    // поэтому берём тот же оттенок в светлой яркости.
+    mentionBubble = Color(0xFFDDF0E2),
     bgElevated = Color(0xFFF7F8FA),
     textPrimary = Color(0xFF1E2124),
     textSecondary = Color(0xFF4E5058),
@@ -174,6 +180,7 @@ object PismoColors {
     val BgMain: Color get() = palette.bgMain
     val BgHover: Color get() = palette.bgHover
     val BgBubbleOther: Color get() = palette.bgBubbleOther
+    val MentionBubble: Color get() = palette.mentionBubble
     val BgElevated: Color get() = palette.bgElevated
 
     val TextPrimary: Color get() = palette.textPrimary

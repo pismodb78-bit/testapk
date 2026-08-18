@@ -35,6 +35,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -79,6 +83,12 @@ fun MessageBubble(
     // выключен, всё работает ровно как раньше.
     selectMode: Boolean = false,
     selected: Boolean = false,
+    /**
+     * Меня упомянули в этом сообщении. На ПК такой пузырь красится
+     * зеленоватым (47,68,55) — заметить обращение в потоке канала иначе
+     * почти невозможно.
+     */
+    mentioned: Boolean = false,
     onEnterSelect: () -> Unit = {},
     onToggleSelect: () -> Unit = {},
 ) {
@@ -154,6 +164,8 @@ fun MessageBubble(
                                 // светлой теме осветлять уже некуда.
                                 selected -> if (isMine) PismoColors.Blurple else PismoColors.BgHover
                                 isMine -> PismoColors.Blurple
+                                // Тот же зеленоватый, что на ПК.
+                                mentioned -> PismoColors.MentionBubble
                                 else -> PismoColors.BgBubbleOther
                             }
                         )
@@ -305,7 +317,11 @@ fun MessageBubble(
                         }
 
                         if (msg.text.isNotBlank()) {
-                            Text(msg.text, color = PismoColors.TextPrimary, fontSize = 15.sp)
+                            Text(
+                                highlightMentions(msg.text, isMine),
+                                color = PismoColors.onBubble(isMine),
+                                fontSize = 15.sp,
+                            )
                         }
                     }
 
@@ -471,5 +487,33 @@ private fun VoiceRow(msgId: Int, audio: ByteArray?, isMine: Boolean) {
             color = PismoColors.onBubble(isMine),
             fontSize = 13.sp,
         )
+    }
+}
+
+
+/**
+ * Подсвечивает @упоминания внутри текста сообщения.
+ *
+ * Правило выделения — то же, что у разбора: «@» и всё до пробела или
+ * следующей собаки. Отдельного цвета для «упомянули именно меня» здесь нет
+ * намеренно: это видно по фону всего пузыря, как и на ПК, а раскрашивать
+ * ещё и слово значило бы сказать одно и то же дважды.
+ */
+@Composable
+private fun highlightMentions(text: String, isMine: Boolean): AnnotatedString {
+    val spans = com.pismo.messenger.core.Mentions.spans(text)
+    if (spans.isEmpty()) return AnnotatedString(text)
+
+    val accent = if (isMine) Color.White else PismoColors.Cyan
+    return buildAnnotatedString {
+        var pos = 0
+        for (range in spans) {
+            if (range.first > pos) append(text.substring(pos, range.first))
+            withStyle(SpanStyle(color = accent, fontWeight = FontWeight.SemiBold)) {
+                append(text.substring(range.first, range.last + 1))
+            }
+            pos = range.last + 1
+        }
+        if (pos < text.length) append(text.substring(pos))
     }
 }
