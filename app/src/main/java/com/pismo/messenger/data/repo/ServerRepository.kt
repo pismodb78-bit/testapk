@@ -722,6 +722,11 @@ object ServerRepository {
         val recent = channelMessages(channelId, limit = 500)
         val q = query.trim().lowercase()
         if (q.isEmpty()) return emptyList()
-        return recent.filter { it.text.lowercase().contains(q) }.takeLast(limit)
+        // Ищем по тексту И ПО АВТОРУ — как RunChannelSearch на ПК, где
+        // строка поиска склеивается из текста и имени отправителя. Искать
+        // «что писал Петров» иначе было нечем.
+        return recent.filter {
+            it.text.lowercase().contains(q) || it.senderName.lowercase().contains(q)
+        }.takeLast(limit)
     }
 }

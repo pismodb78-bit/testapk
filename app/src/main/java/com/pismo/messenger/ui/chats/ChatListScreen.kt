@@ -18,6 +18,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.GroupAdd
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
@@ -61,6 +63,7 @@ import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.group.CreateGroupDialog
 import com.pismo.messenger.ui.group.GroupMembersDialog
 import com.pismo.messenger.ui.components.UnreadBadge
+import com.pismo.messenger.ui.login.PismoField
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -85,6 +88,10 @@ fun ChatListScreen(
     var error by remember { mutableStateOf("") }
     var showCreateGroup by remember { mutableStateOf(false) }
     var manageGroup by remember { mutableStateOf<GroupSummary?>(null) }
+    // Поиск по списку — «Поиск чатов…» с ПК. Фильтруем уже загруженное:
+    // список и так весь на руках, дёргать базу на каждую букву незачем.
+    var query by remember { mutableStateOf("") }
+    var searchOpen by remember { mutableStateOf(false) }
     var userActions by remember { mutableStateOf<Conversation?>(null) }
 
     suspend fun reload() {
@@ -178,6 +185,16 @@ fun ChatListScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = {
+                        searchOpen = !searchOpen
+                        if (!searchOpen) query = ""
+                    }) {
+                        Icon(
+                            if (searchOpen) Icons.Default.Close else Icons.Default.Search,
+                            if (searchOpen) "Закрыть поиск" else "Поиск чатов",
+                            tint = if (searchOpen) PismoColors.Blurple else PismoColors.TextSecondary,
+                        )
+                    }
                     IconButton(onClick = { scope.launch { reload() } }) {
                         Icon(Icons.Default.Refresh, "Обновить", tint = PismoColors.TextSecondary)
                     }
@@ -206,6 +223,31 @@ fun ChatListScreen(
                     color = PismoColors.Blurple,
                 )
             } else {
+                val q = query.trim().lowercase()
+                // Ищем по имени и по логину: на ПК строка поиска смотрит на
+                // оба поля, и «@petrov» находит человека так же, как «Пётр».
+                val shownGroups =
+                    if (q.isEmpty()) groups
+                    else groups.filter { it.name.lowercase().contains(q) }
+                val shownChats =
+                    if (q.isEmpty()) conversations
+                    else conversations.filter {
+                        it.name.lowercase().contains(q) ||
+                            it.login.lowercase().contains(q)
+                    }
+
+                Column(Modifier.fillMaxSize()) {
+                if (searchOpen) {
+                    PismoField(query, { query = it }, "Поиск чатов…")
+                    if (q.isNotEmpty() && shownGroups.isEmpty() && shownChats.isEmpty()) {
+                        Text(
+                            "Ничего не найдено.",
+                            color = PismoColors.TextMuted,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(16.dp),
+                        )
+                    }
+                }
                 LazyColumn(Modifier.fillMaxSize()) {
                     if (error.isNotEmpty()) {
                         item {
@@ -218,9 +260,9 @@ fun ChatListScreen(
                         }
                     }
 
-                    if (groups.isNotEmpty()) {
+                    if (shownGroups.isNotEmpty()) {
                         item { SectionHeader("ГРУППЫ") }
-                        items(groups, key = { "g${it.id}" }) { g ->
+                        items(shownGroups, key = { "g${it.id}" }) { g ->
                             GroupRow(
                                 g = g,
                                 onClick = { onOpenGroup(g.id, g.name) },
@@ -229,13 +271,15 @@ fun ChatListScreen(
                         }
                     }
 
-                    item {
-                        SectionHeader(
-                            if (UserSession.isAdminRootView) "ВСЕ ПОЛЬЗОВАТЕЛИ"
-                            else "ЛИЧНЫЕ СООБЩЕНИЯ"
-                        )
+                    if (shownChats.isNotEmpty()) {
+                        item {
+                            SectionHeader(
+                                if (UserSession.isAdminRootView) "ВСЕ ПОЛЬЗОВАТЕЛИ"
+                                else "ЛИЧНЫЕ СООБЩЕНИЯ"
+                            )
+                        }
                     }
-                    items(conversations, key = { "u${it.userId}" }) { c ->
+                    items(shownChats, key = { "u${it.userId}" }) { c ->
                         ConversationRow(
                             c = c,
                             presence = presence[c.userId],
@@ -245,6 +289,7 @@ fun ChatListScreen(
                     }
 
                     item { Spacer(Modifier.height(24.dp)) }
+                }
                 }
             }
         }

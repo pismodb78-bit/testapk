@@ -33,6 +33,12 @@ data class Conversation(
     val lastMessage: String,
     val lastTimeMs: Long?,
     val unread: Int,
+    /**
+     * Логин нужен поиску по списку чатов: на ПК строка поиска смотрит и на
+     * имя, и на логин, поэтому «@petrov» находит человека так же, как
+     * «Пётр». Запрос списка его и так выбирает.
+     */
+    val login: String = "",
 )
 
 /** Строка списка групп. */

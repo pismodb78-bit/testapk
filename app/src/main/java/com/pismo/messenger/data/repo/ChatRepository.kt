@@ -76,6 +76,7 @@ object ChatRepository {
             Conversation(
                 userId = rs.getInt("id"),
                 name = buildName(rs.str("Name"), rs.str("Surname"), rs.str("login")),
+                login = rs.str("login"),
                 lastMessage = if (lastRaw == null) "" else Crypto.dec(lastRaw),
                 lastTimeMs = rs.getLong("last_time").takeIf { it > 0 }?.times(1000),
                 unread = rs.getInt("unread"),
@@ -100,6 +101,7 @@ object ChatRepository {
             lastMessage = rs.str("role"),
             lastTimeMs = null,
             unread = 0,
+            login = rs.str("login"),
         )
     }
 
@@ -694,7 +696,13 @@ object ChatRepository {
             Scope.GROUP -> loadGroupMessages(target, limit = depth)
             else -> loadDirectMessages(target, limit = depth)
         }
-        return recent.filter { !it.isDeleted && it.text.lowercase().contains(q) }
+        // По тексту И по автору — как на ПК: там строка поиска склеивается
+        // из текста сообщения и имени отправителя, поэтому «что писал
+        // Петров» находится в групповом чате одним словом.
+        return recent.filter {
+            !it.isDeleted &&
+                (it.text.lowercase().contains(q) || it.senderName.lowercase().contains(q))
+        }
     }
 
     /** Стоит ли показать встроенный плеер сразу (видео-файл до 30 МБ). */
