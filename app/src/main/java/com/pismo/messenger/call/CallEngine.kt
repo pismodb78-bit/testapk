@@ -14,6 +14,7 @@ import com.pismo.messenger.service.CallForegroundService
 import com.pismo.messenger.service.Notifications
 import io.livekit.android.LiveKit
 import com.twilio.audioswitch.AudioDevice
+import com.twilio.audioswitch.AudioDeviceChangeListener
 import io.livekit.android.RoomOptions
 import io.livekit.android.audio.ScreenAudioCapturer
 import io.livekit.android.events.RoomEvent
@@ -234,7 +235,10 @@ class CallEngine(
     private val _audioOutput = MutableStateFlow<AudioOutput?>(null)
     val audioOutput: StateFlow<AudioOutput?> = _audioOutput.asStateFlow()
 
-    private var audioDeviceListener: ((List<AudioDevice>, AudioDevice?) -> Unit)? = null
+    // Тип библиотечный, а не свой функциональный: audioswitch волен объявить
+    // слушателя и через typealias, и через fun interface, а переменной
+    // собственного функционального типа второй вариант уже не принял бы.
+    private var audioDeviceListener: AudioDeviceChangeListener? = null
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -867,14 +871,14 @@ class CallEngine(
         val h = r.audioSwitchHandler ?: return
         stopWatchingAudioDevices()
 
-        val listener: (List<AudioDevice>, AudioDevice?) -> Unit = { devices, selected ->
+        val listener: AudioDeviceChangeListener = { devices, selected ->
             _audioOutputs.value = devices.map { outputKindOf(it) }.distinct()
             _audioOutput.value = selected?.let { outputKindOf(it) }
         }
         audioDeviceListener = listener
         h.registerAudioDeviceChangeListener(listener)
         // Первый снимок руками: слушатель срабатывает только на изменения.
-        listener(h.availableAudioDevices, h.selectedAudioDevice)
+        listener.invoke(h.availableAudioDevices, h.selectedAudioDevice)
     }
 
     private fun stopWatchingAudioDevices() {

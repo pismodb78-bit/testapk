@@ -42,10 +42,11 @@ object GiphyClient {
     private suspend fun request(url: String): List<GifItem> = withContext(Dispatchers.IO) {
         runCatching {
             val body = http.newCall(Request.Builder().url(url).build()).execute().use { r ->
-                if (!r.isSuccessful) return@withContext emptyList()
+                if (!r.isSuccessful) return@withContext emptyList<GifItem>()
                 r.body?.string().orEmpty()
             }
-            val data = JSONObject(body).optJSONArray("data") ?: return@withContext emptyList()
+            val data = JSONObject(body).optJSONArray("data")
+                ?: return@withContext emptyList<GifItem>()
 
             val out = ArrayList<GifItem>(data.length())
             for (i in 0 until data.length()) {
@@ -61,7 +62,7 @@ object GiphyClient {
                 if (preview != null && full != null) out.add(GifItem(preview, full))
             }
             out as List<GifItem>
-        }.getOrDefault(emptyList())
+        }.getOrDefault(emptyList<GifItem>())
     }
 
     private fun urlOf(images: JSONObject, rendition: String): String? =
