@@ -68,6 +68,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -210,6 +211,15 @@ fun ChatScreen(
     // считаем от него же.
     var loadingOlder by remember(targetId) { mutableStateOf(false) }
     var noMoreOlder by remember(targetId) { mutableStateOf(false) }
+
+    /**
+     * Кто сейчас печатает в этом чате и когда об этом сообщили. Порт
+     * индикатора «печатает…» с ПК: собственный статус уходит по вебсокету
+     * не чаще раза в две секунды, чужой держится на экране четыре.
+     */
+    var typingName by remember(targetId) { mutableStateOf("") }
+    var typingAt by remember(targetId) { mutableLongStateOf(0L) }
+    var typingSentAt by remember(targetId) { mutableLongStateOf(0L) }
 
     /**
      * Самое свежее ЧУЖОЕ сообщение, о котором уже отзвучали. −1 — ленту ещё
@@ -359,6 +369,14 @@ fun ChatScreen(
         }
     }
 
+    // Индикатор набора гаснет сам: сигнал «перестал печатать» протокол не
+    // предусматривает ни здесь, ни на ПК — там ровно тот же таймер на 4 с.
+    LaunchedEffect(typingAt) {
+        if (typingAt == 0L) return@LaunchedEffect
+        delay(4000)
+        if (System.currentTimeMillis() - typingAt >= 4000) typingName = ""
+    }
+
     // Присутствие собеседника — отдельным лёгким запросом раз в 6 секунд,
     // тот же период, что у _presenceTimer на ПК. В общую перезагрузку его
     // класть нельзя: она идёт только при изменении числа сообщений.
@@ -383,8 +401,22 @@ fun ChatScreen(
     }
 
     DisposableEffect(targetId) {
-        val listener: (String, Int, Int, String) -> Unit = { type, _, _, _ ->
+        val listener: (String, Int, Int, String) -> Unit = { type, sender, session, payload ->
             if (type == "new_message") scope.launch { reload(scrollToEnd = true) }
+
+            // «печатает…». Раскладка полей взята с ПК один в один, иначе
+            // индикатор не совпадёт между телефоном и компьютером: в группе
+            // адресат 0, а в sessionId едет id группы; в личке наоборот —
+            // адресат это собеседник, в sessionId id отправителя.
+            if (type == "typing" && sender != UserSession.effectiveId) {
+                val mine = if (payload == "group") isGroup && session == targetId
+                else !isGroup && (sender == targetId || session == targetId)
+                if (mine) {
+                    typingName = messages.lastOrNull { it.senderId == sender }?.senderName
+                        ?.takeIf { it.isNotBlank() } ?: "Собеседник"
+                    typingAt = System.currentTimeMillis()
+                }
+            }
         }
         SignalingClient.addListener(listener)
         onDispose {
@@ -497,17 +529,31 @@ fun ChatScreen(
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
                             )
-                            peerPresence?.takeIf { !isGroup }?.let { p ->
+                            // Пока собеседник печатает, вторая строка шапки
+                            // занята им — как на ПК. Статус присутствия
+                            // никуда не денется через четыре секунды, а
+                            // «печатает…» ценно ровно сейчас.
+                            if (typingName.isNotEmpty()) {
                                 Text(
-                                    p.headerText(),
-                                    color = when {
-                                        !p.isOnline -> PismoColors.TextMuted
-                                        p.isIdle -> PismoColors.Yellow
-                                        else -> PismoColors.Green
-                                    },
+                                    if (isGroup) "✍ $typingName печатает…" else "✍ печатает…",
+                                    color = PismoColors.Green,
                                     fontSize = 11.sp,
                                     maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
+                            } else {
+                                peerPresence?.takeIf { !isGroup }?.let { p ->
+                                    Text(
+                                        p.headerText(),
+                                        color = when {
+                                            !p.isOnline -> PismoColors.TextMuted
+                                            p.isIdle -> PismoColors.Yellow
+                                            else -> PismoColors.Green
+                                        },
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
+                                    )
+                                }
                             }
                         }
                     }
@@ -827,7 +873,23 @@ fun ChatScreen(
 
                     TextField(
                         value = input,
-                        onValueChange = { input = it },
+                        onValueChange = {
+                            input = it
+                            // Не чаще раза в две секунды и не при
+                            // редактировании — как на ПК: иначе каждая буква
+                            // становилась бы пакетом в сокет.
+                            val now = System.currentTimeMillis()
+                            if (it.isNotEmpty() && editing == null && now - typingSentAt > 2000) {
+                                typingSentAt = now
+                                if (isGroup) {
+                                    SignalingClient.send("typing", 0, targetId, "group")
+                                } else {
+                                    SignalingClient.send(
+                                        "typing", targetId, UserSession.effectiveId, "direct"
+                                    )
+                                }
+                            }
+                        },
                         modifier = Modifier.weight(1f),
                         placeholder = {
                             Text("Сообщение…", color = PismoColors.TextMuted, fontSize = 14.sp)

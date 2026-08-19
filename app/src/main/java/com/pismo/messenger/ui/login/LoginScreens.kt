@@ -90,6 +90,11 @@ fun LoginScreen(
                     busy = false
                     error = "Неверный логин или пароль."
                 }
+                is AuthRepository.LoginResult.Locked -> {
+                    busy = false
+                    error = "Слишком много неудачных попыток. " +
+                            "Повторите через ${result.seconds} с."
+                }
                 is AuthRepository.LoginResult.Error -> {
                     busy = false
                     error = "Ошибка БД: ${result.message}"

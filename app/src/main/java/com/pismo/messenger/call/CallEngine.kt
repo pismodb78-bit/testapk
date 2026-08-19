@@ -324,6 +324,12 @@ class CallEngine(
             }
             publishVoiceState()
 
+            // Индивидуальные громкости — до первого applyRemoteVolumes:
+            // настройка должна действовать и на тех, кто был в комнате до
+            // нас, иначе слишком громкого собеседника снова слышно в полную
+            // силу первые секунды.
+            restoreUserAudioPrefs()
+
             _state.value = State.CONNECTED
             Sounds.callConnected()
             // Демонстрацию может начать кто угодно и когда угодно, а пауза
@@ -820,6 +826,21 @@ class CallEngine(
         if (_micMuted.value) runCatching { r.localParticipant.setMicrophoneEnabled(false) }
     }
 
+    /**
+     * Переносит сохранённые громкости и мьюты в карты звонка.
+     *
+     * Списком целиком, а не по одному участнику при появлении: LiveKit
+     * сообщает о входе, но о тех, кто уже сидел в комнате, событий не
+     * присылает — их настройки иначе не подхватились бы вовсе.
+     */
+    private fun restoreUserAudioPrefs() {
+        UserAudioPrefs.snapshot().forEach { (id, e) ->
+            val (volume, muted) = e
+            voiceVolume[id] = volume
+            if (muted) voiceMutedBy.add(id) else voiceMutedBy.remove(id)
+        }
+    }
+
     /** Громкость системного звука в исходящей демке, 0..2. */
     fun setScreenAudioGain(gain: Float) {
         Prefs.screenAudioGain = gain
@@ -985,14 +1006,16 @@ class CallEngine(
         applyRemoteVolumes()
     }
 
-    /** Громкость ГОЛОСА конкретного участника, 0..3. */
+    /** Громкость ГОЛОСА конкретного участника, 0..3. Запоминается навсегда. */
     fun setParticipantVolume(identity: String, volume: Float) {
         voiceVolume[identity] = volume
+        UserAudioPrefs.setVolume(identity, volume)
         applyRemoteVolumes()
     }
 
     fun setParticipantMuted(identity: String, muted: Boolean) {
         if (muted) voiceMutedBy.add(identity) else voiceMutedBy.remove(identity)
+        UserAudioPrefs.setMuted(identity, muted)
         applyRemoteVolumes()
     }
 

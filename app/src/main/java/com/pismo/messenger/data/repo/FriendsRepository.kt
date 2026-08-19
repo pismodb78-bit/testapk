@@ -1,5 +1,6 @@
 package com.pismo.messenger.data.repo
 
+import com.pismo.messenger.core.RateLimiter
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.buildName
 import com.pismo.messenger.data.db.Db
@@ -69,8 +70,13 @@ object FriendsRepository {
         } ?: Relation.NONE
     }.getOrDefault(Relation.NONE)
 
-    /** Отправить заявку. */
+    /**
+     * Отправить заявку. Не чаще двадцати в минуту — порт ограничения из
+     * FriendsRepository.cs: рассылать заявки пачкой всему списку
+     * пользователей это не мешает, а автоматическому спаму мешает.
+     */
     suspend fun sendRequest(targetId: Int) {
+        if (!RateLimiter.allow("friendreq:${UserSession.effectiveId}", 20, 60_000L)) return
         Db.exec(
             "INSERT IGNORE INTO friends (user_id, friend_id, status) VALUES (?, ?, 0)",
             UserSession.effectiveId, targetId

@@ -135,6 +135,15 @@ object Prefs {
         set(v) = sp.edit().putBoolean("notifications", v).apply()
 
     /**
+     * Сырая строка индивидуальных настроек звука по собеседникам — её
+     * разбирает UserAudioPrefs. На ПК это отдельный user_audio.json; здесь
+     * заводить файл ради двух чисел на человека незачем.
+     */
+    var userAudio: String
+        get() = sp.getString("user_audio", "")!!
+        set(v) = sp.edit().putString("user_audio", v).apply()
+
+    /**
      * Короткие звуки событий: микрофон, «наушники», камера, демонстрация,
      * вход и выход участников, новое сообщение. Порт Sounds.Enabled.
      *

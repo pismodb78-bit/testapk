@@ -1,6 +1,7 @@
 package com.pismo.messenger.data.repo
 
 import com.pismo.messenger.core.PasswordHasher
+import com.pismo.messenger.core.RateLimiter
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.buildName
@@ -21,10 +22,19 @@ object AuthRepository {
     sealed interface LoginResult {
         data object Success : LoginResult
         data object BadCredentials : LoginResult
+
+        /** Слишком много неудачных попыток — вход заперт на [seconds] секунд. */
+        data class Locked(val seconds: Int) : LoginResult
         data class Error(val message: String) : LoginResult
     }
 
     suspend fun login(login: String, password: String): LoginResult {
+        // Порт защиты из LoginForm.cs: пять промахов подряд — и вход
+        // запирается с нарастающей задержкой. Подбор пароля через клиент
+        // после этого теряет смысл, а живой человек разницы не замечает.
+        val lock = RateLimiter.loginLockRemainingMs(login)
+        if (lock > 0) return LoginResult.Locked(((lock + 999) / 1000).toInt())
+
         return try {
             val row = Db.queryFirst(
                 "SELECT id, Name, Surname, role, password FROM users WHERE login=?",
@@ -36,9 +46,16 @@ object AuthRepository {
                     rs.str("role").lowercase(),
                     rs.str("password"),
                 )
-            } ?: return LoginResult.BadCredentials
+            } ?: run {
+                RateLimiter.registerLoginFailure(login)
+                return LoginResult.BadCredentials
+            }
 
-            if (!PasswordHasher.verify(password, row.stored)) return LoginResult.BadCredentials
+            if (!PasswordHasher.verify(password, row.stored)) {
+                RateLimiter.registerLoginFailure(login)
+                return LoginResult.BadCredentials
+            }
+            RateLimiter.registerLoginSuccess(login)
 
             UserSession.userId = row.id
             UserSession.userName = row.name.ifBlank { login }
