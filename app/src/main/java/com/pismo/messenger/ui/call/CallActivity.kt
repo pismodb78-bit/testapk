@@ -1,21 +1,23 @@
 package com.pismo.messenger.ui.call
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -24,40 +26,55 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BluetoothAudio
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FlipCameraAndroid
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.HeadsetOff
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.NoiseAware
 import androidx.compose.material.icons.filled.NoiseControlOff
-import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.PhoneInTalk
 import androidx.compose.material.icons.filled.ScreenShare
 import androidx.compose.material.icons.filled.StopScreenShare
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -69,7 +86,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.lifecycleScope
 import com.pismo.messenger.call.ActiveCall
 import com.pismo.messenger.call.CallEngine
+import com.pismo.messenger.call.IncomingCallMonitor
 import com.pismo.messenger.call.LiveKitToken
+import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.repo.CallRepository
 import com.pismo.messenger.net.SignalingClient
@@ -80,19 +99,6 @@ import com.pismo.messenger.ui.theme.PismoTheme
 import io.livekit.android.renderer.TextureViewRenderer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import android.os.Build
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.material.icons.filled.FlipCameraAndroid
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.Slider
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import com.pismo.messenger.call.IncomingCallMonitor
-import com.pismo.messenger.core.Prefs
 
 /**
  * Экран звонка. Комната LiveKit определяется так же, как на ПК:
@@ -372,6 +378,9 @@ private fun CallScreen(
     val participants by engine.participants.collectAsState()
     val micMuted by engine.micMuted.collectAsState()
     val deafened by engine.deafened.collectAsState()
+    val outputs by engine.audioOutputs.collectAsState()
+    val output by engine.audioOutput.collectAsState()
+    var showOutputs by remember { mutableStateOf(false) }
     val cameraOn by engine.cameraOn.collectAsState()
     val sharing by engine.screenSharing.collectAsState()
     val screenAudioOn by engine.screenAudioOn.collectAsState()
@@ -457,6 +466,22 @@ private fun CallScreen(
 
     volumeFor?.let { p -> ParticipantVolumeDialog(engine, p) { volumeFor = null } }
 
+    if (showOutputs) {
+        AudioOutputDialog(
+            available = outputs,
+            selected = output,
+            onPick = {
+                engine.selectAudioOutput(it)
+                showOutputs = false
+            },
+            onDismiss = { showOutputs = false },
+        )
+    }
+
+    // На разговорном динамике экран должен гаснуть у уха — как в обычной
+    // звонилке. Иначе щекой нажимаются кнопки: «завершить» в том числе.
+    ProximityScreenOff(active = output == CallEngine.AudioOutput.EARPIECE)
+
     val header: @Composable () -> Unit = {
         Text(
             peerName.ifBlank { "Звонок" },
@@ -532,13 +557,13 @@ private fun CallScreen(
                 danger = micMuted,
             ) { scope.launch { engine.toggleMic() } }
 
-            // «Наушники» = полный мут входящего ГОЛОСА (звук чужой демки
-            // продолжает играть — так же на ПК). Первое нажатие глушит заодно
-            // и микрофон, включение микрофона снимает «наушники» обратно.
+            // Полный мут входящего ГОЛОСА (звук чужой демки продолжает
+            // играть — так же на ПК). Первое нажатие глушит заодно и
+            // микрофон, включение микрофона снимает мут обратно.
             CallButton(
                 icon = if (deafened) Icons.Default.HeadsetOff else Icons.Default.Headset,
                 active = !deafened,
-                label = "Наушники",
+                label = "Выкл. звук",
                 modifier = itemMod,
                 showLabel = !vertical,
                 danger = deafened,
@@ -575,6 +600,24 @@ private fun CallScreen(
                     modifier = itemMod,
                     showLabel = !vertical,
                 ) { engine.switchCamera() }
+            }
+
+            // Куда выводить звук: bluetooth-гарнитура, проводные наушники,
+            // динамик телефона, разговорный динамик у уха. Список живой —
+            // гарнитуру подключают и отключают посреди разговора.
+            if (outputs.size > 1) {
+                CallButton(
+                    icon = when (output) {
+                        CallEngine.AudioOutput.BLUETOOTH -> Icons.Default.BluetoothAudio
+                        CallEngine.AudioOutput.WIRED -> Icons.Default.Headphones
+                        CallEngine.AudioOutput.EARPIECE -> Icons.Default.PhoneInTalk
+                        else -> Icons.Default.VolumeUp
+                    },
+                    active = true,
+                    label = outputLabel(output),
+                    modifier = itemMod,
+                    showLabel = !vertical,
+                ) { showOutputs = true }
             }
 
             CallButton(
@@ -987,5 +1030,102 @@ private fun CallButton(
                 modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
             )
         }
+    }
+}
+
+/** Человеческое название выхода — оно же подпись под кнопкой. */
+private fun outputLabel(out: CallEngine.AudioOutput?): String = when (out) {
+    CallEngine.AudioOutput.BLUETOOTH -> "Гарнитура"
+    CallEngine.AudioOutput.WIRED -> "Наушники"
+    CallEngine.AudioOutput.EARPIECE -> "У уха"
+    else -> "Динамик"
+}
+
+/** Куда выводить звук разговора. */
+@Composable
+private fun AudioOutputDialog(
+    available: List<CallEngine.AudioOutput>,
+    selected: CallEngine.AudioOutput?,
+    onPick: (CallEngine.AudioOutput) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = PismoColors.BgElevated,
+        title = { Text("Вывод звука", color = PismoColors.TextPrimary) },
+        text = {
+            Column {
+                // Порядок фиксированный, а не как отдал список: иначе пункты
+                // прыгали бы местами при каждом подключении гарнитуры.
+                CallEngine.AudioOutput.entries.filter { it in available }.forEach { out ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onPick(out) }
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            when (out) {
+                                CallEngine.AudioOutput.BLUETOOTH -> Icons.Default.BluetoothAudio
+                                CallEngine.AudioOutput.WIRED -> Icons.Default.Headphones
+                                CallEngine.AudioOutput.EARPIECE -> Icons.Default.PhoneInTalk
+                                else -> Icons.Default.VolumeUp
+                            },
+                            null,
+                            tint = if (out == selected) PismoColors.Green else PismoColors.TextMuted,
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            when (out) {
+                                CallEngine.AudioOutput.BLUETOOTH -> "Bluetooth-гарнитура"
+                                CallEngine.AudioOutput.WIRED -> "Проводные наушники"
+                                CallEngine.AudioOutput.EARPIECE -> "Разговорный динамик"
+                                else -> "Динамик телефона"
+                            },
+                            color = if (out == selected) PismoColors.Green else PismoColors.TextPrimary,
+                            fontSize = 15.sp,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Закрыть", color = PismoColors.TextSecondary)
+            }
+        },
+    )
+}
+
+/**
+ * Гасит экран, когда телефон подносят к уху, — как обычная звонилка.
+ *
+ * Системный PROXIMITY_SCREEN_OFF_WAKE_LOCK, а не свой датчик: только он
+ * гасит экран ВМЕСТЕ с сенсором, поэтому щекой ничего не нажимается.
+ * Держим его, только пока выбран разговорный динамик и экран звонка на
+ * виду: на громкой связи телефон лежит на столе, и гасить нечего.
+ */
+@Composable
+private fun ProximityScreenOff(active: Boolean) {
+    val context = LocalContext.current
+
+    DisposableEffect(active) {
+        if (!active) return@DisposableEffect onDispose { }
+
+        val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+        val supported = pm != null &&
+            pm.isWakeLockLevelSupported(android.os.PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)
+
+        val lock = if (supported) {
+            runCatching {
+                pm!!.newWakeLock(
+                    android.os.PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK,
+                    "pismo:proximity",
+                ).apply { acquire(60 * 60 * 1000L) }
+            }.getOrNull()
+        } else null
+
+        onDispose { runCatching { if (lock?.isHeld == true) lock.release() } }
     }
 }

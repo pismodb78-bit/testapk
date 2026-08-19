@@ -659,7 +659,10 @@ private fun MicLevelBar(thresholdDb: Float) {
             when {
                 level <= floor + 0.5f -> if (inCall) "Тишина (уровень из звонка)" else "Тишина"
                 inCall -> "${level.toInt()} дБ — уровень из идущего разговора"
-                else -> "${level.toInt()} дБ"
+                // Вне звонка меряется сырой микрофон, а порог сравнивается с
+                // сигналом ПОСЛЕ автоусиления WebRTC. Разницу компенсируем
+                // такой же автоматикой, но это оценка — точная цифра в звонке.
+                else -> "${level.toInt()} дБ — оценка, точный уровень виден в звонке"
             },
             color = if (inCall) PismoColors.Green else PismoColors.TextMuted,
             fontSize = 10.sp,

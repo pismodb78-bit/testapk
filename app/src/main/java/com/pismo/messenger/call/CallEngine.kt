@@ -13,6 +13,7 @@ import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.service.CallForegroundService
 import com.pismo.messenger.service.Notifications
 import io.livekit.android.LiveKit
+import com.twilio.audioswitch.AudioDevice
 import io.livekit.android.RoomOptions
 import io.livekit.android.audio.ScreenAudioCapturer
 import io.livekit.android.events.RoomEvent
@@ -217,6 +218,24 @@ class CallEngine(
     private var globalVoiceVolume = 1f
     private var globalDemoVolume = 1f
 
+    // ── Куда выводится звук разговора ──────────────────────────────────
+    //
+    // Своё перечисление, а не типы audioswitch: наружу не должен торчать
+    // класс из транзитивной зависимости SDK, а списку в интерфейсе нужны
+    // человеческие названия и порядок.
+
+    enum class AudioOutput { BLUETOOTH, WIRED, SPEAKER, EARPIECE }
+
+    private val _audioOutputs = MutableStateFlow<List<AudioOutput>>(emptyList())
+
+    /** Что вообще доступно сейчас: гарнитура появляется и исчезает на ходу. */
+    val audioOutputs: StateFlow<List<AudioOutput>> = _audioOutputs.asStateFlow()
+
+    private val _audioOutput = MutableStateFlow<AudioOutput?>(null)
+    val audioOutput: StateFlow<AudioOutput?> = _audioOutput.asStateFlow()
+
+    private var audioDeviceListener: ((List<AudioDevice>, AudioDevice?) -> Unit)? = null
+
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
@@ -329,6 +348,7 @@ class CallEngine(
             // нас, иначе слишком громкого собеседника снова слышно в полную
             // силу первые секунды.
             restoreUserAudioPrefs()
+            watchAudioDevices(r)
 
             _state.value = State.CONNECTED
             Sounds.callConnected()
@@ -366,6 +386,9 @@ class CallEngine(
         runCatching { CallForegroundService.stop(appContext) }
         IncomingCallMonitor.inCall = false
         PresenceReporter.inCall = false
+        stopWatchingAudioDevices()
+        _audioOutputs.value = emptyList()
+        _audioOutput.value = null
         runCatching { room?.disconnect() }
         // release освобождает нативные ресурсы (EglBase, аудиоустройство);
         // без него повторный звонок в той же сессии течёт памятью.
@@ -824,6 +847,54 @@ class CallEngine(
         // Пока шла демка, дорожка была принудительно включена. Возвращаем
         // микрофон в то состояние, которое выбрал пользователь.
         if (_micMuted.value) runCatching { r.localParticipant.setMicrophoneEnabled(false) }
+    }
+
+    private fun outputKindOf(d: AudioDevice): AudioOutput = when (d) {
+        is AudioDevice.BluetoothHeadset -> AudioOutput.BLUETOOTH
+        is AudioDevice.WiredHeadset -> AudioOutput.WIRED
+        is AudioDevice.Speakerphone -> AudioOutput.SPEAKER
+        else -> AudioOutput.EARPIECE
+    }
+
+    /**
+     * Подписка на список звуковых выходов.
+     *
+     * Список именно живой: наушники втыкают и вытаскивают посреди разговора,
+     * bluetooth-гарнитура отваливается сама. Снимок на входе в комнату
+     * устарел бы через минуту.
+     */
+    private fun watchAudioDevices(r: Room) {
+        val h = r.audioSwitchHandler ?: return
+        stopWatchingAudioDevices()
+
+        val listener: (List<AudioDevice>, AudioDevice?) -> Unit = { devices, selected ->
+            _audioOutputs.value = devices.map { outputKindOf(it) }.distinct()
+            _audioOutput.value = selected?.let { outputKindOf(it) }
+        }
+        audioDeviceListener = listener
+        h.registerAudioDeviceChangeListener(listener)
+        // Первый снимок руками: слушатель срабатывает только на изменения.
+        listener(h.availableAudioDevices, h.selectedAudioDevice)
+    }
+
+    private fun stopWatchingAudioDevices() {
+        val h = room?.audioSwitchHandler
+        audioDeviceListener?.let { h?.unregisterAudioDeviceChangeListener(it) }
+        audioDeviceListener = null
+    }
+
+    /**
+     * Переключить вывод: bluetooth-гарнитура, проводные наушники, динамик
+     * телефона или разговорный динамик у уха.
+     *
+     * Выбор «липкий» — SDK сам восстановит его, если устройство пропало и
+     * вернулось (наушники выдернули и воткнули обратно).
+     */
+    fun selectAudioOutput(out: AudioOutput) {
+        val h = room?.audioSwitchHandler ?: return
+        val device = h.availableAudioDevices.firstOrNull { outputKindOf(it) == out } ?: return
+        h.selectDevice(device)
+        _audioOutput.value = out
     }
 
     /**

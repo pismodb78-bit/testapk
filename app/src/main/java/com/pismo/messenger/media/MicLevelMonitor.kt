@@ -41,6 +41,18 @@ import kotlin.math.sqrt
  * открывают и до звонка, и во время, и звонок начинается/кончается прямо при
  * открытом экране. Цикл один, он сам подхватывает переход в обе стороны и
  * закрывает свой захват, как только звонок поднялся.
+ *
+ * ПОЧЕМУ ВНЕ ЗВОНКА УРОВЕНЬ ПРИХОДИТСЯ ПОДНИМАТЬ. Два источника меряют один
+ * голос, но в разных точках тракта. В разговоре буфер приходит от WebRTC уже
+ * ПОСЛЕ его обработки, а там работает автоусиление (AGC), которое подтягивает
+ * речь к своему целевому уровню. Свой же захват — это сырой микрофон до всякой
+ * автоматики, и та же речь в нём тише на два десятка децибел: шкала показывала
+ * −50 дБ там, где в звонке было бы −20, и выставленный по ней порог в разговоре
+ * оказывался бессмысленным.
+ *
+ * Поэтому вне звонка к сырому уровню применяется та же автоматика — медленное
+ * усиление к целевому уровню WebRTC с тем же потолком. Это не «накрутка
+ * красивых цифр»: без неё шкала врёт ровно на величину AGC.
  */
 object MicLevelMonitor {
 
@@ -48,6 +60,23 @@ object MicLevelMonitor {
 
     /** Тише этого не показываем: −60 дБ — левый край шкалы порога. */
     const val FLOOR_DB = -60f
+
+    /**
+     * Целевой уровень речи у автоусиления WebRTC. Именно к нему AGC тянет
+     * голос в разговоре, поэтому к нему же тянем и свой замер.
+     */
+    private const val AGC_TARGET_DB = -18f
+
+    /** Потолок автоусиления — столько же, сколько отдаёт цифровой AGC. */
+    private const val AGC_MAX_GAIN_DB = 30f
+
+    /**
+     * Тише этого усиление не трогаем. Иначе в тишине оно доехало бы до
+     * потолка, и шумок комнаты показывался бы как громкая речь.
+     */
+    private const val AGC_SPEECH_FLOOR_DB = -55f
+
+    private var agcGainDb = 0f
 
     private val _levelDb = MutableStateFlow(FLOOR_DB)
     val levelDb: StateFlow<Float> = _levelDb.asStateFlow()
@@ -106,8 +135,8 @@ object MicLevelMonitor {
                         sum += v * v
                     }
                     val rms = sqrt(sum / read)
-                    val db = if (rms > 1.0) (20.0 * log10(rms / 32768.0)).toFloat() else FLOOR_DB
-                    _levelDb.value = smooth(_levelDb.value, db)
+                    val raw = if (rms > 1.0) (20.0 * log10(rms / 32768.0)).toFloat() else -100f
+                    _levelDb.value = smooth(_levelDb.value, applyAgc(raw))
                 }
             } finally {
                 closeRecord()
@@ -138,10 +167,32 @@ object MicLevelMonitor {
     }.getOrNull()
 
     private fun closeRecord() {
+        agcGainDb = 0f
         val r = record ?: return
         record = null
         runCatching { r.stop() }
         runCatching { r.release() }
+    }
+
+    /**
+     * Эмуляция автоусиления WebRTC поверх сырого замера.
+     *
+     * Усиление ползёт к нужному, а не прыгает: настоящий AGC тоже
+     * инерционный, и мгновенный скачок на первом же слоге дал бы шкале
+     * дёргаться сильнее, чем сам голос. Вверх быстрее, чем вниз, — чтобы
+     * начало фразы не оставалось за кадром.
+     */
+    private fun applyAgc(rawDb: Float): Float {
+        if (rawDb > AGC_SPEECH_FLOOR_DB) {
+            val want = (AGC_TARGET_DB - rawDb).coerceIn(0f, AGC_MAX_GAIN_DB)
+            agcGainDb += (want - agcGainDb) * (if (want > agcGainDb) 0.15f else 0.03f)
+        } else {
+            // В долгой тишине усиление отпускаем, иначе шкала так и стояла бы
+            // задранной после последней фразы и шум комнаты выглядел бы речью.
+            // Спад медленный: паузу между слогами он почти не замечает.
+            agcGainDb *= 0.98f
+        }
+        return rawDb + agcGainDb
     }
 
     /**

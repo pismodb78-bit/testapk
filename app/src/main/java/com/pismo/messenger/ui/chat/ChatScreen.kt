@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -179,6 +180,7 @@ fun ChatScreen(
     var recording by remember { mutableStateOf(false) }
     var recordSeconds by remember { mutableStateOf(0) }
     var showCircleRecorder by remember { mutableStateOf(false) }
+    var showGifPicker by remember { mutableStateOf(false) }
     // Режим множественного выделения — порт «Выбрано: N» с ПК.
     var selectMode by remember(targetId) { mutableStateOf(false) }
     var selectedIds by remember(targetId) { mutableStateOf(setOf<Int>()) }
@@ -871,6 +873,13 @@ fun ChatScreen(
                         Icon(Icons.Default.Videocam, "Видео-кружочек", tint = PismoColors.TextMuted)
                     }
 
+                    // Кнопка GIF — как на ПК (и как в Discord). Гифка
+                    // прикрепляется вложением, а не улетает сразу: к ней
+                    // можно дописать подпись.
+                    IconButton(onClick = { showGifPicker = true }, enabled = !sending) {
+                        Icon(Icons.Default.Gif, "Гифки", tint = PismoColors.TextMuted)
+                    }
+
                     TextField(
                         value = input,
                         onValueChange = {
@@ -1018,6 +1027,15 @@ fun ChatScreen(
                 selectMode = false
                 selectedIds = emptySet()
             },
+        )
+    }
+
+    if (showGifPicker) {
+        GifPickerDialog(
+            onPicked = { bytes ->
+                pending = PendingFile(bytes = bytes, fileName = "giphy.gif", isImage = true)
+            },
+            onDismiss = { showGifPicker = false },
         )
     }
 
