@@ -1,5 +1,7 @@
 package com.pismo.messenger.ui.servers
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,17 +12,22 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -28,8 +35,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -44,30 +49,36 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pismo.messenger.core.Mentions
+import com.pismo.messenger.core.PresenceReporter
+import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.ellipsize
+import com.pismo.messenger.core.formatDateSeparator
+import com.pismo.messenger.data.MessageMemory
 import com.pismo.messenger.data.model.ChatMessage
 import com.pismo.messenger.data.model.ReactionSummary
 import com.pismo.messenger.data.model.Scope
 import com.pismo.messenger.data.model.ServerPermissions
-import com.pismo.messenger.data.MessageMemory
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.ReactionsRepository
 import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.media.Sounds
-import com.pismo.messenger.core.PresenceReporter
-import com.pismo.messenger.core.Mentions
-import com.pismo.messenger.core.UserSession
-import com.pismo.messenger.core.formatDateSeparator
 import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.chat.DateJumpDialog
+import com.pismo.messenger.ui.chat.MAX_ATTACH_BYTES
 import com.pismo.messenger.ui.chat.MessageBubble
+import com.pismo.messenger.ui.chat.PendingFile
 import com.pismo.messenger.ui.chat.PinnedMessagesDialog
+import com.pismo.messenger.ui.chat.fileSizeOf
+import com.pismo.messenger.ui.chat.queryFileName
 import com.pismo.messenger.ui.components.DateSeparator
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.delay
@@ -90,6 +101,7 @@ fun ChannelChatScreen(
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     // То же, что в личных чатах: запомненная лента показывается сразу,
     // свежая подтягивается фоном. Объявление обязано стоять ПЕРЕД messages —
@@ -139,6 +151,12 @@ fun ChannelChatScreen(
 
     /** Отправка уже идёт — повторные нажатия игнорируем. */
     var sending by remember { mutableStateOf(false) }
+
+    // Вложения в каналах: ПК их сюда только что принёс, а репозиторий у нас
+    // умел их с самого начала — не хватало ровно кнопок.
+    var pending by remember(channelId) { mutableStateOf<PendingFile?>(null) }
+    var showGifPicker by remember { mutableStateOf(false) }
+    var attachNote by remember(channelId) { mutableStateOf("") }
 
     suspend fun reload(scrollToEnd: Boolean = false) {
         runCatching {
@@ -230,16 +248,60 @@ fun ChannelChatScreen(
             }
             return
         }
-        if (text.isEmpty()) return
+        val attach = pending
+        // С вложением подпись необязательна — как в личных чатах.
+        if (text.isEmpty() && attach == null) return
         sending = true
         scope.launch {
             runCatching {
-                ServerRepository.sendChannelMessage(channelId, text, replyTo?.id ?: 0)
+                ServerRepository.sendChannelMessage(
+                    channelId = channelId,
+                    text = text,
+                    replyToId = replyTo?.id ?: 0,
+                    image = attach?.takeIf { it.isImage }?.bytes,
+                    file = attach?.takeIf { !it.isImage }?.bytes,
+                    // Имя файла только для не-картинок: с ним ПК рисует под
+                    // фото вторую строку-карточку того же вложения.
+                    fileName = attach?.takeIf { !it.isImage }?.fileName,
+                )
                 SignalingClient.send("new_message", 0, channelId, "server")
             }
-            input = TextFieldValue(""); replyTo = null
+            input = TextFieldValue(""); replyTo = null; pending = null
             sending = false
             reload(scrollToEnd = true)
+        }
+    }
+
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            runCatching {
+                val name = queryFileName(context, uri)
+                // Размер узнаём ДО чтения: файл на двести мегабайт иначе
+                // успел бы положить приложение ещё до проверки.
+                val declared = fileSizeOf(context, uri)
+                if (declared > MAX_ATTACH_BYTES) {
+                    attachNote = "Файл слишком большой: ${declared / 1024 / 1024} МБ " +
+                            "при пределе ${MAX_ATTACH_BYTES / 1024 / 1024} МБ."
+                    return@runCatching
+                }
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: return@runCatching
+                if (bytes.size > MAX_ATTACH_BYTES) {
+                    attachNote = "Файл слишком большой: ${bytes.size / 1024 / 1024} МБ " +
+                            "при пределе ${MAX_ATTACH_BYTES / 1024 / 1024} МБ."
+                    return@runCatching
+                }
+                attachNote = ""
+                pending = PendingFile(
+                    bytes = bytes,
+                    fileName = name,
+                    isImage = com.pismo.messenger.core.isImageName(name) ||
+                            com.pismo.messenger.core.isGifName(name),
+                )
+            }
         }
     }
 
@@ -468,6 +530,44 @@ fun ChannelChatScreen(
                 )
             }
 
+            // Прикреплённое показываем строкой над полем: файл уходит вместе
+            // с подписью одним сообщением, а не двумя, — как в личных чатах.
+            pending?.let { p ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(PismoColors.BgDarkest)
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        (if (p.isImage) "🖼 " else "📎 ") + p.fileName,
+                        color = PismoColors.TextSecondary,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = { pending = null }, modifier = Modifier.size(28.dp)) {
+                        Icon(
+                            Icons.Default.Close, "Убрать вложение",
+                            tint = PismoColors.TextMuted, modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+            }
+            if (attachNote.isNotEmpty()) {
+                Text(
+                    attachNote,
+                    color = PismoColors.Red,
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(PismoColors.BgDarkest)
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                )
+            }
+
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -475,6 +575,13 @@ fun ChannelChatScreen(
                     .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                IconButton(onClick = { filePicker.launch(arrayOf("*/*")) }, enabled = !sending) {
+                    Icon(Icons.Default.AttachFile, "Прикрепить", tint = PismoColors.TextMuted)
+                }
+                IconButton(onClick = { showGifPicker = true }, enabled = !sending) {
+                    Icon(Icons.Default.Gif, "Гифки", tint = PismoColors.TextMuted)
+                }
+
                 TextField(
                     value = input,
                     onValueChange = { input = it },
@@ -534,6 +641,15 @@ fun ChannelChatScreen(
                 val idx = messages.indexOfFirst { it.id == found.id }
                 if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
             },
+        )
+    }
+
+    if (showGifPicker) {
+        com.pismo.messenger.ui.chat.GifPickerDialog(
+            onPicked = { bytes ->
+                pending = PendingFile(bytes = bytes, fileName = "giphy.gif", isImage = true)
+            },
+            onDismiss = { showGifPicker = false },
         )
     }
 

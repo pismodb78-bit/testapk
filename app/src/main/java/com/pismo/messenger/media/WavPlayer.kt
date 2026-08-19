@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
@@ -83,25 +84,48 @@ object WavPlayer {
         }
         stop()
 
-        runCatching {
-            player = MediaPlayer().apply {
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build()
-                )
-                setDataSource(file.absolutePath)
-                setOnCompletionListener { stop() }
-                setOnErrorListener { _, _, _ -> stop(); true }
-                prepare()
-                start()
+        // Кнопка отзывается сразу, ещё до того как файл открыт: подготовка
+        // занимает заметное время, и без этого нажатие выглядело залипшим.
+        _positionMs.value = 0
+        _durationMs.value = 0
+        _playingId.value = messageId
+
+        scope.launch {
+            // prepare() открывает файл и поднимает кодек. На главном потоке
+            // это тот самый рывок ровно в момент нажатия — на ПК эту же
+            // подготовку недавно унесли с потока интерфейса по той же причине.
+            val prepared = withContext(Dispatchers.IO) {
+                runCatching {
+                    MediaPlayer().apply {
+                        setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                .build()
+                        )
+                        setDataSource(file.absolutePath)
+                        prepare()
+                    }
+                }.getOrNull()
             }
-            _durationMs.value = runCatching { player?.duration ?: 0 }.getOrDefault(0)
-            _positionMs.value = 0
-            _playingId.value = messageId
+
+            if (prepared == null) {
+                stop()
+                return@launch
+            }
+            // Пока готовили, могли нажать другое сообщение или остановить.
+            if (_playingId.value != messageId) {
+                runCatching { prepared.release() }
+                return@launch
+            }
+
+            prepared.setOnCompletionListener { stop() }
+            prepared.setOnErrorListener { _, _, _ -> stop(); true }
+            player = prepared
+            _durationMs.value = runCatching { prepared.duration }.getOrDefault(0)
+            runCatching { prepared.start() }
             startTicker()
-        }.onFailure { stop() }
+        }
     }
 
     /** Перемотка внутри играющего сообщения. */

@@ -129,10 +129,13 @@ private const val VOICE_MAX_SECONDS = 180
  * уходит в базу порциями по 4 МБ, поэтому упирается он не в пакет, а в
  * терпение: на мобильной сети это минуты.
  */
-private const val MAX_ATTACH_BYTES = 200L * 1024 * 1024
+internal const val MAX_ATTACH_BYTES = 200L * 1024 * 1024
 
 /** Насколько расширяется страница за одну догрузку старых сообщений. */
 private const val PAGE_STEP = 40
+
+/** Пауза между подгрузками старых сообщений — как 800 мс на ПК. */
+private const val PAGE_COOLDOWN_MS = 800L
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -362,9 +365,29 @@ fun ChatScreen(
     // не всю историю разом: тянуть тысячу расшифровок ради одного взгляда
     // назад незачем.
     LaunchedEffect(targetId) {
+        // Отсчёт ведём от текущего положения, а не от «бесконечности»: с ней
+        // самая первая выдача потока считалась бы движением вверх.
+        var lastFirst = listState.firstVisibleItemIndex
+        var lastLoadAt = 0L
+
         snapshotFlow { listState.firstVisibleItemIndex }.collect { first ->
+            // Поток выдаёт номер и при перекладке списка, и при смене фокуса —
+            // не только когда ленту ведут пальцем. Требуем настоящего движения
+            // ВВЕРХ, к старым сообщениям: иначе обычный тап по сообщению
+            // дотягивался до подгрузки, страница росла на сорок, лента
+            // перезагружалась целиком, и так по кругу.
+            val movedUp = first < lastFirst
+            lastFirst = first
+            if (!movedUp) return@collect
+
             if (first > 2 || loading || loadingOlder || noMoreOlder) return@collect
             if (messages.isEmpty()) return@collect
+
+            // И пауза между подгрузками: пока предыдущая порция укладывается,
+            // номер первого видимого успевает дёрнуться ещё несколько раз.
+            val now = System.currentTimeMillis()
+            if (now - lastLoadAt < PAGE_COOLDOWN_MS) return@collect
+            lastLoadAt = now
 
             loadingOlder = true
             val before = messages.size
@@ -1114,7 +1137,7 @@ private fun startCall(
     context.startActivity(intent)
 }
 
-private fun queryFileName(context: android.content.Context, uri: android.net.Uri): String {
+internal fun queryFileName(context: android.content.Context, uri: android.net.Uri): String {
     var name = "file"
     runCatching {
         context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
@@ -1146,7 +1169,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedCompat(
  * поэтому при неудаче возвращаем 0 — «неизвестно», и решение принимается
  * уже по фактически прочитанным байтам.
  */
-private fun fileSizeOf(context: android.content.Context, uri: android.net.Uri): Long =
+internal fun fileSizeOf(context: android.content.Context, uri: android.net.Uri): Long =
     runCatching {
         context.contentResolver.query(uri, null, null, null, null)?.use { c ->
             val idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
@@ -1161,7 +1184,7 @@ private fun fileSizeOf(context: android.content.Context, uri: android.net.Uri): 
  * и всё уходит ОДНИМ сообщением. Здесь файл улетал сразу при выборе, а
  * подпись потом отдельной строкой — получалось два сообщения вместо одного.
  */
-private data class PendingFile(
+internal data class PendingFile(
     val bytes: ByteArray,
     val fileName: String,
     val isImage: Boolean,
