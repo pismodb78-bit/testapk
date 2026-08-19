@@ -55,6 +55,7 @@ import com.pismo.messenger.data.MessageMemory
 import com.pismo.messenger.data.ServerMemory
 import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.media.MicLevelMonitor
+import com.pismo.messenger.media.MicTester
 import com.pismo.messenger.media.Sounds
 import com.pismo.messenger.ui.login.PismoField
 import com.pismo.messenger.ui.theme.PismoColors
@@ -436,6 +437,11 @@ fun SettingsScreen(onBack: () -> Unit) {
                 valueRange = 0f..300f,
                 colors = SliderDefaults.colors(thumbColor = PismoColors.Blurple),
             )
+
+            // Тест проверяет ВСЮ цепочку, а не только порог, поэтому стоит
+            // после всех её ползунков и виден независимо от того, включена
+            // автоматическая чувствительность или нет.
+            MicTestRow()
             Text(
                 "Шумодав неизбежно приглушает голос — здесь громкость добирается " +
                         "обратно. Усиление линейное до самого потолка и лишь на пиках " +
@@ -622,6 +628,68 @@ private fun RowScope.ThemeChip(label: String, selected: Boolean, onClick: () -> 
  * занятым после ухода из настроек нельзя.
  */
 @Composable
+/**
+ * «Проверить микрофон» — порт MicTestForm с ПК.
+ *
+ * Шкала отвечает на вопрос «громко ли», а главный вопрос другой: «как это
+ * звучит у собеседника». Шумодав и порог слышны, а не видны — по полоске не
+ * понять, что подавление съедает окончания слов. Тест гоняет микрофон через
+ * ту же цепочку, что и звонок, и возвращает в наушники.
+ */
+@Composable
+private fun MicTestRow() {
+    var running by remember { mutableStateOf(MicTester.isRunning) }
+    // В разговоре проверять нечего: микрофон занят звонком, и там и так
+    // слышно, как ты звучишь. Кнопку в этом случае просто гасим.
+    val inCall = com.pismo.messenger.call.ActiveCall.engine != null
+
+    // Тест держит микрофон: уходя с экрана, его надо гасить, иначе он
+    // продолжит писать в фоне и займёт микрофон следующему звонку.
+    DisposableEffect(Unit) {
+        onDispose {
+            MicTester.stop()
+        }
+    }
+
+    Spacer(Modifier.height(8.dp))
+    Button(
+        onClick = {
+            if (running) MicTester.stop() else MicTester.start()
+            // Не `!running`: start() может и отказаться (микрофон занят),
+            // и кнопка осталась бы в состоянии «идёт проверка» без проверки.
+            running = MicTester.isRunning
+        },
+        enabled = !inCall,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (running) PismoColors.Red else PismoColors.BgElevated
+        ),
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Text(
+            if (running) "Остановить проверку" else "Проверить микрофон",
+            color = PismoColors.TextPrimary,
+        )
+    }
+    Text(
+        if (inCall)
+            "Идёт разговор — проверять нечего: собеседники слышат вас прямо " +
+                    "сейчас, а шкала выше показывает настоящий уровень из звонка."
+        else if (running)
+            "Говорите — вы слышите себя ровно так, как вас слышат в звонке. " +
+                    "Шкала выше сейчас показывает настоящий уровень, а не оценку: " +
+                    "порог по ней можно выставлять точно. Шумодав и порог крутятся " +
+                    "прямо во время проверки."
+        else
+            "Микрофон пойдёт через ту же цепочку, что и в звонке, и вернётся " +
+                    "в наушники. ОБЯЗАТЕЛЬНО НАДЕНЬТЕ НАУШНИКИ: через динамик " +
+                    "телефона это заведётся в свист — эхоподавления в этой " +
+                    "цепочке нет.",
+        color = if (running) PismoColors.Green else PismoColors.TextMuted,
+        fontSize = 11.sp,
+    )
+}
+
+@Composable
 private fun MicLevelBar(thresholdDb: Float) {
     val scope = rememberCoroutineScope()
     val level by MicLevelMonitor.levelDb.collectAsState()
@@ -675,12 +743,15 @@ private fun MicLevelBar(thresholdDb: Float) {
             when {
                 level <= floor + 0.5f -> if (inCall) "Тишина (уровень из звонка)" else "Тишина"
                 inCall -> "${level.toInt()} дБ — уровень из идущего разговора"
+                MicTester.isRunning ->
+                    "${level.toInt()} дБ — настоящий уровень, идёт проверка"
                 // Вне звонка меряется сырой микрофон, а порог сравнивается с
                 // сигналом ПОСЛЕ автоусиления WebRTC. Разницу компенсируем
                 // такой же автоматикой, но это оценка — точная цифра в звонке.
                 else -> "${level.toInt()} дБ — оценка, точный уровень виден в звонке"
             },
-            color = if (inCall) PismoColors.Green else PismoColors.TextMuted,
+            color = if (inCall || MicTester.isRunning) PismoColors.Green
+            else PismoColors.TextMuted,
             fontSize = 10.sp,
         )
     }
