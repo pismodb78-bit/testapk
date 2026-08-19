@@ -47,6 +47,7 @@ import com.pismo.messenger.data.model.UserProfile
 import com.pismo.messenger.data.repo.AuthRepository
 import com.pismo.messenger.data.repo.FriendsRepository
 import com.pismo.messenger.data.MessageMemory
+import com.pismo.messenger.data.ServerMemory
 import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.data.repo.ProfileRepository
 import com.pismo.messenger.net.SignalingClient
@@ -353,6 +354,7 @@ fun ProfileScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit) {
                     // нельзя мелькнуть после входа под другим логином даже
                     // на один кадр.
                     MessageMemory.clear()
+                    ServerMemory.clear()
                     PresenceRepository.clearCache()
                     ProfileRepository.clearAvatarCache()
                     Prefs.clearSavedCredentials()

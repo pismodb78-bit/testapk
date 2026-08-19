@@ -375,7 +375,18 @@ class CallEngine(
 
     suspend fun toggleMic() {
         val r = room ?: return
+        val willUnmute = _micMuted.value
         setMicMuted(r, !_micMuted.value)
+
+        // Включение микрофона ИЗ ПОЛНОГО МУТА снимает и «наушники» — порт
+        // ToggleMute с ПК. Логика простая: человек, который снова хочет
+        // говорить, хочет и слышать; иначе он говорит в пустоту и не понимает,
+        // почему ему не отвечают.
+        if (willUnmute && _deafened.value) {
+            _deafened.value = false
+            applyRemoteVolumes()
+        }
+
         publishVoiceState()
         refreshParticipants()
     }
@@ -802,16 +813,14 @@ class CallEngine(
     /**
      * Собирает обработчик микрофона по текущим настройкам.
      *
-     * Цепочка нужна не только ради шумодава: порог активации и makeup-усиление
-     * работают и при выключенном подавлении, поэтому null возвращается лишь
-     * тогда, когда не нужно вообще ничего.
+     * Цепочка стоит на дорожке ВСЕГДА, даже когда всё выключено. Раньше при
+     * «шумодав выкл + авточувствительность + усиление 100 %» она не ставилась
+     * вовсе, и вместе с ней пропадал micLevelDb — шкала порога в настройках
+     * замирала ровно в том случае, ради которого её и открывают: посмотреть
+     * свой уровень и выставить по нему порог. Пустая цепочка почти ничего не
+     * стоит: один проход RMS по блоку, дальше ранний выход по flat.
      */
     private fun newMicProcessor(): MicProcessor? {
-        val needed = Prefs.noiseSuppression ||
-            !Prefs.voiceAutoSensitivity ||
-            Prefs.voiceOutputGain != 100
-        if (!needed) return null
-
         return (audio.mic ?: MicProcessor(SAMPLE_RATE_HINT)).apply {
             strength = if (Prefs.noiseSuppression) Prefs.denoiseStrength else 0f
             voiceGateAuto = Prefs.voiceAutoSensitivity
@@ -841,6 +850,45 @@ class CallEngine(
         Prefs.voiceThresholdDb = thresholdDb
         audio.mic = newMicProcessor()
     }
+
+    /**
+     * Порог активации без записи в настройки — для живого перетаскивания
+     * ползунка. Прямая правка полей уже работающей цепочки: SharedPreferences
+     * на каждый пиксель хода ползунка писать нельзя, а слышать результат
+     * хочется сразу, не отпуская палец.
+     */
+    fun previewVoiceGate(auto: Boolean, thresholdDb: Int) {
+        audio.mic?.let {
+            it.voiceGateAuto = auto
+            it.voiceThresholdDb = thresholdDb
+        }
+    }
+
+    /** Сила подавления на лету, без записи в настройки. */
+    fun previewDenoiseStrength(value: Float) {
+        audio.mic?.strength = if (Prefs.noiseSuppression) value else 0f
+    }
+
+    /** Makeup-усиление на лету, без записи в настройки. */
+    fun previewVoiceOutputGain(percent: Int) {
+        audio.mic?.outputGainPercent = percent
+    }
+
+    /**
+     * Уровень микрофона в дБFS, каким его видит порог активации.
+     *
+     * Отдаётся шкале в настройках: сравнивать имеет смысл только с тем же
+     * сигналом, по которому принимается решение, иначе цифры на экране и
+     * поведение гейта живут отдельными жизнями.
+     */
+    val micLevelDb: Float
+        get() = when {
+            // На мьюте цепочка не вызывается вовсе (буфер обнуляется раньше),
+            // и lastLevelDb застыл бы на последнем сказанном слове — шкала
+            // показывала бы речь у выключенного микрофона.
+            room == null || _micMuted.value -> -100f
+            else -> audio.mic?.lastLevelDb ?: -100f
+        }
 
     /** Makeup-усиление голоса на выходе цепи, 0..300 % — порт SetOutputGain. */
     fun setVoiceOutputGain(percent: Int) {
@@ -882,6 +930,21 @@ class CallEngine(
                             .coerceIn(0f, 4f).toDouble()
                     }
                     runCatching { remoteAudio.setVolume(volume) }
+
+                    // Полная тишина по голосу закрепляется ещё и на уровне
+                    // подписки. setVolume(0) идёт в libwebrtc через
+                    // RemoteAudioSource → AudioRtpReceiver, и до тех пор пока
+                    // у приёмника не проставлен ssrc, громкость просто теряется
+                    // — «наушники» жались, а собеседника было слышно.
+                    // setEnabled ничего не теряет: сервер перестаёт слать
+                    // дорожку вообще. Заодно экономится трафик.
+                    //
+                    // Только для голоса: демку «наушники» не трогают (см. выше).
+                    if (!isScreen) {
+                        runCatching {
+                            (pub as? RemoteTrackPublication)?.setEnabled(volume > 0.0)
+                        }
+                    }
                 }
             }
         }

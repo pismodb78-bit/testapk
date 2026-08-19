@@ -61,6 +61,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -513,17 +515,29 @@ private fun CallScreen(
     }
 
     val controls: @Composable (Boolean) -> Unit = { vertical ->
-        val buttons: @Composable () -> Unit = {
+        // itemMod приходит снаружи: в горизонтальном ряду это weight(1f) —
+        // семь кружков по 52 dp с подписями в 360 dp экрана иначе не влезают
+        // и молча обрезаются справа (вместе с кнопкой «Выйти»).
+        val buttons: @Composable (Modifier) -> Unit = { itemMod ->
             CallButton(
                 icon = if (micMuted) Icons.Default.MicOff else Icons.Default.Mic,
                 active = !micMuted,
                 label = "Микрофон",
+                modifier = itemMod,
+                showLabel = !vertical,
+                danger = micMuted,
             ) { scope.launch { engine.toggleMic() } }
 
+            // «Наушники» = полный мут входящего ГОЛОСА (звук чужой демки
+            // продолжает играть — так же на ПК). Первое нажатие глушит заодно
+            // и микрофон, включение микрофона снимает «наушники» обратно.
             CallButton(
                 icon = if (deafened) Icons.Default.HeadsetOff else Icons.Default.Headset,
                 active = !deafened,
-                label = "Звук",
+                label = "Наушники",
+                modifier = itemMod,
+                showLabel = !vertical,
+                danger = deafened,
             ) { scope.launch { engine.toggleDeafen() } }
 
             // Шумодав наш, а не из WebRTC, поэтому переключается прямо в
@@ -532,6 +546,8 @@ private fun CallScreen(
                 icon = if (denoise) Icons.Default.NoiseAware else Icons.Default.NoiseControlOff,
                 active = denoise,
                 label = "Шумодав",
+                modifier = itemMod,
+                showLabel = !vertical,
             ) {
                 denoise = !denoise
                 engine.setNoiseSuppression(denoise)
@@ -541,6 +557,8 @@ private fun CallScreen(
                 icon = if (cameraOn) Icons.Default.Videocam else Icons.Default.VideocamOff,
                 active = cameraOn,
                 label = "Камера",
+                modifier = itemMod,
+                showLabel = !vertical,
             ) { scope.launch { engine.toggleCamera() } }
 
             // Кнопка появляется только при включённой камере: переключать
@@ -549,7 +567,9 @@ private fun CallScreen(
                 CallButton(
                     icon = Icons.Default.FlipCameraAndroid,
                     active = true,
-                    label = if (frontCamera) "Фронтальная" else "Основная",
+                    label = if (frontCamera) "Фронталка" else "Основная",
+                    modifier = itemMod,
+                    showLabel = !vertical,
                 ) { engine.switchCamera() }
             }
 
@@ -557,6 +577,8 @@ private fun CallScreen(
                 icon = if (sharing) Icons.Default.StopScreenShare else Icons.Default.ScreenShare,
                 active = sharing,
                 label = "Экран",
+                modifier = itemMod,
+                showLabel = !vertical,
             ) {
                 if (sharing) {
                     scope.launch { engine.stopScreenShare() }
@@ -565,15 +587,29 @@ private fun CallScreen(
                 }
             }
 
-            Box(
-                Modifier
-                    .size(56.dp)
-                    .clip(CircleShape)
-                    .background(PismoColors.Red),
-                contentAlignment = Alignment.Center,
-            ) {
-                IconButton(onClick = onHangup) {
-                    Icon(Icons.Default.CallEnd, "Завершить", tint = Color.White)
+            Column(itemMod, horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(
+                    Modifier
+                        .size(52.dp)
+                        .clip(CircleShape)
+                        .background(PismoColors.Red),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    IconButton(onClick = onHangup) {
+                        Icon(Icons.Default.CallEnd, "Завершить", tint = Color.White)
+                    }
+                }
+                if (!vertical) {
+                    Text(
+                        "Выйти",
+                        color = PismoColors.Red,
+                        fontSize = 9.sp,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                    )
                 }
             }
         }
@@ -583,13 +619,13 @@ private fun CallScreen(
                 Modifier.verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) { buttons() }
+            ) { buttons(Modifier) }
         } else {
             Row(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically,
-            ) { buttons() }
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalAlignment = Alignment.Top,
+            ) { buttons(Modifier.weight(1f)) }
         }
     }
 
@@ -899,17 +935,53 @@ private fun CallButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     active: Boolean,
     label: String,
+    modifier: Modifier = Modifier,
+    showLabel: Boolean = true,
+    /**
+     * Красный кружок вместо серого — «выключено намеренно и это слышно всем»:
+     * мьют микрофона и «наушники». Ровно так же покрашены эти две кнопки на
+     * ПК (PaintMuteButton/PaintDeafenButton), и по цвету сразу видно, что
+     * нажатие сработало.
+     */
+    danger: Boolean = false,
     onClick: () -> Unit,
 ) {
-    Box(
-        Modifier
-            .size(52.dp)
-            .clip(CircleShape)
-            .background(if (active) PismoColors.BgHover else PismoColors.BgElevated),
-        contentAlignment = Alignment.Center,
-    ) {
-        IconButton(onClick = onClick) {
-            Icon(icon, label, tint = if (active) Color.White else PismoColors.TextMuted)
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            Modifier
+                .size(52.dp)
+                .clip(CircleShape)
+                .background(
+                    when {
+                        danger -> PismoColors.Red
+                        active -> PismoColors.BgHover
+                        else -> PismoColors.BgElevated
+                    }
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            IconButton(onClick = onClick) {
+                Icon(
+                    icon, label,
+                    tint = if (active || danger) Color.White else PismoColors.TextMuted,
+                )
+            }
+        }
+
+        // Подпись под кнопкой. Без неё ряд одинаковых кружков читается
+        // только по иконкам, а «наушники» и вовсе непонятны: на ПК у кнопки
+        // есть всплывающая подсказка, здесь её негде показать.
+        if (showLabel) {
+            Text(
+                label,
+                color = if (danger) PismoColors.Red else PismoColors.TextMuted,
+                fontSize = 9.sp,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+            )
         }
     }
 }

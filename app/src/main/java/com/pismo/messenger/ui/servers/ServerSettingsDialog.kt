@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pismo.messenger.data.ServerMemory
 import com.pismo.messenger.data.model.ServerPermissions
 import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.ui.login.PismoField
@@ -60,6 +61,7 @@ fun ServerSettingsDialog(
             onConfirm = {
                 scope.launch {
                     ServerRepository.deleteServer(serverId)
+                    ServerMemory.invalidate(serverId)
                     confirmDelete = false
                     onLeft()
                 }
@@ -77,6 +79,7 @@ fun ServerSettingsDialog(
             onConfirm = {
                 scope.launch {
                     ServerRepository.leaveServer(serverId)
+                    ServerMemory.invalidate(serverId)
                     confirmLeave = false
                     onLeft()
                 }

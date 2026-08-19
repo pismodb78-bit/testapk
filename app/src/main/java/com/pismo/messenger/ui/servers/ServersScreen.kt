@@ -50,6 +50,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pismo.messenger.data.ServerMemory
 import com.pismo.messenger.data.model.ChannelType
 import com.pismo.messenger.data.model.ServerChannel
 import com.pismo.messenger.data.model.ServerPermissions
@@ -83,12 +84,21 @@ fun ServersScreen(
 ) {
     val scope = rememberCoroutineScope()
 
-    var servers by remember { mutableStateOf<List<ServerSummary>>(emptyList()) }
-    var selected by remember { mutableStateOf<ServerSummary?>(null) }
-    var channels by remember { mutableStateOf<List<ServerChannel>>(emptyList()) }
-    var perms by remember { mutableStateOf(ServerPermissions()) }
+    // Стартуем с того, что показывали в прошлый раз: дерево серверов едет из
+    // удалённой базы четырьмя запросами, и без этого вкладка каждый раз
+    // открывалась пустым рельсом. Свежее приезжает следом и подменяет.
+    val rememberedServers = remember { ServerMemory.peekServers() }
+    val rememberedSelected = remember { ServerMemory.peekSelected(rememberedServers) }
+    val rememberedChannels = remember {
+        rememberedSelected?.let { ServerMemory.peekChannels(it.id) }
+    }
+
+    var servers by remember { mutableStateOf(rememberedServers) }
+    var selected by remember { mutableStateOf(rememberedSelected) }
+    var channels by remember { mutableStateOf(rememberedChannels?.first ?: emptyList()) }
+    var perms by remember { mutableStateOf(rememberedChannels?.second ?: ServerPermissions()) }
     var voice by remember { mutableStateOf<Map<Int, List<VoiceParticipant>>>(emptyMap()) }
-    var badges by remember { mutableStateOf<List<ServerRepository.Badge>>(emptyList()) }
+    var badges by remember { mutableStateOf(ServerMemory.peekBadges()) }
 
     var showCreate by remember { mutableStateOf(false) }
     var showJoin by remember { mutableStateOf(false) }
@@ -100,16 +110,40 @@ fun ServersScreen(
     suspend fun reloadServers() {
         runCatching {
             servers = ServerRepository.myServers()
-            if (selected == null) selected = servers.firstOrNull()
+            ServerMemory.putServers(servers)
+            // Выбор восстанавливаем по запомненному id, а не «первый в
+            // списке»: возврат на вкладку должен попадать туда же, откуда
+            // ушли. Если сервера в списке уже нет — берём первый.
+            if (selected == null || servers.none { it.id == selected?.id }) {
+                selected = ServerMemory.peekSelected(servers)
+            }
             badges = ServerRepository.badges()
+            ServerMemory.putBadges(badges)
         }.onFailure { error = it.message.orEmpty() }
     }
 
     suspend fun reloadChannels() {
         val s = selected ?: return
+        ServerMemory.putSelected(s.id)
+
+        // Пока едут свежие каналы, показываем запомненные — но именно ЭТОГО
+        // сервера. Если про него ничего не помним, список надо очистить:
+        // оставить на экране каналы предыдущего сервера — это показать
+        // человеку чужое дерево и дать по нему кликнуть.
+        val cached = ServerMemory.peekChannels(s.id)
+        if (cached != null) {
+            channels = cached.first
+            perms = cached.second
+        } else {
+            channels = emptyList()
+            perms = ServerPermissions()
+            voice = emptyMap()
+        }
+
         runCatching {
             channels = ServerRepository.channels(s.id)
             perms = ServerRepository.permissions(s.id)
+            ServerMemory.putChannels(s.id, channels, perms)
             voice = PresenceRepository.voiceForServer(s.id)
         }.onFailure { error = it.message.orEmpty() }
     }
@@ -124,6 +158,7 @@ fun ServersScreen(
             runCatching {
                 selected?.let { voice = PresenceRepository.voiceForServer(it.id) }
                 badges = ServerRepository.badges()
+                ServerMemory.putBadges(badges)
             }
         }
     }

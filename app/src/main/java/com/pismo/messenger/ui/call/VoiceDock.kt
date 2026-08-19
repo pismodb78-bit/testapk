@@ -49,7 +49,7 @@ import kotlinx.coroutines.isActive
  *
  * На ПК док висит в углу и позволяет вернуться в окно звонка, не теряя
  * его из виду. Здесь то же самое: пока идёт звонок, по любому разделу
- * приложения видно, что вы в эфире, и одним тапом можно вернуться.
+ * приложения видно, где идёт разговор, и одним тапом можно вернуться.
  */
 @Composable
 fun VoiceDock() {
@@ -93,17 +93,27 @@ fun VoiceDock() {
             Spacer(Modifier.width(10.dp))
 
             Column(Modifier.weight(1f)) {
+                // Верхняя строка — ГДЕ идёт разговор, как subtitle дока на ПК
+                // («с кем/где звонок»). Раньше здесь было «В эфире», и это
+                // сбивало: тем же словом подписана демонстрация экрана, а
+                // куда именно вернёт кнопка, понять было нельзя.
                 Text(
-                    if (connected) "В эфире" else "Подключение…",
-                    color = if (connected) PismoColors.Green else PismoColors.TextMuted,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    info.title.ifBlank { "Звонок" } +
-                            if (connected) " · ${formatDuration(elapsed)}" else "",
+                    when {
+                        info.isVoiceChannel -> "Голосовой канал · ${info.title.ifBlank { "канал" }}"
+                        info.groupId > 0 -> "Групповой звонок · ${info.title.ifBlank { "группа" }}"
+                        else -> "Звонок · ${info.title.ifBlank { "собеседник" }}"
+                    },
                     color = PismoColors.TextPrimary,
                     fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    if (connected) "Голосовая связь подключена · ${formatDuration(elapsed)}"
+                    else "Подключение…",
+                    color = if (connected) PismoColors.Green else PismoColors.TextMuted,
+                    fontSize = 11.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )

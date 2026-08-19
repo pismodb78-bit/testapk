@@ -322,7 +322,11 @@ fun SettingsScreen(onBack: () -> Unit) {
                 )
                 Slider(
                     value = denoiseStrength,
-                    onValueChange = { denoiseStrength = it },
+                    onValueChange = {
+                        denoiseStrength = it
+                        com.pismo.messenger.call.ActiveCall.engine
+                            ?.previewDenoiseStrength(it)
+                    },
                     onValueChangeFinished = {
                         Prefs.denoiseStrength = denoiseStrength
                         applyLive()
@@ -354,7 +358,14 @@ fun SettingsScreen(onBack: () -> Unit) {
                 )
                 Slider(
                     value = voiceThreshold,
-                    onValueChange = { voiceThreshold = it },
+                    onValueChange = {
+                        voiceThreshold = it
+                        // Порог уезжает в идущий разговор сразу, ещё до
+                        // отпускания: иначе по шкале не поймать момент, когда
+                        // собственная речь начинает обрезаться.
+                        com.pismo.messenger.call.ActiveCall.engine
+                            ?.previewVoiceGate(voiceAuto, it.toInt())
+                    },
                     onValueChangeFinished = {
                         Prefs.voiceThresholdDb = voiceThreshold.toInt()
                         applyLive()
@@ -389,7 +400,11 @@ fun SettingsScreen(onBack: () -> Unit) {
             )
             Slider(
                 value = voiceOutGain,
-                onValueChange = { voiceOutGain = it },
+                onValueChange = {
+                    voiceOutGain = it
+                    com.pismo.messenger.call.ActiveCall.engine
+                        ?.previewVoiceOutputGain(it.toInt())
+                },
                 onValueChangeFinished = {
                     Prefs.voiceOutputGain = voiceOutGain.toInt()
                     applyLive()
@@ -417,20 +432,22 @@ fun SettingsScreen(onBack: () -> Unit) {
             Text("Качество", color = PismoColors.TextSecondary, fontSize = 13.sp)
             Spacer(Modifier.height(6.dp))
             Row(Modifier.fillMaxWidth()) {
-                ThemeChip("Экономно", screenQuality == 0) { screenQuality = 0 }
+                ThemeChip("15 fps", screenQuality == 0) { screenQuality = 0 }
                 Spacer(Modifier.width(8.dp))
-                ThemeChip("Чётко", screenQuality == 1) { screenQuality = 1 }
+                ThemeChip("30 fps", screenQuality == 1) { screenQuality = 1 }
                 Spacer(Modifier.width(8.dp))
-                ThemeChip("Плавно", screenQuality == 2) { screenQuality = 2 }
+                ThemeChip("60 fps", screenQuality == 2) { screenQuality = 2 }
             }
             Spacer(Modifier.height(6.dp))
             Text(
                 when (screenQuality) {
-                    0 -> "10 кадров в секунду, до 1,2 Мбит/с — для слабой сети."
-                    2 -> "30 кадров в секунду, до 6 Мбит/с — для игр и видео."
-                    else -> "15 кадров в секунду, до 4 Мбит/с. Экран почти всегда " +
-                            "показывают ради интерфейса и текста, а там важнее " +
-                            "чёткость, чем частота кадров."
+                    2 -> "До 8 Мбит/с — для игр и видео. Канал нужен вдвое шире, " +
+                            "и кодировщик телефона на родном разрешении экрана " +
+                            "столько кадров может и не вытянуть."
+                    1 -> "До 6 Мбит/с — плавно, годится и для видео."
+                    else -> "До 4 Мбит/с. Экран почти всегда показывают ради " +
+                            "интерфейса и текста, а там важнее чёткость, чем " +
+                            "частота кадров."
                 },
                 color = PismoColors.TextMuted, fontSize = 11.sp,
             )
@@ -575,14 +592,13 @@ private fun MicLevelBar(thresholdDb: Float) {
     val scope = rememberCoroutineScope()
     val level by MicLevelMonitor.levelDb.collectAsState()
 
-    // В звонке микрофон уже занят движком: второй AudioRecord либо не
-    // откроется, либо отберёт поток у разговора. Сами настройки при этом
-    // крутить можно — они применяются на лету, просто без полосы уровня.
-    val busy = com.pismo.messenger.call.IncomingCallMonitor.inCall
+    // В звонке уровень берётся прямо из цепочки разговора, а не из своего
+    // микрофона: у той величины и порог, и звук — общие.
+    val inCall = com.pismo.messenger.call.ActiveCall.engine != null
 
-    DisposableEffect(busy) {
-        if (!busy) MicLevelMonitor.acquire(scope)
-        onDispose { if (!busy) MicLevelMonitor.release() }
+    DisposableEffect(Unit) {
+        MicLevelMonitor.acquire(scope)
+        onDispose { MicLevelMonitor.release() }
     }
 
     val floor = MicLevelMonitor.FLOOR_DB
@@ -622,11 +638,12 @@ private fun MicLevelBar(thresholdDb: Float) {
         }
         Spacer(Modifier.height(2.dp))
         Text(
-            if (busy) "Идёт звонок — микрофон занят им, полоса недоступна.\n" +
-                "Порог при этом меняется на лету"
-            else if (level <= floor + 0.5f) "Тишина"
-            else "${level.toInt()} дБ",
-            color = if (busy) PismoColors.Yellow else PismoColors.TextMuted,
+            when {
+                level <= floor + 0.5f -> if (inCall) "Тишина (уровень из звонка)" else "Тишина"
+                inCall -> "${level.toInt()} дБ — уровень из идущего разговора"
+                else -> "${level.toInt()} дБ"
+            },
+            color = if (inCall) PismoColors.Green else PismoColors.TextMuted,
             fontSize = 10.sp,
         )
     }

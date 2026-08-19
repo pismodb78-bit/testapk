@@ -74,6 +74,19 @@ class MicProcessor(sampleRate: Int) {
     @Volatile
     var outputGainPercent: Int = 100
 
+    /**
+     * Уровень последнего блока в дБFS — ровно та величина, с которой
+     * сравнивается порог активации.
+     *
+     * Нужна шкале в настройках. Своим микрофоном она мерить не может: во
+     * время разговора он занят, а вне разговора это ДРУГОЙ поток с другой
+     * обработкой — отсюда и расхождение, когда шкала показывала −54 дБ, а
+     * порог −20 уже начинал резать речь.
+     */
+    @Volatile
+    var lastLevelDb: Float = -100f
+        private set
+
     private var sr = sampleRate
     private var spectral = SpectralDenoiser()
     private var limiter = TransientLimiter(sampleRate)
@@ -108,6 +121,7 @@ class MicProcessor(sampleRate: Int) {
         }
         val rms = sqrt(sum / n)
         val db = if (rms > 1.0) 20.0 * log10(rms / 32768.0) else -100.0
+        lastLevelDb = db.toFloat()
 
         // ── 2) Спектральный шумодав ──
         //

@@ -4,12 +4,15 @@ import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import com.pismo.messenger.call.ActiveCall
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.log10
 import kotlin.math.sqrt
@@ -22,9 +25,22 @@ import kotlin.math.sqrt
  * только наугад — «−31 дБ» само по себе ничего не говорит, надо ВИДЕТЬ, где
  * относительно этой черты оказывается собственная речь и где фон комнаты.
  *
- * Захват тот же, что у голосовых: 16 кГц моно PCM-16, источник
- * VOICE_COMMUNICATION. Уровень считается по RMS блока и отдаётся в дБ
- * относительно полной шкалы, как и порог, — иначе сравнивать было бы нечего.
+ * ДВА ИСТОЧНИКА, и это принципиально.
+ *
+ * Вне разговора мерить нечем, кроме собственного захвата: 16 кГц моно PCM-16,
+ * источник VOICE_COMMUNICATION — как у голосовых.
+ *
+ * А вот В РАЗГОВОРЕ свой микрофон открывать нельзя и незачем. Нельзя —
+ * потому что он занят звонком. Незачем — потому что это был бы ДРУГОЙ поток
+ * с другой обработкой, и цифры на шкале начинали жить отдельно от порога:
+ * шкала показывала −54 дБ там, где порог −20 уже резал речь. В разговоре
+ * уровень берётся прямо из цепочки звонка — у той самой величины, с которой
+ * гейт и сравнивает порог.
+ *
+ * Источник выбирается НА КАЖДОМ ТИКЕ, а не один раз при запуске: настройки
+ * открывают и до звонка, и во время, и звонок начинается/кончается прямо при
+ * открытом экране. Цикл один, он сам подхватывает переход в обе стороны и
+ * закрывает свой захват, как только звонок поднялся.
  */
 object MicLevelMonitor {
 
@@ -36,6 +52,7 @@ object MicLevelMonitor {
     private val _levelDb = MutableStateFlow(FLOOR_DB)
     val levelDb: StateFlow<Float> = _levelDb.asStateFlow()
 
+    @Volatile
     private var record: AudioRecord? = null
     private var job: Job? = null
 
@@ -48,36 +65,41 @@ object MicLevelMonitor {
 
     val isRunning: Boolean get() = job != null
 
-    @SuppressLint("MissingPermission")
     @Synchronized
     fun acquire(scope: CoroutineScope) {
         users++
         if (job != null) return
 
-        runCatching {
-            val minBuf = AudioRecord.getMinBufferSize(
-                SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
-            ).coerceAtLeast(2048)
+        job = scope.launch(Dispatchers.IO) {
+            // Кусок на ~64 мс при 16 кГц: чаще дёргать шкалу бессмысленно,
+            // реже — она начинает «залипать» на слогах.
+            val chunk = ShortArray(1024)
+            try {
+                while (isActive) {
+                    val call = ActiveCall.engine
+                    if (call != null) {
+                        // Разговор идёт: свой захват отпускаем (микрофон нужен
+                        // звонку) и читаем уровень из его же цепочки.
+                        closeRecord()
+                        _levelDb.value = smooth(_levelDb.value, call.micLevelDb)
+                        delay(60)
+                        continue
+                    }
 
-            val rec = AudioRecord(
-                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                minBuf * 2,
-            )
-            if (rec.state != AudioRecord.STATE_INITIALIZED) {
-                rec.release()
-                return
-            }
-            record = rec
-            rec.startRecording()
+                    val rec = record ?: openRecord()
+                    if (rec == null) {
+                        _levelDb.value = FLOOR_DB
+                        delay(300)
+                        continue
+                    }
 
-            job = scope.launch(Dispatchers.IO) {
-                val chunk = ShortArray(minBuf / 2)
-                while (record != null) {
                     val read = runCatching { rec.read(chunk, 0, chunk.size) }.getOrDefault(-1)
-                    if (read <= 0) break
+                    if (read <= 0) {
+                        closeRecord()
+                        delay(300)
+                        continue
+                    }
+
                     var sum = 0.0
                     for (i in 0 until read) {
                         val v = chunk[i].toDouble()
@@ -85,16 +107,50 @@ object MicLevelMonitor {
                     }
                     val rms = sqrt(sum / read)
                     val db = if (rms > 1.0) (20.0 * log10(rms / 32768.0)).toFloat() else FLOOR_DB
-                    // Спад плавный, подъём мгновенный: иначе полоса дрожит и
-                    // по ней невозможно поймать, где именно проходит речь.
-                    val prev = _levelDb.value
-                    _levelDb.value =
-                        if (db > prev) db.coerceIn(FLOOR_DB, 0f)
-                        else (prev + (db - prev) * 0.25f).coerceIn(FLOOR_DB, 0f)
+                    _levelDb.value = smooth(_levelDb.value, db)
                 }
+            } finally {
+                closeRecord()
             }
-        }.onFailure { release() }
+        }
     }
+
+    @SuppressLint("MissingPermission")
+    private fun openRecord(): AudioRecord? = runCatching {
+        val minBuf = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+        ).coerceAtLeast(4096)
+
+        val rec = AudioRecord(
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            minBuf * 2,
+        )
+        if (rec.state != AudioRecord.STATE_INITIALIZED) {
+            rec.release()
+            return@runCatching null
+        }
+        rec.startRecording()
+        record = rec
+        rec
+    }.getOrNull()
+
+    private fun closeRecord() {
+        val r = record ?: return
+        record = null
+        runCatching { r.stop() }
+        runCatching { r.release() }
+    }
+
+    /**
+     * Спад плавный, подъём мгновенный: иначе полоса дрожит и по ней
+     * невозможно поймать, где именно проходит речь.
+     */
+    private fun smooth(prev: Float, db: Float): Float =
+        if (db > prev) db.coerceIn(FLOOR_DB, 0f)
+        else (prev + (db - prev) * 0.25f).coerceIn(FLOOR_DB, 0f)
 
     @Synchronized
     fun release() {
@@ -102,10 +158,7 @@ object MicLevelMonitor {
         if (users > 0) return
         job?.cancel()
         job = null
-        val r = record
-        record = null
-        runCatching { r?.stop() }
-        runCatching { r?.release() }
+        closeRecord()
         _levelDb.value = FLOOR_DB
     }
 }
