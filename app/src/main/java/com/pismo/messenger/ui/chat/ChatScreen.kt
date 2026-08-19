@@ -3,10 +3,10 @@ package com.pismo.messenger.ui.chat
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,8 +14,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,24 +24,25 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,10 +52,10 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -70,12 +71,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.PresenceReporter
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.ellipsize
@@ -84,12 +86,12 @@ import com.pismo.messenger.core.fileColor
 import com.pismo.messenger.core.formatDateSeparator
 import com.pismo.messenger.core.formatDuration
 import com.pismo.messenger.core.formatTime
-import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.data.MediaCache
 import com.pismo.messenger.data.MessageMemory
+import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.data.model.ChatMessage
-import com.pismo.messenger.data.model.ReactionSummary
 import com.pismo.messenger.data.model.Presence
+import com.pismo.messenger.data.model.ReactionSummary
 import com.pismo.messenger.data.model.Scope
 import com.pismo.messenger.data.model.headerText
 import com.pismo.messenger.data.repo.ChatRepository
@@ -101,8 +103,8 @@ import com.pismo.messenger.media.WavRecorder
 import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.components.DateSeparator
 import com.pismo.messenger.ui.components.FileBadge
-import com.pismo.messenger.ui.components.LetterAvatar
 import com.pismo.messenger.ui.components.GroupAvatar
+import com.pismo.messenger.ui.components.LetterAvatar
 import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.delay
@@ -190,6 +192,11 @@ fun ChatScreen(
     var recordSeconds by remember { mutableStateOf(0) }
     var showCircleRecorder by remember { mutableStateOf(false) }
     var showGifPicker by remember { mutableStateOf(false) }
+
+    /** Уведомления этой переписки выключены. Настройка местная — см. Prefs. */
+    var muted by remember(targetId, isGroup) {
+        mutableStateOf(Prefs.isChatMuted(if (isGroup) "GROUP" else "DM", targetId))
+    }
     // Режим множественного выделения — порт «Выбрано: N» с ПК.
     var selectMode by remember(targetId) { mutableStateOf(false) }
     var selectedIds by remember(targetId) { mutableStateOf(setOf<Int>()) }
@@ -621,7 +628,28 @@ fun ChatScreen(
                                 text = { Text("Закреплённые") },
                                 onClick = { menuOpen = false; showPins = true },
                             )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (muted) "Включить уведомления"
+                                        else "Выключить уведомления"
+                                    )
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    muted = !muted
+                                    Prefs.setChatMuted(scopeKind.name, targetId, muted)
+                                },
+                            )
                         }
+                    }
+                    if (muted) {
+                        Icon(
+                            Icons.Default.NotificationsOff,
+                            "Уведомления выключены",
+                            tint = PismoColors.TextMuted,
+                            modifier = Modifier.size(18.dp),
+                        )
                     }
                     IconButton(onClick = { startCall(context, targetId, title, isGroup, false) }) {
                         Icon(Icons.Default.Call, "Позвонить", tint = PismoColors.Green)

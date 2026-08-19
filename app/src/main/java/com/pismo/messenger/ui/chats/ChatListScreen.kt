@@ -17,14 +17,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.GroupAdd
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.GroupAdd
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
@@ -52,18 +53,18 @@ import com.pismo.messenger.core.formatListTime
 import com.pismo.messenger.core.parseHexColor
 import com.pismo.messenger.data.ChatListMemory
 import com.pismo.messenger.data.model.Conversation
-import com.pismo.messenger.data.model.Presence
 import com.pismo.messenger.data.model.GroupSummary
+import com.pismo.messenger.data.model.Presence
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.data.repo.ProfileRepository
 import com.pismo.messenger.net.SignalingClient
-import com.pismo.messenger.ui.components.LetterAvatar
 import com.pismo.messenger.ui.components.GroupAvatar
+import com.pismo.messenger.ui.components.LetterAvatar
+import com.pismo.messenger.ui.components.UnreadBadge
 import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.group.CreateGroupDialog
 import com.pismo.messenger.ui.group.GroupMembersDialog
-import com.pismo.messenger.ui.components.UnreadBadge
 import com.pismo.messenger.ui.login.PismoField
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.delay
@@ -366,14 +367,27 @@ private fun ConversationRow(
         UserAvatar(c.userId, c.name, 44.dp, presence = presence)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                c.name,
-                color = PismoColors.TextPrimary,
-                fontSize = 15.sp,
-                fontWeight = if (c.unread > 0) FontWeight.Bold else FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    c.name,
+                    color = PismoColors.TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = if (c.unread > 0) FontWeight.Bold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                // Заглушённую переписку видно из списка, а не только изнутри.
+                if (Prefs.isChatMuted("DM", c.userId)) {
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        Icons.Default.NotificationsOff,
+                        "Уведомления выключены",
+                        tint = PismoColors.TextMuted,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
             if (c.lastMessage.isNotBlank()) {
                 Text(
                     c.lastMessage,
@@ -411,14 +425,26 @@ private fun GroupRow(g: GroupSummary, onClick: () -> Unit, onLongClick: () -> Un
         GroupAvatar(g.id, g.name, g.avatarColorHex, 44.dp)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                "👥 ${g.name}",
-                color = PismoColors.TextPrimary,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "👥 ${g.name}",
+                    color = PismoColors.TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (Prefs.isChatMuted("GROUP", g.id)) {
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        Icons.Default.NotificationsOff,
+                        "Уведомления выключены",
+                        tint = PismoColors.TextMuted,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
             Text(
                 g.lastMessage.ifBlank { "${g.memberCount} участник(ов)" },
                 color = PismoColors.TextMuted,

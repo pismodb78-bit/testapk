@@ -144,6 +144,36 @@ object Prefs {
         set(v) = sp.edit().putString("user_audio", v).apply()
 
     /**
+     * Чаты, у которых уведомления выключены: строки вида «DM:42», «GROUP:7».
+     *
+     * Хранится ЛОКАЛЬНО, а не в базе, и это осознанно. На ПК заглушить
+     * отдельную переписку нельзя вовсе — там мьют есть только у сервера
+     * (server_members.muted_notifs), и заводить ради телефона колонку, о
+     * которой вторая сторона не знает, значило бы развести схемы. Настройка
+     * и по смыслу местная: тишина нужна на том устройстве, которое лежит
+     * рядом ночью.
+     */
+    private var mutedChatsRaw: String
+        get() = sp.getString("muted_chats", "")!!
+        set(v) = sp.edit().putString("muted_chats", v).apply()
+
+    private fun mutedKey(scope: String, id: Int) = "$scope:$id"
+
+    fun isChatMuted(scope: String, id: Int): Boolean =
+        mutedChatsRaw.split('\n').contains(mutedKey(scope, id))
+
+    fun setChatMuted(scope: String, id: Int, muted: Boolean) {
+        val key = mutedKey(scope, id)
+        val set = mutedChatsRaw.split('\n').filter { it.isNotBlank() }.toMutableSet()
+        if (muted) set.add(key) else set.remove(key)
+        mutedChatsRaw = set.joinToString("\n")
+    }
+
+    /** Все заглушённые — опросу дешевле спросить один раз, чем по чату. */
+    fun mutedChats(): Set<String> =
+        mutedChatsRaw.split('\n').filter { it.isNotBlank() }.toSet()
+
+    /**
      * Короткие звуки событий: микрофон, «наушники», камера, демонстрация,
      * вход и выход участников, новое сообщение. Порт Sounds.Enabled.
      *

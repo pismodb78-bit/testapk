@@ -99,12 +99,18 @@ class PollingService : LifecycleService() {
     }
 
     private suspend fun pollOnce() {
+        // Заглушённые переписки спрашиваем один раз на проход: список
+        // местный, лежит в настройках, и дёргать его по чату незачем.
+        val mutedChats = Prefs.mutedChats()
+
         // Личные сообщения.
         val unread = ChatRepository.unreadBySender()
 
         for ((senderId, count) in unread) {
             val before = previousUnread[senderId] ?: 0
-            if (count > before) {
+            // Базовую отметку двигаем в любом случае, даже у заглушённых:
+            // иначе снятый мьют вывалил бы разом всё накопленное за неделю.
+            if (count > before && "DM:$senderId" !in mutedChats) {
                 val name = runCatching {
                     com.pismo.messenger.data.repo.AuthRepository.loadUser(senderId)?.first
                 }.getOrNull() ?: "Пользователь #$senderId"
@@ -132,7 +138,7 @@ class PollingService : LifecycleService() {
             for ((gid, value) in groupMax) {
                 val (maxId, name) = value
                 val before = previousGroupMax[gid] ?: 0
-                if (maxId > before) {
+                if (maxId > before && "GROUP:$gid" !in mutedChats) {
                     val preview = ChatRepository.previewOfLatestInGroup(gid)
                     Notifications.showGroupMessage(this, gid, name, preview)
                 }
@@ -202,13 +208,16 @@ class PollingService : LifecycleService() {
         previousChannelMax.putAll(maxIds)
         if (fresh.isEmpty()) return
 
+        // Заглушённый сервер (общая настройка, видна и на ПК) плюс отдельно
+        // заглушённые каналы — местная настройка, как у личных чатов.
         val muted = ServerRepository.mutedChannelIds()
+        val mutedLocal = Prefs.mutedChats()
         val names = runCatching { ServerRepository.channelNames() }.getOrDefault(emptyMap())
         val badges = runCatching { ServerRepository.badges() }
             .getOrDefault(emptyList())
 
         for ((channelId, _) in fresh) {
-            if (channelId in muted) continue
+            if (channelId in muted || "CHANNEL:$channelId" in mutedLocal) continue
 
             val badge = badges.firstOrNull { it.channelId == channelId }
             // Упоминания: сначала бейдж (таблица server_mentions), иначе —

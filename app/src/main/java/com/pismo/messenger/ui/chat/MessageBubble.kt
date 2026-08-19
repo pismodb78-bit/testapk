@@ -350,12 +350,29 @@ fun MessageBubble(
                     }
 
                     Spacer(Modifier.height(3.dp))
-                    Text(
-                        if (msg.isEdited) "${formatTime(msg.createdAtMs)} · изменено"
-                        else formatTime(msg.createdAtMs),
-                        color = if (isMine) Color(0xFFB9BEFF) else PismoColors.TextMuted,
-                        fontSize = 10.sp,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (msg.isEdited) "${formatTime(msg.createdAtMs)} · изменено"
+                            else formatTime(msg.createdAtMs),
+                            color = if (isMine) Color(0xFFB9BEFF) else PismoColors.TextMuted,
+                            fontSize = 10.sp,
+                        )
+
+                        // Галочки — только у СВОИХ сообщений и только в личной
+                        // переписке. У группы и канала получателей много, и
+                        // «прочитано» одним значком там значило бы неправду:
+                        // на ПК их по той же причине рисуют лишь для ЛС.
+                        if (isMine && scopeKind == Scope.DM) {
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                "✓✓",
+                                // Синие — прочитано, серые — доставлено.
+                                // Цвета взяты с ПК.
+                                color = if (msg.isRead) Color(0xFF58AAFF) else Color(0xFF96A0B4),
+                                fontSize = 10.sp,
+                            )
+                        }
+                    }
                 }
 
                 DropdownMenu(
