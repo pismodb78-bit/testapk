@@ -154,26 +154,49 @@ object ServerRepository {
         val ownerId = Db.scalarInt("SELECT owner_id FROM servers WHERE id=?", serverId, default = -1)
         val isOwner = ownerId == me
 
-        return runCatching {
-            Db.queryFirst(
-                "SELECT m.muted_notifs, r.name AS rname, r.can_ban, r.can_kick, r.can_mute, r.can_manage " +
-                        "FROM server_members m LEFT JOIN server_roles r ON r.id=m.role_id " +
-                        "WHERE m.server_id=? AND m.user_id=?",
-                serverId, me
-            ) { rs ->
-                ServerPermissions(
-                    isOwner = isOwner,
-                    // Владелец может всё, независимо от роли.
-                    canBan = isOwner || rs.bool("can_ban"),
-                    canKick = isOwner || rs.bool("can_kick"),
-                    canMute = isOwner || rs.bool("can_mute"),
-                    canManage = isOwner || rs.bool("can_manage"),
-                    mutedNotifications = rs.bool("muted_notifs"),
+        // Колонка can_channels появилась позже. На базе, где миграцию ещё не
+        // прокатили, запрос с ней падает целиком — и человек остаётся вообще
+        // без прав. Поэтому первая попытка с колонкой, вторая без; тот же
+        // приём, что на ПК.
+        for (attempt in 0..1) {
+            val withChan = channelsColumnOk
+            val result = runCatching {
+                Db.queryFirst(
+                    "SELECT m.muted_notifs, r.name AS rname, r.can_ban, r.can_kick, " +
+                            "r.can_mute, r.can_manage" +
+                            (if (withChan) ", r.can_channels" else "") + " " +
+                            "FROM server_members m LEFT JOIN server_roles r ON r.id=m.role_id " +
+                            "WHERE m.server_id=? AND m.user_id=?",
+                    serverId, me
+                ) { rs ->
+                    val manage = isOwner || rs.bool("can_manage")
+                    ServerPermissions(
+                        isOwner = isOwner,
+                        // Владелец может всё, независимо от роли.
+                        canBan = isOwner || rs.bool("can_ban"),
+                        canKick = isOwner || rs.bool("can_kick"),
+                        canMute = isOwner || rs.bool("can_mute"),
+                        canManage = manage,
+                        // Пока колонки нет, поведение прежнее: каналы у тех,
+                        // кто управляет сервером, — праву негде храниться.
+                        canChannels = if (withChan) isOwner || rs.bool("can_channels") else manage,
+                        mutedNotifications = rs.bool("muted_notifs"),
+                    )
+                } ?: ServerPermissions(
+                    isOwner = isOwner, canBan = isOwner, canKick = isOwner,
+                    canMute = isOwner, canManage = isOwner, canChannels = isOwner,
                 )
-            } ?: ServerPermissions(isOwner = isOwner, canBan = isOwner, canKick = isOwner,
-                canMute = isOwner, canManage = isOwner)
-        }.getOrDefault(ServerPermissions(isOwner = isOwner))
+            }
+            result.getOrNull()?.let { return it }
+            if (!withChan) break
+            channelsColumnOk = false      // старая база — читаем без нового права
+        }
+        return ServerPermissions(isOwner = isOwner)
     }
+
+    /** Есть ли в server_roles колонка can_channels. Выясняется первой ошибкой. */
+    @Volatile
+    private var channelsColumnOk = true
 
     suspend fun myRoleName(serverId: Int): String = runCatching {
         Db.scalarString(
@@ -305,7 +328,9 @@ object ServerRepository {
                 }.toTypedArray()
             )
             if (file != null && file.isNotEmpty() && id > 0) {
-                runCatching { Db.exec("UPDATE server_messages SET file_data=? WHERE id=?", file, id) }
+                // Тем же дозаписывающим путём, что и личные чаты: одним
+                // пакетом двести мегабайт сервер не примет.
+                runCatching { ChatRepository.uploadFileData("server_messages", id, file) }
             }
             id
         } else if (hasReplyCol == true && replyToId > 0) {
@@ -399,31 +424,72 @@ object ServerRepository {
         )
     }
 
-    suspend fun roles(serverId: Int): List<ServerRole> = Db.query(
-        "SELECT id, name, color, can_ban, can_kick, can_mute, can_manage, position " +
-                "FROM server_roles WHERE server_id=? ORDER BY position,id",
-        serverId
-    ) { rs ->
-        ServerRole(
-            id = rs.getInt("id"),
-            name = rs.str("name"),
-            colorHex = rs.getString("color") ?: "#FFFFFF",
-            canBan = rs.bool("can_ban"),
-            canKick = rs.bool("can_kick"),
-            canMute = rs.bool("can_mute"),
-            canManage = rs.bool("can_manage"),
-            position = rs.getInt("position"),
+    suspend fun roles(serverId: Int): List<ServerRole> {
+        // Как и в permissions(): на базе без миграции запрос с новой колонкой
+        // падает целиком, и список ролей пропадает вовсе.
+        for (attempt in 0..1) {
+            val withChan = channelsColumnOk
+            val result = runCatching {
+                Db.query(
+                    "SELECT id, name, color, can_ban, can_kick, can_mute, can_manage" +
+                            (if (withChan) ", can_channels" else "") + ", position " +
+                            "FROM server_roles WHERE server_id=? ORDER BY position,id",
+                    serverId
+                ) { rs ->
+                    val manage = rs.bool("can_manage")
+                    ServerRole(
+                        id = rs.getInt("id"),
+                        name = rs.str("name"),
+                        colorHex = rs.getString("color") ?: "#FFFFFF",
+                        canBan = rs.bool("can_ban"),
+                        canKick = rs.bool("can_kick"),
+                        canMute = rs.bool("can_mute"),
+                        canManage = manage,
+                        canChannels = if (withChan) rs.bool("can_channels") else manage,
+                        position = rs.getInt("position"),
+                    )
+                }
+            }
+            result.getOrNull()?.let { return it }
+            if (!withChan) break
+            channelsColumnOk = false
+        }
+        return emptyList()
+    }
+
+    suspend fun createRole(serverId: Int, role: ServerRole): Int {
+        if (channelsColumnOk) {
+            runCatching {
+                return Db.insert(
+                    "INSERT INTO server_roles " +
+                            "(server_id,name,color,can_ban,can_kick,can_mute,can_manage,can_channels,position) " +
+                            "VALUES (?,?,?,?,?,?,?,?,?)",
+                    serverId, role.name, role.colorHex, role.canBan, role.canKick,
+                    role.canMute, role.canManage, role.canChannels, role.position
+                )
+            }.onFailure { channelsColumnOk = false }
+        }
+        return Db.insert(
+            "INSERT INTO server_roles (server_id,name,color,can_ban,can_kick,can_mute,can_manage,position) " +
+                    "VALUES (?,?,?,?,?,?,?,?)",
+            serverId, role.name, role.colorHex, role.canBan, role.canKick,
+            role.canMute, role.canManage, role.position
         )
     }
 
-    suspend fun createRole(serverId: Int, role: ServerRole): Int = Db.insert(
-        "INSERT INTO server_roles (server_id,name,color,can_ban,can_kick,can_mute,can_manage,position) " +
-                "VALUES (?,?,?,?,?,?,?,?)",
-        serverId, role.name, role.colorHex, role.canBan, role.canKick,
-        role.canMute, role.canManage, role.position
-    )
-
     suspend fun updateRole(role: ServerRole) {
+        if (channelsColumnOk) {
+            val ok = runCatching {
+                Db.exec(
+                    "UPDATE server_roles SET name=?,color=?,can_ban=?,can_kick=?,can_mute=?," +
+                            "can_manage=?,can_channels=? WHERE id=?",
+                    role.name, role.colorHex, role.canBan, role.canKick, role.canMute,
+                    role.canManage, role.canChannels, role.id
+                )
+            }.isSuccess
+            if (ok) return
+            channelsColumnOk = false
+        }
         Db.exec(
             "UPDATE server_roles SET name=?,color=?,can_ban=?,can_kick=?,can_mute=?,can_manage=? WHERE id=?",
             role.name, role.colorHex, role.canBan, role.canKick, role.canMute, role.canManage, role.id

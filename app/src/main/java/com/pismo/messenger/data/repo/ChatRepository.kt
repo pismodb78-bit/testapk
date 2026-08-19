@@ -483,11 +483,19 @@ object ChatRepository {
         newId
     }
 
-    private suspend fun uploadFileData(
+    /**
+     * Запись большого вложения в blob.
+     *
+     * internal, потому что тем же путём кладут файлы и каналы серверов:
+     * двести мегабайт одним пакетом сервер не примет (max_allowed_packet
+     * обычно кратно меньше), а два разных способа дозаписи в одном
+     * приложении — это два разных набора граблей.
+     */
+    internal suspend fun uploadFileData(
         table: String,
         msgId: Int,
         data: ByteArray,
-        onProgress: ((Float) -> Unit)?,
+        onProgress: ((Float) -> Unit)? = null,
     ) {
         // Сессионные таймауты: запись большого blob легко выходит за
         // дефолтные 30 секунд, и сервер рвёт соединение посреди команды.

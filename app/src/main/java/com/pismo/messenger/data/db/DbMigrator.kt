@@ -140,6 +140,22 @@ object DbMigrator {
                     "KEY idx_mention_lookup (user_id, channel_id, message_id)" +
                     ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
         },
+        Migration(16, "server_roles.can_channels: отдельное право на каналы") { c ->
+            // Управление каналами (создать, переименовать, удалить, лимит)
+            // отделено от общего управления сервером: снятая галочка отбирает
+            // каналы даже у того, кто правит роли. Владельца это не касается.
+            //
+            // На ПК ту же колонку добавляют вручную скриптом
+            // sql/2026-08-19_server_roles_can_channels.sql — там приложение
+            // DDL не выполняет. Здесь мигратор есть, поэтому доводим сами;
+            // обе стороны сходятся на одной колонке.
+            if (!columnExists(c, "server_roles", "can_channels")) {
+                exec(c, "ALTER TABLE server_roles ADD COLUMN can_channels TINYINT(1) NOT NULL DEFAULT 0")
+                // Разовый перенос: у кого было общее управление, тот не должен
+                // потерять каналы при обновлении.
+                exec(c, "UPDATE server_roles SET can_channels=1 WHERE can_manage=1")
+            }
+        },
     )
 
     /**

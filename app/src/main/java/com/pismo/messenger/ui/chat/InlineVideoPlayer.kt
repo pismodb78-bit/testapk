@@ -40,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -64,11 +65,12 @@ import com.pismo.messenger.data.MediaCache
 import com.pismo.messenger.data.model.Scope
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.media.MediaSaver
+import com.pismo.messenger.media.WavPlayer
 import com.pismo.messenger.ui.theme.PismoColors
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 
 /**
  * Видео прямо в пузыре — порт InlineVideoPlayer.cs.
@@ -361,7 +363,10 @@ internal fun VideoSurface(
                         // видео после разворачивания уезжало дальше само.
                         // Смотрим на ТЕКУЩЕЕ состояние и на позицию, где нас
                         // прервали.
-                        val resumeAt = if (positionMs > 0) positionMs else startAtMs
+                        // Видео забирает звук себе: играющая музыка или голосовое
+                    // поверх него — не то, чего ждут от нажатия на ролик.
+                    WavPlayer.stop()
+                    val resumeAt = if (positionMs > 0) positionMs else startAtMs
                         if (resumeAt > 0) seekTo(resumeAt)
                         if (isPlaying) start() else pause()
                     }
@@ -500,24 +505,6 @@ internal fun VideoSurface(
 }
 
 /**
- * Кто из аудио-пузырей играет прямо сейчас.
- *
- * На ПК проигрыватель голосовых один на всё окно, и второй запуск просто
- * забирает его себе. Здесь у каждого пузыря свой MediaPlayer, и без общей
- * отметки два вложения зазвучали бы разом поверх друг друга — а с учётом
- * голосовых сообщений и трёх.
- */
-private var activeAudioPlayer: android.media.MediaPlayer? = null
-
-private fun claimAudioFloor(mp: android.media.MediaPlayer?) {
-    val previous = activeAudioPlayer
-    if (previous !== mp) runCatching { previous?.pause() }
-    activeAudioPlayer = mp
-    // Голосовые живут в своём проигрывателе — его гасим отдельно.
-    com.pismo.messenger.media.WavPlayer.stop()
-}
-
-/**
  * Музыкальное вложение (mp3, m4a, flac…): строка с пуском и перемоткой.
  *
  * На ПК такой файл открывается тем же встроенным проигрывателем, что и видео;
@@ -537,54 +524,19 @@ fun InlineAudioBubble(
     var file by remember(msgId) { mutableStateOf(MediaCache.fileFor(msgId, "file", fileName)) }
     var loading by remember(msgId) { mutableStateOf(false) }
     var status by remember(msgId) { mutableStateOf("") }
-    var player by remember(msgId) { mutableStateOf<MediaPlayer?>(null) }
-    var isPlaying by remember(msgId) { mutableStateOf(false) }
-    var durationMs by remember(msgId) { mutableIntStateOf(0) }
-    var positionMs by remember(msgId) { mutableIntStateOf(0) }
 
-    DisposableEffect(msgId) {
-        onDispose {
-            if (activeAudioPlayer === player) activeAudioPlayer = null
-            runCatching { player?.release() }
-            player = null
-        }
-    }
-
-    LaunchedEffect(isPlaying) {
-        while (isPlaying) {
-            positionMs = runCatching { player?.currentPosition ?: 0 }.getOrDefault(0)
-
-            // Начавшийся разговор музыку глушит: слушать вложение и
-            // собеседника разом всё равно невозможно.
-            if (com.pismo.messenger.call.ActiveCall.engine != null) {
-                runCatching { player?.pause() }
-                isPlaying = false
-                break
-            }
-
-            // Чужой пузырь забрал звук себе — гасим свою кнопку, иначе она
-            // осталась бы на «паузе» у молчащего вложения.
-            if (activeAudioPlayer !== player) {
-                isPlaying = false
-                break
-            }
-            kotlinx.coroutines.delay(300)
-        }
-    }
+    // Проигрыватель общий на всё приложение, а не свой у каждого пузыря.
+    // Со своим два вложения играли разом поверх друг друга, а стоило
+    // отлистать ленту — Compose выбрасывал пузырь вместе с проигрывателем, и
+    // музыка обрывалась на середине.
+    val playingId by WavPlayer.playingId.collectAsState()
+    val positionMs by WavPlayer.positionMs.collectAsState()
+    val durationMs by WavPlayer.durationMs.collectAsState()
+    val isPlaying = playingId == msgId
 
     fun startFrom(f: File) {
-        runCatching {
-            val mp = player ?: MediaPlayer().also { m ->
-                m.setDataSource(f.absolutePath)
-                m.prepare()
-                m.setOnCompletionListener { isPlaying = false; positionMs = 0 }
-                player = m
-                durationMs = m.duration.coerceAtLeast(0)
-            }
-            claimAudioFloor(mp)
-            mp.start()
-            isPlaying = true
-        }.onFailure { status = "Не удалось воспроизвести" }
+        runCatching { WavPlayer.toggleFile(msgId, f) }
+            .onFailure { status = "Не удалось воспроизвести" }
     }
 
     Row(
@@ -597,7 +549,7 @@ fun InlineAudioBubble(
                 if (loading) return@clickable
                 val f = file
                 when {
-                    isPlaying -> { runCatching { player?.pause() }; isPlaying = false }
+                    isPlaying -> WavPlayer.stop()
                     f != null -> startFrom(f)
                     else -> scope.launch {
                         loading = true
@@ -640,15 +592,12 @@ fun InlineAudioBubble(
                 fontSize = 13.sp,
                 maxLines = 1,
             )
-            // Полоса появляется, когда файл уже открыт: до этого длина
-            // неизвестна, и рисовать нечего.
-            if (durationMs > 0) {
+            // Полоса — только у играющего: у остальных пузырей длине взяться
+            // неоткуда, общий проигрыватель знает лишь про текущий.
+            if (isPlaying && durationMs > 0) {
                 Slider(
                     value = positionMs.toFloat().coerceIn(0f, durationMs.toFloat()),
-                    onValueChange = {
-                        positionMs = it.toInt()
-                        runCatching { player?.seekTo(it.toInt()) }
-                    },
+                    onValueChange = { WavPlayer.seekTo(msgId, it.toInt()) },
                     valueRange = 0f..durationMs.toFloat(),
                     colors = SliderDefaults.colors(
                         thumbColor = PismoColors.onBubble(isMine),
@@ -659,7 +608,8 @@ fun InlineAudioBubble(
             }
             Text(
                 status.ifBlank {
-                    if (durationMs > 0) "${formatClock(positionMs)} / ${formatClock(durationMs)}"
+                    if (isPlaying && durationMs > 0)
+                        "${formatClock(positionMs)} / ${formatClock(durationMs)}"
                     else sizeLabel(file) ?: "Аудио"
                 },
                 color = PismoColors.TextMuted,

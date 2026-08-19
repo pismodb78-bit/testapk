@@ -133,6 +133,8 @@ data class ServerRole(
     val canKick: Boolean,
     val canMute: Boolean,
     val canManage: Boolean,
+    /** Управление каналами — право отдельное от canManage. */
+    val canChannels: Boolean = false,
     val position: Int = 0,
 )
 
@@ -152,6 +154,13 @@ data class ServerPermissions(
     val canKick: Boolean = false,
     val canMute: Boolean = false,
     val canManage: Boolean = false,
+    /**
+     * Управление каналами: создать, переименовать, удалить, задать
+     * вместимость голосового. Право самостоятельное — снятая галочка
+     * отбирает каналы даже у того, кто правит роли. Владельца сервера права
+     * ролей не касаются.
+     */
+    val canChannels: Boolean = false,
     val mutedNotifications: Boolean = false,
 ) {
     val isAdminLike: Boolean get() = isOwner || canManage

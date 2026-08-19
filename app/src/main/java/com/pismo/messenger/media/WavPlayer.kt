@@ -53,8 +53,30 @@ object WavPlayer {
     /** Для мест вне композиции, где поток не нужен. */
     val currentId: Int get() = _playingId.value
 
-    /** Тумблер: играет это же — остановит, иначе начнёт заново. */
+    /** Тумблер для голосового: играет это же — остановит, иначе начнёт заново. */
     fun toggle(messageId: Int, wav: ByteArray) {
+        if (_playingId.value == messageId) {
+            stop()
+            return
+        }
+        runCatching {
+            val file = File(PismoApp.appContext.cacheDir, "voice_play.wav")
+            file.writeBytes(wav)
+            toggleFile(messageId, file)
+        }.onFailure { stop() }
+    }
+
+    /**
+     * Тумблер для файла — музыкальные вложения ходят этим путём.
+     *
+     * Проигрыватель один на всё приложение, и это не экономия, а требование.
+     * Раньше у каждого пузыря с музыкой был свой MediaPlayer внутри
+     * композиции: два вложения играли разом поверх друг друга, а стоило
+     * отлистать ленту — Compose выбрасывал пузырь вместе с проигрывателем, и
+     * музыка обрывалась на середине. Здесь она переживает и прокрутку, и
+     * переход в другой чат.
+     */
+    fun toggleFile(messageId: Int, file: File) {
         if (_playingId.value == messageId) {
             stop()
             return
@@ -62,9 +84,6 @@ object WavPlayer {
         stop()
 
         runCatching {
-            val file = File(PismoApp.appContext.cacheDir, "voice_play.wav")
-            file.writeBytes(wav)
-
             player = MediaPlayer().apply {
                 setAudioAttributes(
                     AudioAttributes.Builder()

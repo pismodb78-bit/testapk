@@ -209,7 +209,8 @@ fun ServerMembersScreen(serverId: Int, onBack: () -> Unit) {
                                     fontWeight = FontWeight.SemiBold)
                                 Text(
                                     listOfNotNull(
-                                        if (r.canManage) "управление" else null,
+                                        if (r.canManage) "роли" else null,
+                                        if (r.canChannels) "каналы" else null,
                                         if (r.canBan) "баны" else null,
                                         if (r.canKick) "кик" else null,
                                         if (r.canMute) "мьют" else null,
@@ -362,6 +363,7 @@ private fun RoleDialog(
     var canKick by remember { mutableStateOf(role?.canKick ?: false) }
     var canMute by remember { mutableStateOf(role?.canMute ?: false) }
     var canManage by remember { mutableStateOf(role?.canManage ?: false) }
+    var canChannels by remember { mutableStateOf(role?.canChannels ?: false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -385,7 +387,12 @@ private fun RoleDialog(
                 Spacer(Modifier.height(8.dp))
                 PismoField(color, { color = it }, "Свой код (#RRGGBB)")
                 Spacer(Modifier.height(8.dp))
-                PermCheck("Управление сервером", canManage) { canManage = it }
+                PermCheck("Роли и настройки сервера", canManage) { canManage = it }
+                // Право самостоятельное: снятая галочка отбирает каналы даже
+                // у того, кто правит роли. На ПК ровно так же.
+                PermCheck("Каналы: создавать, править, удалять", canChannels) {
+                    canChannels = it
+                }
                 PermCheck("Банить", canBan) { canBan = it }
                 PermCheck("Исключать", canKick) { canKick = it }
                 PermCheck("Мьютить", canMute) { canMute = it }
@@ -401,6 +408,7 @@ private fun RoleDialog(
                             colorHex = color.trim(),
                             canBan = canBan, canKick = canKick,
                             canMute = canMute, canManage = canManage,
+                            canChannels = canChannels,
                             position = role?.position ?: 0,
                         )
                     )

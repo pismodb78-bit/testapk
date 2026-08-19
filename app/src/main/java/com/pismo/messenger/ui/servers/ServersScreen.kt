@@ -37,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -59,6 +60,7 @@ import com.pismo.messenger.data.model.ServerSummary
 import com.pismo.messenger.data.model.VoiceParticipant
 import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.data.repo.ServerRepository
+import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.components.LetterAvatar
 import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.components.Pill
@@ -147,6 +149,29 @@ fun ServersScreen(
             ServerMemory.putChannels(s.id, channels, perms)
             voice = PresenceRepository.voiceForServer(s.id)
         }.onFailure { error = it.message.orEmpty() }
+    }
+
+    /**
+     * Сообщить остальным клиентам, что каналы этого сервера изменились.
+     *
+     * Тип отдельный, а не new_message: у того в поле сессии едет id канала, и
+     * приёмник спутал бы одно с другим. Ретранслятор незнакомые типы просто
+     * передаёт дальше, так что серверу сигналинга менять нечего — порт того
+     * же приёма с ПК.
+     */
+    fun notifyChannelsChanged() {
+        selected?.let { SignalingClient.send("channels_changed", 0, it.id, "server") }
+    }
+
+    // Чужие правки каналов раньше доезжали только к следующему опросу.
+    DisposableEffect(Unit) {
+        val listener: (String, Int, Int, String) -> Unit = { type, _, session, _ ->
+            if (type == "channels_changed" && session == selected?.id) {
+                scope.launch { reloadChannels() }
+            }
+        }
+        SignalingClient.addListener(listener)
+        onDispose { SignalingClient.removeListener(listener) }
     }
 
     LaunchedEffect(Unit) { reloadServers() }
@@ -294,7 +319,9 @@ fun ServersScreen(
                 IconButton(onClick = { onOpenMembers(s.id) }) {
                     Icon(Icons.Default.Group, "Участники", tint = PismoColors.TextSecondary)
                 }
-                if (perms.isAdminLike) {
+                // Каналы гейтим отдельным правом, а не общим управлением:
+                // на ПК это разные галочки.
+                if (perms.isOwner || perms.canChannels) {
                     IconButton(onClick = { showAddChannel = true }) {
                         Icon(Icons.Default.Add, "Новый канал", tint = PismoColors.TextSecondary)
                     }
@@ -318,7 +345,7 @@ fun ServersScreen(
                             mentions = b?.mentions ?: 0,
                             muted = b?.muted == true,
                             onClick = { onOpenChannel(s.id, ch.id, ch.name) },
-                            onLongClick = { if (perms.isAdminLike) editChannel = ch },
+                            onLongClick = { if (perms.isOwner || perms.canChannels) editChannel = ch },
                         )
                     }
                 }
@@ -339,7 +366,7 @@ fun ServersScreen(
                             // звонок. На телефоне его не было вовсе: нажатие
                             // по строке всегда вело в разговор.
                             onOpenChat = { onOpenChannel(s.id, ch.id, ch.name) },
-                            onLongClick = { if (perms.isAdminLike) editChannel = ch },
+                            onLongClick = { if (perms.isOwner || perms.canChannels) editChannel = ch },
                             onJoin = {
                                 // Лимит вместимости (миграция 14): 0 — без ограничения.
                                 scope.launch {
@@ -388,7 +415,12 @@ fun ServersScreen(
             isVoice = ch.type == ChannelType.VOICE,
             userLimit = ch.userLimit,
             onDismiss = { editChannel = null },
-            onChanged = { scope.launch { reloadChannels() } },
+            onChanged = {
+                scope.launch {
+                    reloadChannels()
+                    notifyChannelsChanged()
+                }
+            },
         )
     }
 
@@ -449,6 +481,7 @@ fun ServersScreen(
                     selected?.let {
                         runCatching { ServerRepository.createChannel(it.id, name, type) }
                         reloadChannels()
+                        notifyChannelsChanged()
                     }
                     showAddChannel = false
                 }
