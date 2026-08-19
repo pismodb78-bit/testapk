@@ -137,6 +137,9 @@ fun ChannelChatScreen(
     /** Самое свежее чужое сообщение, о котором уже отзвучали. См. ChatScreen. */
     var lastHeardId by remember(channelId) { mutableIntStateOf(-1) }
 
+    /** Отправка уже идёт — повторные нажатия игнорируем. */
+    var sending by remember { mutableStateOf(false) }
+
     suspend fun reload(scrollToEnd: Boolean = false) {
         runCatching {
             val loaded = ServerRepository.channelMessages(channelId, limit = pageLimit)
@@ -206,25 +209,36 @@ fun ChannelChatScreen(
         onDispose { SignalingClient.removeListener(listener) }
     }
 
+    /**
+     * Отправка. Защёлка sending обязательна: поле очищается только ПОСЛЕ
+     * ответа базы, и на плохой сети текст всё это время остаётся на экране —
+     * без неё каждое нажатие по «отправить» уходило отдельным сообщением.
+     * В личных чатах такая защёлка была, здесь её забыли.
+     */
     fun send() {
+        if (sending) return
         val text = input.text.trim()
         val edit = editing
         if (edit != null) {
             if (text.isEmpty()) return
+            sending = true
             scope.launch {
                 runCatching { ServerRepository.editChannelMessage(edit.id, text) }
                 editing = null; input = TextFieldValue("")
+                sending = false
                 reload()
             }
             return
         }
         if (text.isEmpty()) return
+        sending = true
         scope.launch {
             runCatching {
                 ServerRepository.sendChannelMessage(channelId, text, replyTo?.id ?: 0)
                 SignalingClient.send("new_message", 0, channelId, "server")
             }
             input = TextFieldValue(""); replyTo = null
+            sending = false
             reload(scrollToEnd = true)
         }
     }
@@ -485,8 +499,11 @@ fun ChannelChatScreen(
                         cursorColor = PismoColors.Blurple,
                     ),
                 )
-                IconButton(onClick = { send() }) {
-                    Icon(Icons.Default.Send, "Отправить", tint = PismoColors.Blurple)
+                IconButton(onClick = { send() }, enabled = !sending) {
+                    Icon(
+                        Icons.Default.Send, "Отправить",
+                        tint = if (sending) PismoColors.TextMuted else PismoColors.Blurple,
+                    )
                 }
             }
         }

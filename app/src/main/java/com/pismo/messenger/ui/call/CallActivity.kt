@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.util.Log
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -239,7 +240,17 @@ class CallActivity : ComponentActivity() {
         withVideo: Boolean,
         isCaller: Boolean,
     ) {
+        // Право начать звонок берётся ОДИН раз на процесс. Пока идут запросы
+        // к базе, ActiveCall ещё пуст, и без этой защёлки второе окно, поднятое
+        // повторным нажатием, спокойно заводило вторую сессию, слало второе
+        // приглашение и создавало второй движок со своим микрофоном.
+        if (!ActiveCall.claimStart()) {
+            finish()
+            return
+        }
+
         lifecycleScope.launch {
+            try {
             val room = when {
                 // Голосовой канал сервера — сессии в БД нет вовсе.
                 channelId > 0 -> LiveKitToken.roomForVoiceChannel(channelId)
@@ -283,6 +294,24 @@ class CallActivity : ComponentActivity() {
             )
 
             engine.join(room, withVideo)
+            } catch (e: Throwable) {
+                // Право начать звонок надо отпустить обязательно: иначе после
+                // одной сорвавшейся попытки — а на плохой сети сорваться может
+                // любой из запросов — звонки не пошли бы вообще до перезапуска
+                // приложения. Это же касается и отмены: окно закрыли, не
+                // дождавшись подключения.
+                ActiveCall.releaseStart()
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.e("CallActivity", "не удалось начать звонок", e)
+                runCatching {
+                    android.widget.Toast.makeText(
+                        this@CallActivity,
+                        "Не удалось начать звонок: нет связи",
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
+                }
+                finish()
+            }
         }
     }
 

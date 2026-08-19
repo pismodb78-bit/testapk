@@ -131,21 +131,28 @@ class MainActivity : ComponentActivity() {
                                 navController.navigate(Routes.channel(serverId, channelId, channelName))
                             },
                             onJoinVoice = { channelId, channelName ->
-                                startActivity(
-                                    android.content.Intent(
-                                        this@MainActivity,
-                                        com.pismo.messenger.ui.call.CallActivity::class.java
-                                    ).apply {
-                                        putExtra(
-                                            com.pismo.messenger.ui.call.CallActivity.EXTRA_CHANNEL_ID,
-                                            channelId
-                                        )
-                                        putExtra(
-                                            com.pismo.messenger.ui.call.CallActivity.EXTRA_PEER_NAME,
-                                            channelName
-                                        )
-                                    }
-                                )
+                                // Тот же приём, что и у звонка из переписки:
+                                // пока голосовой канал поднимается, повторные
+                                // нажатия по нему ничего не начинают.
+                                if (!com.pismo.messenger.call.ActiveCall.isBusy) {
+                                    startActivity(
+                                        android.content.Intent(
+                                            this@MainActivity,
+                                            com.pismo.messenger.ui.call.CallActivity::class.java
+                                        ).apply {
+                                            putExtra(
+                                                com.pismo.messenger.ui.call.CallActivity
+                                                    .EXTRA_CHANNEL_ID,
+                                                channelId
+                                            )
+                                            putExtra(
+                                                com.pismo.messenger.ui.call.CallActivity
+                                                    .EXTRA_PEER_NAME,
+                                                channelName
+                                            )
+                                        }
+                                    )
+                                }
                             },
                             onOpenMembers = { serverId ->
                                 navController.navigate(Routes.members(serverId))

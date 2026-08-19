@@ -58,6 +58,39 @@ object ActiveCall {
 
     private var loops: Job? = null
 
+    /**
+     * Звонок уже поднимается, но ещё не поднялся.
+     *
+     * Между нажатием и появлением движка проходит несколько запросов к
+     * удалённой базе, и на плохой сети это секунды. Всё это время
+     * ActiveCall пуст, поэтому второе нажатие выглядело как «звонка нет,
+     * начинаем новый»: заводилась вторая сессия в базе, собеседнику уходило
+     * второе приглашение, и на телефоне поднимался ВТОРОЙ движок — со своим
+     * захватом микрофона.
+     */
+    @Volatile
+    private var starting = false
+
+    /** Идёт разговор или он прямо сейчас поднимается. */
+    val isBusy: Boolean get() = starting || _current.value != null
+
+    /**
+     * Взять право начать звонок. false — начинать не надо: либо разговор уже
+     * идёт, либо его поднимает кто-то другой.
+     */
+    @Synchronized
+    fun claimStart(): Boolean {
+        if (isBusy) return false
+        starting = true
+        return true
+    }
+
+    /** Начать не удалось — право отпускаем, иначе звонки больше не пойдут. */
+    @Synchronized
+    fun releaseStart() {
+        starting = false
+    }
+
     /** Флаги для дока — обновляются экраном звонка. */
     private val _micMuted = MutableStateFlow(false)
     val micMuted: StateFlow<Boolean> = _micMuted.asStateFlow()
@@ -71,6 +104,7 @@ object ActiveCall {
     fun start(info: Info, engine: CallEngine) {
         _current.value = info
         this.engine = engine
+        starting = false
 
         // Состояние для дока и heartbeat голосового канала крутятся ЗДЕСЬ, а
         // не в активити: со свёрнутым окном они обязаны продолжаться, иначе
@@ -151,6 +185,7 @@ object ActiveCall {
     fun clear() {
         loops?.cancel()
         loops = null
+        starting = false
         engine = null
         _current.value = null
         _micMuted.value = false

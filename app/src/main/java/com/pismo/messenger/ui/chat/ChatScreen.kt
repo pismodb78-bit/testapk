@@ -294,7 +294,10 @@ fun ChatScreen(
 
     fun sendVoice(wav: ByteArray?) {
         recording = false
-        if (wav == null) return
+        // Запись останавливают и кнопкой, и таймером на три минуты. Если оба
+        // сработают в один момент, без защёлки уйдут два голосовых.
+        if (wav == null || sending) return
+        sending = true
         scope.launch {
             runCatching {
                 ChatRepository.sendMessage(
@@ -307,6 +310,7 @@ fun ChatScreen(
                 notifyPeers(isGroup, targetId)
             }
             replyTo = null
+            sending = false
             reload(scrollToEnd = true, force = true)
         }
     }
@@ -473,11 +477,13 @@ fun ChatScreen(
         val attach = pending
         val edit = editing
         if (edit != null) {
-            if (text.isEmpty()) return
+            if (text.isEmpty() || sending) return
+            sending = true
             scope.launch {
                 runCatching { ChatRepository.editMessage(scopeKind, edit.id, text) }
                 editing = null
                 input = ""
+                sending = false
                 reload()
             }
             return
@@ -1045,6 +1051,8 @@ fun ChatScreen(
         onDismiss = { showCircleRecorder = false },
         onRecorded = { data ->
             showCircleRecorder = false
+            if (sending) return@CircleRecorderHost
+            sending = true
             scope.launch {
                 runCatching {
                     ChatRepository.sendMessage(
@@ -1057,6 +1065,7 @@ fun ChatScreen(
                     notifyPeers(isGroup, targetId)
                 }
                 replyTo = null
+                sending = false
                 reload(scrollToEnd = true)
             }
         },
@@ -1085,6 +1094,11 @@ private fun startCall(
     isGroup: Boolean,
     withVideo: Boolean,
 ) {
+    // Разговор уже идёт или поднимается — второе окно не открываем. Право
+    // начать всё равно возьмёт только первое (см. ActiveCall.claimStart), но
+    // без этой проверки второе успевало бы мигнуть на весь экран и закрыться.
+    if (com.pismo.messenger.call.ActiveCall.isBusy) return
+
     val intent = Intent(context, com.pismo.messenger.ui.call.CallActivity::class.java).apply {
         putExtra(com.pismo.messenger.ui.call.CallActivity.EXTRA_PEER_ID, if (isGroup) -1 else targetId)
         putExtra(com.pismo.messenger.ui.call.CallActivity.EXTRA_GROUP_ID, if (isGroup) targetId else -1)

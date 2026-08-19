@@ -205,21 +205,47 @@ object Db {
     }
 
     /**
+     * Соединение не удалось даже взять — значит, запрос до сервера не дошёл
+     * заведомо. Обёртка нужна, чтобы отличить этот случай от обрыва ПОСЛЕ
+     * отправки запроса: повторять их можно по-разному.
+     */
+    private class NotStarted(override val cause: Throwable) : Exception(cause)
+
+    /**
      * Выполняет блок на соединении из пула. Соединение, на котором вылетело
      * SQL-исключение, в пул не возвращается — оно может быть уже разорвано.
      *
-     * При обрыве связи запрос повторяется ОДИН раз на заново открытом
-     * соединении: сервер могли перезапустить, и лежащие в пуле сокеты уже
-     * мертвы, хотя сама база снова доступна.
+     * ПОВТОР ПРИ ОБРЫВЕ И ПОЧЕМУ ОН НЕ ДЛЯ ВСЕХ. Лежащие в пуле сокеты
+     * умирают молча — сервер перезапустили, вышка сменилась, — и повтор на
+     * заново открытом соединении спасает запрос, который иначе упал бы на
+     * ровном месте. Для чтения это чистая польза.
+     *
+     * А для записи — нет. Обрыв на INSERT ничего не говорит о том, дошёл ли
+     * он: строка могла отлично записаться, а по дороге назад потеряться
+     * подтверждение. Слепой повтор в этом случае вставляет ВТОРУЮ строку —
+     * ровно отсюда брались дубли сообщений на плохой сети, без всяких
+     * двойных нажатий.
+     *
+     * Поэтому [idempotent] = false (записи) повторяются только тогда, когда
+     * запрос заведомо не ушёл: соединение не удалось даже открыть. Это самый
+     * частый случай обрыва, так что польза от повтора почти не теряется, а
+     * дубли исключены полностью.
      */
-    suspend fun <T> use(block: (Connection) -> T): T = withContext(Dispatchers.IO) {
+    suspend fun <T> use(
+        idempotent: Boolean = true,
+        block: (Connection) -> T,
+    ): T = withContext(Dispatchers.IO) {
         try {
             val result = runOnce(block)
             markOnline()
             return@withContext result
         } catch (first: Throwable) {
-            if (!isConnectionFailure(first)) throw first
+            val cause = unwrap(first)
+            if (!isConnectionFailure(cause)) throw cause
             markOffline()
+
+            // Запись, которая могла дойти до сервера, второй раз не шлём.
+            if (!idempotent && first !is NotStarted) throw cause
 
             // Пул после обрыва целиком под подозрением — выбрасываем его,
             // иначе повтор возьмёт следующее такое же мёртвое соединение.
@@ -228,14 +254,24 @@ object Db {
                 pool.clear()
             }
 
-            val result = runOnce(block)
-            markOnline()
-            return@withContext result
+            try {
+                val result = runOnce(block)
+                markOnline()
+                return@withContext result
+            } catch (second: Throwable) {
+                throw unwrap(second)
+            }
         }
     }
 
+    private fun unwrap(e: Throwable): Throwable = if (e is NotStarted) e.cause else e
+
     private suspend fun <T> runOnce(block: (Connection) -> T): T {
-        val conn = borrow()
+        val conn = try {
+            borrow()
+        } catch (e: Throwable) {
+            throw NotStarted(e)
+        }
         var broken = false
         try {
             return block(conn)
@@ -296,7 +332,8 @@ object Db {
             }
         }
 
-    suspend fun exec(sql: String, vararg params: Any?): Int = use { conn ->
+    /** Запись. idempotent = false: повторять её вслепую нельзя, см. use(). */
+    suspend fun exec(sql: String, vararg params: Any?): Int = use(idempotent = false) { conn ->
         conn.prepareStatement(sql).use { ps ->
             bind(ps, params)
             ps.executeUpdate()
@@ -304,7 +341,7 @@ object Db {
     }
 
     /** INSERT с возвратом сгенерированного id (аналог LastInsertedId). */
-    suspend fun insert(sql: String, vararg params: Any?): Int = use { conn ->
+    suspend fun insert(sql: String, vararg params: Any?): Int = use(idempotent = false) { conn ->
         conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS).use { ps ->
             bind(ps, params)
             ps.executeUpdate()
