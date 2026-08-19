@@ -559,6 +559,14 @@ fun SettingsScreen(onBack: () -> Unit) {
             )
 
             Spacer(Modifier.height(20.dp))
+            Section("О приложении")
+            Text(
+                "PISMO для Android, версия ${com.pismo.messenger.BuildConfig.VERSION_NAME} " +
+                        "(сборка ${com.pismo.messenger.BuildConfig.VERSION_CODE})",
+                color = PismoColors.TextSecondary, fontSize = 13.sp,
+            )
+
+            Spacer(Modifier.height(20.dp))
             Section("Кеш")
             // Раньше здесь было деление на МБ в целых числах, и любой кеш
             // меньше мегабайта показывался как «0 МБ» — выглядело так, будто

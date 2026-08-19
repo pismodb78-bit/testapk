@@ -12,8 +12,11 @@ android {
         applicationId = "com.pismo.messenger"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // versionCode ОБЯЗАН расти с каждой сборкой: Android ставит поверх
+        // старой только версию с бо́льшим номером, и на равном откажет молча.
+        // versionName — то, что видит человек.
+        versionCode = 2
+        versionName = "1.1"
         vectorDrawables { useSupportLibrary = true }
     }
 
