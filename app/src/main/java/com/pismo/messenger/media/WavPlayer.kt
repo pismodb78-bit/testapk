@@ -96,10 +96,11 @@ object WavPlayer {
     fun stop() {
         ticker?.cancel()
         ticker = null
-        runCatching {
-            player?.stop()
-            player?.release()
-        }
+        // Каждое по отдельности: stop() у неподготовленного плеера кидает
+        // исключение, и в одном общем runCatching release() уже не выполнился
+        // бы — MediaPlayer утёк бы вместе с занятым им кодеком.
+        runCatching { player?.stop() }
+        runCatching { player?.release() }
         player = null
         _playingId.value = -1
         _positionMs.value = 0
