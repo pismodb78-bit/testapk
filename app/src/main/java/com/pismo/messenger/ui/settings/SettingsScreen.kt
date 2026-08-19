@@ -652,7 +652,6 @@ private fun RowScope.ThemeChip(label: String, selected: Boolean, onClick: () -> 
  * только пока индикатор на экране: микрофон — общий ресурс, и оставлять его
  * занятым после ухода из настроек нельзя.
  */
-@Composable
 /**
  * «Проверить микрофон» — порт MicTestForm с ПК.
  *
