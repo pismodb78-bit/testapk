@@ -351,6 +351,19 @@ object ServerRepository {
             )
         }
 
+        // Своё вложение — сразу в кеш: байты на руках, а иначе открытие
+        // собственной картинки тянуло бы её обратно из базы.
+        if (newId > 0) {
+            runCatching {
+                image?.takeIf { it.isNotEmpty() }
+                    ?.let { MediaCache.put(newId, "img", it, fileName) }
+                audio?.takeIf { it.isNotEmpty() }?.let { MediaCache.put(newId, "audio", it) }
+                video?.takeIf { it.isNotEmpty() }?.let { MediaCache.put(newId, "video", it) }
+                file?.takeIf { it.isNotEmpty() }
+                    ?.let { MediaCache.put(newId, "file", it, fileName) }
+            }
+        }
+
         // Адресатов «@…» вычисляем ЗДЕСЬ, пока текст открытый: в БД он ляжет
         // зашифрованным, и после этого разобрать упоминания уже невозможно.
         // Подпись к вложению разбирается тем же вызовом.

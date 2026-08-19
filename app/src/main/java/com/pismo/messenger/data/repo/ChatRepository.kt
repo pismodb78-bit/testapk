@@ -504,7 +504,30 @@ object ChatRepository {
             uploadFileData(table, newId, file, onProgress)
         }
 
+        // Своё вложение кладём в кеш прямо здесь. Байты уже на руках, а без
+        // этого открытие собственной картинки тянуло её обратно из базы —
+        // то есть отправитель платил за неё дважды.
+        cacheOwnAttachment(newId, image, audio, video, file, fileName)
+
         newId
+    }
+
+    /** Кладёт только что отправленное вложение в кеш под новым id сообщения. */
+    private fun cacheOwnAttachment(
+        msgId: Int,
+        image: ByteArray?,
+        audio: ByteArray?,
+        video: ByteArray?,
+        file: ByteArray?,
+        fileName: String?,
+    ) {
+        if (msgId <= 0) return
+        runCatching {
+            image?.takeIf { it.isNotEmpty() }?.let { MediaCache.put(msgId, "img", it, fileName) }
+            audio?.takeIf { it.isNotEmpty() }?.let { MediaCache.put(msgId, "audio", it) }
+            video?.takeIf { it.isNotEmpty() }?.let { MediaCache.put(msgId, "video", it) }
+            file?.takeIf { it.isNotEmpty() }?.let { MediaCache.put(msgId, "file", it, fileName) }
+        }
     }
 
     /**
