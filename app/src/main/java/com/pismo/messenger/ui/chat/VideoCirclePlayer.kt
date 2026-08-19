@@ -76,7 +76,7 @@ fun VideoCirclePlayerBubble(
     DisposableEffect(messageId) {
         onDispose {
             decoded?.frames?.forEach { runCatching { it.recycle() } }
-            if (WavPlayer.playingId == messageId) WavPlayer.stop()
+            if (WavPlayer.currentId == messageId) WavPlayer.stop()
         }
     }
 
@@ -93,7 +93,7 @@ fun VideoCirclePlayerBubble(
             if (frameIndex == 0) {
                 // Дошли до конца — останавливаемся, как это делает ПК.
                 playing = false
-                if (WavPlayer.playingId == messageId) WavPlayer.stop()
+                if (WavPlayer.currentId == messageId) WavPlayer.stop()
             }
         }
     }
@@ -109,7 +109,7 @@ fun VideoCirclePlayerBubble(
                         loading = true
                     } else if (decoded != null) {
                         playing = !playing
-                        if (!playing && WavPlayer.playingId == messageId) WavPlayer.stop()
+                        if (!playing && WavPlayer.currentId == messageId) WavPlayer.stop()
                     }
                 },
             contentAlignment = Alignment.Center,

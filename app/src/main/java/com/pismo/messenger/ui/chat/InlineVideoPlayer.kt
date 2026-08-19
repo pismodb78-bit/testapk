@@ -507,6 +507,24 @@ internal fun VideoSurface(
  * пузыре, как у голосового сообщения.
  */
 @Composable
+/**
+ * Кто из аудио-пузырей играет прямо сейчас.
+ *
+ * На ПК проигрыватель голосовых один на всё окно, и второй запуск просто
+ * забирает его себе. Здесь у каждого пузыря свой MediaPlayer, и без общей
+ * отметки два вложения зазвучали бы разом поверх друг друга — а с учётом
+ * голосовых сообщений и трёх.
+ */
+private var activeAudioPlayer: android.media.MediaPlayer? = null
+
+private fun claimAudioFloor(mp: android.media.MediaPlayer?) {
+    val previous = activeAudioPlayer
+    if (previous !== mp) runCatching { previous?.pause() }
+    activeAudioPlayer = mp
+    // Голосовые живут в своём проигрывателе — его гасим отдельно.
+    com.pismo.messenger.media.WavPlayer.stop()
+}
+
 fun InlineAudioBubble(
     msgId: Int,
     scopeKind: Scope,
@@ -526,6 +544,7 @@ fun InlineAudioBubble(
 
     DisposableEffect(msgId) {
         onDispose {
+            if (activeAudioPlayer === player) activeAudioPlayer = null
             runCatching { player?.release() }
             player = null
         }
@@ -534,6 +553,21 @@ fun InlineAudioBubble(
     LaunchedEffect(isPlaying) {
         while (isPlaying) {
             positionMs = runCatching { player?.currentPosition ?: 0 }.getOrDefault(0)
+
+            // Начавшийся разговор музыку глушит: слушать вложение и
+            // собеседника разом всё равно невозможно.
+            if (com.pismo.messenger.call.ActiveCall.engine != null) {
+                runCatching { player?.pause() }
+                isPlaying = false
+                break
+            }
+
+            // Чужой пузырь забрал звук себе — гасим свою кнопку, иначе она
+            // осталась бы на «паузе» у молчащего вложения.
+            if (activeAudioPlayer !== player) {
+                isPlaying = false
+                break
+            }
             kotlinx.coroutines.delay(300)
         }
     }
@@ -547,6 +581,7 @@ fun InlineAudioBubble(
                 player = m
                 durationMs = m.duration.coerceAtLeast(0)
             }
+            claimAudioFloor(mp)
             mp.start()
             isPlaying = true
         }.onFailure { status = "Не удалось воспроизвести" }
@@ -605,6 +640,23 @@ fun InlineAudioBubble(
                 fontSize = 13.sp,
                 maxLines = 1,
             )
+            // Полоса появляется, когда файл уже открыт: до этого длина
+            // неизвестна, и рисовать нечего.
+            if (durationMs > 0) {
+                Slider(
+                    value = positionMs.toFloat().coerceIn(0f, durationMs.toFloat()),
+                    onValueChange = {
+                        positionMs = it.toInt()
+                        runCatching { player?.seekTo(it.toInt()) }
+                    },
+                    valueRange = 0f..durationMs.toFloat(),
+                    colors = SliderDefaults.colors(
+                        thumbColor = PismoColors.onBubble(isMine),
+                        activeTrackColor = PismoColors.onBubble(isMine),
+                    ),
+                    modifier = Modifier.height(18.dp),
+                )
+            }
             Text(
                 status.ifBlank {
                     if (durationMs > 0) "${formatClock(positionMs)} / ${formatClock(durationMs)}"

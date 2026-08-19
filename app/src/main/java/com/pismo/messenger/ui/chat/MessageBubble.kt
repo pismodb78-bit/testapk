@@ -22,9 +22,12 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,17 +41,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.pismo.messenger.core.MediaKinds
 import com.pismo.messenger.core.avatarColor
 import com.pismo.messenger.core.ellipsize
 import com.pismo.messenger.core.fileBadge
 import com.pismo.messenger.core.fileColor
-import com.pismo.messenger.core.MediaKinds
 import com.pismo.messenger.core.formatTime
 import com.pismo.messenger.data.MediaCache
 import com.pismo.messenger.data.model.ChatMessage
@@ -487,31 +490,87 @@ fun MessageBubble(
     }
 }
 
+/**
+ * Голосовое сообщение.
+ *
+ * Состояние читается из потоков плеера, а не из его полей: обычное поле
+ * Compose не отслеживает, и кнопка не менялась на «стоп» при запуске и не
+ * возвращалась по окончании — звук шёл, а пузырь выглядел нетронутым.
+ *
+ * Полоса с перемоткой — сверх того, что есть на ПК (там просто
+ * «▶ Голосовое / ⏹ Остановить»). На телефоне голосовые слушают на ходу и
+ * переспрашивают середину, а переслушивать минуту ради десяти секунд —
+ * не вариант.
+ */
 @Composable
 private fun VoiceRow(msgId: Int, audio: ByteArray?, isMine: Boolean) {
-    val playing = WavPlayer.playingId == msgId
+    val playingId by WavPlayer.playingId.collectAsState()
+    val positionMs by WavPlayer.positionMs.collectAsState()
+    val livePlayerDuration by WavPlayer.durationMs.collectAsState()
+
+    val playing = playingId == msgId
+
+    // Пока сообщение не играет, длина берётся из шапки самой записи: иначе
+    // подпись появлялась бы только после первого запуска.
+    val headerSeconds = remember(audio) { audio?.let { WavPlayer.durationSecondsOf(it) } ?: 0 }
+    val durationMs = if (playing && livePlayerDuration > 0) livePlayerDuration
+    else headerSeconds * 1000
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
+            .widthIn(max = 260.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(Color(0x22000000))
-            .clickable { audio?.let { WavPlayer.toggle(msgId, it) } }
             .padding(horizontal = 10.dp, vertical = 8.dp),
     ) {
         Icon(
             if (playing) Icons.Default.Stop else Icons.Default.PlayArrow,
             contentDescription = if (playing) "Остановить" else "Воспроизвести",
             tint = PismoColors.onBubble(isMine),
-            modifier = Modifier.size(22.dp),
+            modifier = Modifier
+                .size(22.dp)
+                .clickable { audio?.let { WavPlayer.toggle(msgId, it) } },
         )
         Spacer(Modifier.width(8.dp))
-        Text(
-            if (audio == null) "Загрузка…"
-            else "Голосовое · ${WavPlayer.durationSecondsOf(audio)} с",
-            color = PismoColors.onBubble(isMine),
-            fontSize = 13.sp,
-        )
+
+        Column(Modifier.weight(1f, fill = false)) {
+            if (audio == null) {
+                Text(
+                    "Загрузка…",
+                    color = PismoColors.onBubble(isMine),
+                    fontSize = 13.sp,
+                )
+            } else {
+                // Полоса живёт только у играющего сообщения: у остальных она
+                // была бы вечным нулём и лишней строкой в ленте.
+                if (playing && durationMs > 0) {
+                    Slider(
+                        value = positionMs.toFloat().coerceIn(0f, durationMs.toFloat()),
+                        onValueChange = { WavPlayer.seekTo(msgId, it.toInt()) },
+                        valueRange = 0f..durationMs.toFloat(),
+                        colors = SliderDefaults.colors(
+                            thumbColor = PismoColors.onBubble(isMine),
+                            activeTrackColor = PismoColors.onBubble(isMine),
+                        ),
+                        modifier = Modifier.height(18.dp).width(150.dp),
+                    )
+                }
+                Text(
+                    if (playing) "${voiceClock(positionMs)} / ${voiceClock(durationMs)}"
+                    else "Голосовое · $headerSeconds с",
+                    color = PismoColors.onBubble(isMine),
+                    fontSize = 13.sp,
+                )
+            }
+        }
     }
+}
+
+/** мм:сс для подписи голосового. */
+private fun voiceClock(ms: Int): String {
+    val total = (ms / 1000).coerceAtLeast(0)
+    return "%d:%02d".format(total / 60, total % 60)
 }
 
 
