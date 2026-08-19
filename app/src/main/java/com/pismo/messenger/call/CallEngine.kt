@@ -332,6 +332,10 @@ class CallEngine(
                         // Зрителей у демки один-два, слои никому не нужны —
                         // отдаём весь битрейт одному потоку.
                         simulcast = false,
+                        // Кодек — см. Prefs.screenShareCodec: H.264 кодируется
+                        // железом на любом телефоне, VP8 почти нигде, и на
+                        // экране в полтора мегапикселя эта разница решает.
+                        videoCodec = Prefs.screenShareCodec,
                     ),
                 ),
             )
@@ -691,6 +695,7 @@ class CallEngine(
                 VideoTrackPublishOptions(
                     source = Track.Source.SCREEN_SHARE,
                     simulcast = false,
+                    videoCodec = Prefs.screenShareCodec,
                     // Чёрный кадр раз в полсекунды сжимается почти в ничто,
                     // но потолок ставим явно: незачем резервировать под него
                     // полосу, нужную голосу.

@@ -92,6 +92,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     var autoGain by remember { mutableStateOf(Prefs.autoGainControl) }
     var screenGain by remember { mutableStateOf(Prefs.screenAudioGain) }
     var screenQuality by remember { mutableStateOf(Prefs.screenShareQuality) }
+    var screenCodec by remember { mutableStateOf(Prefs.screenShareCodec) }
     var denoiseStrength by remember { mutableStateOf(Prefs.denoiseStrength) }
     var voiceAuto by remember { mutableStateOf(Prefs.voiceAutoSensitivity) }
     var voiceThreshold by remember { mutableStateOf(Prefs.voiceThresholdDb.toFloat()) }
@@ -142,6 +143,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         Prefs.autoGainControl = autoGain
         Prefs.screenAudioGain = screenGain
         Prefs.screenShareQuality = screenQuality
+        Prefs.screenShareCodec = screenCodec
         Prefs.denoiseStrength = denoiseStrength
         Prefs.voiceAutoSensitivity = voiceAuto
         Prefs.voiceThresholdDb = voiceThreshold.toInt()
@@ -479,6 +481,29 @@ fun SettingsScreen(onBack: () -> Unit) {
                             "интерфейса и текста, а там важнее чёткость, чем " +
                             "частота кадров."
                 },
+                color = PismoColors.TextMuted, fontSize = 11.sp,
+            )
+            Spacer(Modifier.height(12.dp))
+            Text("Кодек", color = PismoColors.TextSecondary, fontSize = 13.sp)
+            Spacer(Modifier.height(6.dp))
+            Row(Modifier.fillMaxWidth()) {
+                ThemeChip("H.264", screenCodec == "h264") { screenCodec = "h264" }
+                Spacer(Modifier.width(8.dp))
+                ThemeChip("VP8", screenCodec == "vp8") { screenCodec = "vp8" }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                if (screenCodec == "h264")
+                    "H.264 кодируется железом на любом телефоне — отсюда и " +
+                            "чёткость на родном разрешении. ПК его понимает: это " +
+                            "один из двух кодеков, которые он предлагает и для " +
+                            "своей демонстрации."
+                else
+                    "VP8 почти нигде не кодируется железом — его считает " +
+                            "процессор, и на экране в полтора мегапикселя это " +
+                            "упирается в потолок: кадры пропускаются, картинка " +
+                            "расплывается. Оставляйте, только если на H.264 " +
+                            "демонстрация не идёт вовсе.",
                 color = PismoColors.TextMuted, fontSize = 11.sp,
             )
             Spacer(Modifier.height(6.dp))
