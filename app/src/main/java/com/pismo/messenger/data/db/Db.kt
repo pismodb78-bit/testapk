@@ -1,7 +1,13 @@
 package com.pismo.messenger.data.db
 
 import com.pismo.messenger.core.Prefs
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -137,8 +143,39 @@ object Db {
     }
 
     private fun markOffline() {
+        val was = _online.value
         _online.value = false
+        if (was) startReconnectLoop()
     }
+
+    private val guardScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var reconnectJob: Job? = null
+
+    /**
+     * Пока связи нет — стучимся в базу сами, раз в 2,5 секунды. Порт
+     * _retryTimer из ConnectionGuard.
+     *
+     * Без этого цикла заставка «нет связи» висела бы до первого запроса
+     * пользователя: экраны с опросом (переписка) восстановились бы сами, а
+     * настройки или профиль — никогда. На телефоне это обычное дело: сеть
+     * пропала в лифте и вернулась, а приложение об этом не узнало.
+     */
+    @Synchronized
+    private fun startReconnectLoop() {
+        if (reconnectJob?.isActive == true) return
+        reconnectJob = guardScope.launch {
+            while (isActive && !_online.value) {
+                delay(RETRY_MS)
+                // Пробуем открыть соединение начисто: лежащие в пуле сокеты
+                // после обрыва мертвы, и проверять надо не их.
+                val ok = runCatching { openNew().use { it.isValid(3) } }.getOrDefault(false)
+                if (ok) markOnline()
+            }
+        }
+    }
+
+    /** Период проб при обрыве — тот же, что у ConnectionGuard на ПК. */
+    private const val RETRY_MS = 2500L
 
     /**
      * Похоже ли исключение на разрыв соединения, а не на ошибку в запросе.

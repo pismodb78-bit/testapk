@@ -12,6 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.pismo.messenger.core.Prefs
@@ -28,6 +29,7 @@ import com.pismo.messenger.ui.settings.SettingsScreen
 import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
+import com.pismo.messenger.ui.components.ConnectionOverlay
 import com.pismo.messenger.ui.theme.PismoColors
 import com.pismo.messenger.ui.theme.PismoTheme
 
@@ -92,6 +94,11 @@ class MainActivity : ComponentActivity() {
                 // пересоздаётся на каждом переходе и не показывается там,
                 // где его не повесили руками.
                 com.pismo.messenger.ui.call.IncomingCallDialog()
+
+                // Заставка «нет связи» — тоже в корне и тоже вне NavHost:
+                // обрыв случается на любом экране, а перекрывать она должна
+                // всё приложение целиком, как панель ConnectionGuard на ПК.
+                // Стоит ПОСЛЕ NavHost по порядку отрисовки — см. ниже.
 
                 NavHost(navController = navController, startDestination = start) {
                     composable(Routes.LOGIN) {
@@ -193,6 +200,20 @@ class MainActivity : ComponentActivity() {
                         SettingsScreen(onBack = { navController.popBackStack() })
                     }
                 }
+
+                // Заставку не вешаем на вход, регистрацию и настройки: адрес
+                // базы чинят именно там, и запереть эти экраны сообщением
+                // «нет связи» значило бы сделать неверную настройку
+                // неисправимой. На ПК по той же причине ConnectionGuard
+                // живёт в MainForm и формы входа не закрывает.
+                val currentEntry by navController.currentBackStackEntryAsState()
+                val route = currentEntry?.destination?.route
+                ConnectionOverlay(
+                    enabled = UserSession.effectiveId > 0 &&
+                        route != Routes.SETTINGS &&
+                        route != Routes.LOGIN &&
+                        route != Routes.REGISTER
+                )
             }
         }
     }
