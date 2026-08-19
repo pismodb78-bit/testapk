@@ -144,34 +144,39 @@ object Prefs {
         set(v) = sp.edit().putString("user_audio", v).apply()
 
     /**
-     * Чаты, у которых уведомления выключены: строки вида «DM:42», «GROUP:7».
+     * Игнорируемые собеседники — порт ChatMutes.cs.
      *
-     * Хранится ЛОКАЛЬНО, а не в базе, и это осознанно. На ПК заглушить
-     * отдельную переписку нельзя вовсе — там мьют есть только у сервера
-     * (server_members.muted_notifs), и заводить ради телефона колонку, о
-     * которой вторая сторона не знает, значило бы развести схемы. Настройка
-     * и по смыслу местная: тишина нужна на том устройстве, которое лежит
-     * рядом ночью.
+     * От них не приходят ни уведомления о сообщениях, ни входящие звонки.
+     * Сообщения при этом продолжают доставляться и лежат в чате: это именно
+     * тишина, а не блокировка — для блокировки есть отдельный механизм на
+     * сервере.
+     *
+     * Хранится ЛОКАЛЬНО и не уходит в базу, как и на ПК: список «кого я не
+     * хочу слышать» — дело этого устройства. Ключ включает id аккаунта,
+     * чтобы настройки разных пользователей на одном телефоне не смешивались.
      */
-    private var mutedChatsRaw: String
-        get() = sp.getString("muted_chats", "")!!
-        set(v) = sp.edit().putString("muted_chats", v).apply()
+    private fun ignoreKey() = "ignored_users_${UserSession.effectiveId}"
 
-    private fun mutedKey(scope: String, id: Int) = "$scope:$id"
-
-    fun isChatMuted(scope: String, id: Int): Boolean =
-        mutedChatsRaw.split('\n').contains(mutedKey(scope, id))
-
-    fun setChatMuted(scope: String, id: Int, muted: Boolean) {
-        val key = mutedKey(scope, id)
-        val set = mutedChatsRaw.split('\n').filter { it.isNotBlank() }.toMutableSet()
-        if (muted) set.add(key) else set.remove(key)
-        mutedChatsRaw = set.joinToString("\n")
+    fun isUserIgnored(userId: Int): Boolean {
+        if (userId <= 0) return false
+        return ignoredUsers().contains(userId)
     }
 
-    /** Все заглушённые — опросу дешевле спросить один раз, чем по чату. */
-    fun mutedChats(): Set<String> =
-        mutedChatsRaw.split('\n').filter { it.isNotBlank() }.toSet()
+    fun ignoredUsers(): Set<Int> =
+        sp.getString(ignoreKey(), "").orEmpty()
+            .split(',')
+            .mapNotNull { it.trim().toIntOrNull() }
+            .toSet()
+
+    /** Включить/выключить игнор. Возвращает НОВОЕ состояние. */
+    fun toggleUserIgnored(userId: Int): Boolean {
+        if (userId <= 0) return false
+        val set = ignoredUsers().toMutableSet()
+        val nowIgnored = set.add(userId)
+        if (!nowIgnored) set.remove(userId)
+        sp.edit().putString(ignoreKey(), set.joinToString(",")).apply()
+        return nowIgnored
+    }
 
     /**
      * Короткие звуки событий: микрофон, «наушники», камера, демонстрация,

@@ -377,12 +377,12 @@ private fun ConversationRow(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                // Заглушённую переписку видно из списка, а не только изнутри.
-                if (Prefs.isChatMuted("DM", c.userId)) {
+                // Игнорируемого видно прямо из списка — как 🔕 на ПК.
+                if (Prefs.isUserIgnored(c.userId)) {
                     Spacer(Modifier.width(4.dp))
                     Icon(
                         Icons.Default.NotificationsOff,
-                        "Уведомления выключены",
+                        "Игнорируется",
                         tint = PismoColors.TextMuted,
                         modifier = Modifier.size(14.dp),
                     )
@@ -435,15 +435,6 @@ private fun GroupRow(g: GroupSummary, onClick: () -> Unit, onLongClick: () -> Un
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                if (Prefs.isChatMuted("GROUP", g.id)) {
-                    Spacer(Modifier.width(4.dp))
-                    Icon(
-                        Icons.Default.NotificationsOff,
-                        "Уведомления выключены",
-                        tint = PismoColors.TextMuted,
-                        modifier = Modifier.size(14.dp),
-                    )
-                }
             }
             Text(
                 g.lastMessage.ifBlank { "${g.memberCount} участник(ов)" },

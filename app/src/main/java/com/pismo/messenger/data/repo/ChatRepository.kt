@@ -47,31 +47,50 @@ object ChatRepository {
     suspend fun loadConversations(): List<Conversation> {
         val me = UserSession.effectiveId
         val accepted = FriendsRepository.acceptedPredicate("f")
+        // ВАЖНО ПРО НАГРУЗКУ НА ДИСК. Прежний вариант джойнил messages
+        // условием «(sender=я AND receiver=u.id) OR (sender=u.id AND
+        // receiver=я)». OR в ON не даёт использовать индекс, поэтому на
+        // КАЖДУЮ строку users шло полное сканирование messages — а вложения
+        // лежат там же, в LONGBLOB, то есть с диска поднимались и они. Сверху
+        // коррелированный подзапрос за текстом последнего сообщения и EXISTS,
+        // тоже на каждого пользователя. Список чатов перечитывается на каждую
+        // отметку «прочитано», отсюда полки в десятки МБ/с на ровном тексте.
+        //
+        // Теперь агрегат считается ОДИН раз по своим сообщениям: две ветки
+        // UNION ALL, каждая ложится на свой индекс, а текст последнего
+        // сообщения берётся одной выборкой по первичному ключу. Порт запроса
+        // с ПК — там его переписали ровно по этой же жалобе.
         val sql = """
             SELECT u.id, u.Name, u.Surname, u.login,
-                   UNIX_TIMESTAMP(MAX(m.created_at)) AS last_time,
-                   (SELECT m2.text FROM messages m2
-                    WHERE (m2.sender_id = ? AND m2.receiver_id = u.id)
-                       OR (m2.sender_id = u.id AND m2.receiver_id = ?)
-                    ORDER BY m2.created_at DESC LIMIT 1) AS last_msg,
-                   SUM(CASE WHEN m.sender_id=u.id AND m.receiver_id=?
-                             AND m.is_read=0 THEN 1 ELSE 0 END) AS unread
+                   UNIX_TIMESTAMP(c.last_time) AS last_time,
+                   mm.text AS last_msg,
+                   IFNULL(c.unread, 0) AS unread
             FROM users u
-            LEFT JOIN messages m
-                   ON (m.sender_id=? AND m.receiver_id=u.id)
-                   OR (m.sender_id=u.id AND m.receiver_id=?)
+            LEFT JOIN (
+                SELECT partner_id,
+                       MAX(created_at) AS last_time,
+                       MAX(id)         AS last_id,
+                       SUM(unread)     AS unread
+                FROM (
+                    SELECT receiver_id AS partner_id, created_at, id, 0 AS unread
+                    FROM messages WHERE sender_id = ?
+                    UNION ALL
+                    SELECT sender_id AS partner_id, created_at, id,
+                           CASE WHEN is_read = 0 THEN 1 ELSE 0 END AS unread
+                    FROM messages WHERE receiver_id = ?
+                ) t
+                GROUP BY partner_id
+            ) c ON c.partner_id = u.id
+            LEFT JOIN messages mm ON mm.id = c.last_id
             WHERE u.id <> ?
-              AND ( EXISTS (SELECT 1 FROM friends f
+              AND ( c.partner_id IS NOT NULL
+                 OR EXISTS (SELECT 1 FROM friends f
                             WHERE $accepted AND ((f.user_id=? AND f.friend_id=u.id)
-                                              OR (f.user_id=u.id AND f.friend_id=?)))
-                 OR EXISTS (SELECT 1 FROM messages mm
-                            WHERE (mm.sender_id=? AND mm.receiver_id=u.id)
-                               OR (mm.sender_id=u.id AND mm.receiver_id=?)) )
-            GROUP BY u.id, u.Name, u.Surname, u.login
+                                              OR (f.user_id=u.id AND f.friend_id=?))) )
             ORDER BY last_time DESC, u.Name ASC
         """.trimIndent()
 
-        return Db.query(sql, me, me, me, me, me, me, me, me, me, me) { rs ->
+        return Db.query(sql, me, me, me, me, me) { rs ->
             val lastRaw = rs.getString("last_msg")
             Conversation(
                 userId = rs.getInt("id"),
@@ -232,8 +251,14 @@ object ChatRepository {
                    (m.image_data IS NOT NULL) AS has_img,
                    (m.audio_data IS NOT NULL) AS has_audio,
                    (m.video_data IS NOT NULL) AS has_video,
-                   (m.file_data  IS NOT NULL) AS has_file,
-                   OCTET_LENGTH(m.file_data) AS file_size
+                   (m.file_data  IS NOT NULL) AS has_file
+                   -- Размер вложения здесь НЕ считаем. OCTET_LENGTH по
+                   -- LONGBLOB заставляет сервер поднять вложение с диска
+                   -- целиком, а лента перечитывается каждые 2.5 секунды:
+                   -- на большой переписке это и были те самые полки
+                   -- нагрузки на диск. Столбец при этом никто не читал.
+                   -- Размер нужен только карточке файла — она берёт его
+                   -- отдельным запросом по одному сообщению (fileSize).
             FROM messages m
             JOIN users u ON u.id = m.sender_id
             WHERE ((m.sender_id=? AND m.receiver_id=?) OR (m.sender_id=? AND m.receiver_id=?))
@@ -255,8 +280,7 @@ object ChatRepository {
                    (gm.image_data IS NOT NULL) AS has_img,
                    (gm.audio_data IS NOT NULL) AS has_audio,
                    (gm.video_data IS NOT NULL) AS has_video,
-                   (gm.file_data  IS NOT NULL) AS has_file,
-                   OCTET_LENGTH(gm.file_data) AS file_size
+                   (gm.file_data  IS NOT NULL) AS has_file
             FROM group_messages gm
             JOIN users u ON u.id = gm.sender_id
             WHERE gm.group_id=? $cursor
@@ -680,6 +704,20 @@ object ChatRepository {
         if (data != null && data.isNotEmpty()) MediaCache.put(msgId, kind, data, fileName)
         return data
     }
+
+    /**
+     * Сколько МОИХ сообщений этому собеседнику ещё не прочитано.
+     *
+     * Нужно ровно для галочек. Опрос переписки следит за ЧИСЛОМ сообщений, а
+     * прочтение число не меняет — поэтому синие галочки появлялись только
+     * тогда, когда кто-нибудь напишет следующее сообщение, и выглядело это
+     * как «долго помечает». Запрос ложится на idx_msg_recv_read
+     * (receiver_id, is_read, sender_id) целиком и стоит копейки.
+     */
+    suspend fun unreadToPartner(partnerId: Int): Int = Db.scalarInt(
+        "SELECT COUNT(*) FROM messages WHERE receiver_id=? AND is_read=0 AND sender_id=?",
+        partnerId, UserSession.effectiveId
+    )
 
     suspend fun fileSize(msgId: Int, scope: Scope): Long =
         Db.scalarLong("SELECT OCTET_LENGTH(file_data) FROM ${scope.table} WHERE id=?", msgId)

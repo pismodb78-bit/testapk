@@ -156,6 +156,31 @@ object DbMigrator {
                 exec(c, "UPDATE server_roles SET can_channels=1 WHERE can_manage=1")
             }
         },
+        Migration(17, "messages: индексы под горячие запросы личных сообщений") { c ->
+            // В messages были только idx_msg_pair (sender_id, receiver_id) и
+            // idx_msg_created (created_at). Запросы, которые идут «от
+            // получателя» — непрочитанные, отметка прочитанного, список
+            // диалогов — опереться на них не могут и сканируют таблицу
+            // целиком. А вложения лежат в этой же таблице, в LONGBLOB, и с
+            // диска поднимаются вместе со строками: отсюда десятки МБ/с при
+            // отправке простого текста.
+            //
+            // На ПК те же индексы кладут вручную скриптом
+            // sql/2026-08-19_message_indexes.sql — там приложение DDL не
+            // делает. Здесь мигратор есть, поэтому доводим сами.
+            if (!indexExists(c, "messages", "idx_msg_recv_read")) {
+                exec(c, "ALTER TABLE messages ADD INDEX idx_msg_recv_read (receiver_id, is_read, sender_id)")
+            }
+            if (!indexExists(c, "messages", "idx_msg_recv_time")) {
+                exec(c, "ALTER TABLE messages ADD INDEX idx_msg_recv_time (receiver_id, created_at, id)")
+            }
+            if (!indexExists(c, "messages", "idx_msg_send_time")) {
+                exec(c, "ALTER TABLE messages ADD INDEX idx_msg_send_time (sender_id, created_at, id)")
+            }
+            if (!indexExists(c, "messages", "idx_msg_pair_time")) {
+                exec(c, "ALTER TABLE messages ADD INDEX idx_msg_pair_time (sender_id, receiver_id, id)")
+            }
+        },
     )
 
     /**
@@ -239,6 +264,22 @@ object DbMigrator {
             }
             false
         }.getOrDefault(false)
+    }
+
+    private fun indexExists(c: Connection, table: String, index: String): Boolean {
+        runCatching {
+            c.prepareStatement(
+                "SELECT COUNT(*) FROM information_schema.STATISTICS " +
+                        "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND INDEX_NAME=?"
+            ).use { ps ->
+                ps.setString(1, table)
+                ps.setString(2, index)
+                ps.executeQuery().use { rs -> return rs.next() && rs.getInt(1) > 0 }
+            }
+        }
+        // Не смогли спросить — считаем, что индекс есть: лишний ALTER на
+        // большой таблице дороже, чем его отсутствие.
+        return true
     }
 
     private fun columnExists(c: Connection, table: String, column: String): Boolean {

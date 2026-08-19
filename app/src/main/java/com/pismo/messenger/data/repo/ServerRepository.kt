@@ -271,8 +271,14 @@ object ServerRepository {
                    (sm.image_data IS NOT NULL) AS has_img,
                    (sm.audio_data IS NOT NULL) AS has_audio,
                    (sm.video_data IS NOT NULL) AS has_video,
-                   (sm.file_data  IS NOT NULL) AS has_file,
-                   OCTET_LENGTH(sm.file_data) AS file_size
+                   (sm.file_data  IS NOT NULL) AS has_file
+                   -- Размер вложения здесь НЕ считаем. OCTET_LENGTH по
+                   -- LONGBLOB заставляет сервер поднять вложение с диска
+                   -- целиком, а лента перечитывается каждые 2.5 секунды:
+                   -- на большой переписке это и были те самые полки
+                   -- нагрузки на диск. Столбец при этом никто не читал.
+                   -- Размер нужен только карточке файла — она берёт его
+                   -- отдельным запросом по одному сообщению (fileSize).
             FROM server_messages sm
             JOIN users u ON u.id = sm.sender_id
             WHERE sm.channel_id=? $cursor

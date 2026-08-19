@@ -34,7 +34,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
@@ -77,7 +76,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.PresenceReporter
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.ellipsize
@@ -193,10 +191,6 @@ fun ChatScreen(
     var showCircleRecorder by remember { mutableStateOf(false) }
     var showGifPicker by remember { mutableStateOf(false) }
 
-    /** Уведомления этой переписки выключены. Настройка местная — см. Prefs. */
-    var muted by remember(targetId, isGroup) {
-        mutableStateOf(Prefs.isChatMuted(if (isGroup) "GROUP" else "DM", targetId))
-    }
     // Режим множественного выделения — порт «Выбрано: N» с ПК.
     var selectMode by remember(targetId) { mutableStateOf(false) }
     var selectedIds by remember(targetId) { mutableStateOf(setOf<Int>()) }
@@ -431,13 +425,26 @@ fun ChatScreen(
     }
 
     // Опрос по числу сообщений — тот же приём, что PollTick на ПК.
-    LaunchedEffect(targetId) {
+    //
+    // Плюс отдельно следим за числом СВОИХ непрочитанных: прочтение количества
+    // сообщений не меняет, поэтому синие галочки появлялись только тогда,
+    // когда кто-нибудь напишет следующее сообщение. Запрос ложится на индекс
+    // целиком и стоит копейки.
+    var lastUnreadToPartner by remember(targetId) { mutableIntStateOf(-1) }
+    LaunchedEffect(targetId, isGroup) {
         while (isActive) {
             delay(2500)
             runCatching {
                 val count = if (isGroup) ChatRepository.groupMessageCount(targetId)
                 else ChatRepository.directMessageCount(targetId)
-                if (count != lastCount) reload(scrollToEnd = true)
+
+                val mineUnread =
+                    if (isGroup) -1 else ChatRepository.unreadToPartner(targetId)
+
+                val changed = count != lastCount ||
+                    (!isGroup && mineUnread != lastUnreadToPartner)
+                lastUnreadToPartner = mineUnread
+                if (changed) reload(scrollToEnd = true)
             }
         }
     }
@@ -628,28 +635,7 @@ fun ChatScreen(
                                 text = { Text("Закреплённые") },
                                 onClick = { menuOpen = false; showPins = true },
                             )
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        if (muted) "Включить уведомления"
-                                        else "Выключить уведомления"
-                                    )
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    muted = !muted
-                                    Prefs.setChatMuted(scopeKind.name, targetId, muted)
-                                },
-                            )
                         }
-                    }
-                    if (muted) {
-                        Icon(
-                            Icons.Default.NotificationsOff,
-                            "Уведомления выключены",
-                            tint = PismoColors.TextMuted,
-                            modifier = Modifier.size(18.dp),
-                        )
                     }
                     IconButton(onClick = { startCall(context, targetId, title, isGroup, false) }) {
                         Icon(Icons.Default.Call, "Позвонить", tint = PismoColors.Green)

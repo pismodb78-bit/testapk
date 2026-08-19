@@ -1,6 +1,7 @@
 package com.pismo.messenger.call
 
 import android.content.Context
+import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.model.CallSessionRow
 import com.pismo.messenger.data.repo.CallRepository
@@ -103,6 +104,11 @@ object IncomingCallMonitor {
 
             val calls = runCatching { CallRepository.incomingCalls() }.getOrDefault(emptyList())
             val fresh = calls.firstOrNull { shownCallIds.add(it.id) } ?: return
+
+            // Игнорируемый звонит — окно не поднимаем и в шторку не пишем.
+            // Звонок при этом не отклоняем: пусть у него идут гудки, как
+            // будто трубку просто не берут. Порт того же поведения с ПК.
+            if (Prefs.isUserIgnored(fresh.callerId)) return
 
             _incoming.value = fresh
             CallNotifier.showIncoming(context, fresh)

@@ -14,6 +14,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.sp
+import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.model.Conversation
 import com.pismo.messenger.data.repo.ChatRepository
@@ -37,6 +38,9 @@ fun UserActionsDialog(
     var blocked by remember { mutableStateOf(false) }
     var relation by remember { mutableStateOf(FriendsRepository.Relation.NONE) }
     var confirmClear by remember { mutableStateOf(false) }
+    var ignored by remember(conversation.userId) {
+        mutableStateOf(Prefs.isUserIgnored(conversation.userId))
+    }
 
     LaunchedEffect(conversation.userId) {
         runCatching {
@@ -105,6 +109,17 @@ fun UserActionsDialog(
                             onChanged()
                         }
                     }
+                }
+
+                // Игнор — это ТИШИНА, а не блокировка: сообщения продолжают
+                // доходить и лежат в чате, просто не поднимают ни шторку, ни
+                // звонок. Для блокировки ниже есть отдельный пункт.
+                Action(
+                    if (ignored) "🔔  Больше не игнорировать" else "🔕  Игнорировать",
+                    color = if (ignored) PismoColors.Green else PismoColors.TextSecondary,
+                ) {
+                    ignored = Prefs.toggleUserIgnored(conversation.userId)
+                    onChanged()
                 }
 
                 Action(

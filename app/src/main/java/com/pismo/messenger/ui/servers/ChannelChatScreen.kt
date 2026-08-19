@@ -58,7 +58,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pismo.messenger.core.Mentions
-import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.PresenceReporter
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.ellipsize
@@ -158,8 +157,6 @@ fun ChannelChatScreen(
     var pending by remember(channelId) { mutableStateOf<PendingFile?>(null) }
     var showGifPicker by remember { mutableStateOf(false) }
 
-    /** Уведомления этого канала выключены — настройка местная, см. Prefs. */
-    var muted by remember(channelId) { mutableStateOf(Prefs.isChatMuted("CHANNEL", channelId)) }
     var attachNote by remember(channelId) { mutableStateOf("") }
 
     suspend fun reload(scrollToEnd: Boolean = false) {
@@ -342,19 +339,6 @@ fun ChannelChatScreen(
                             DropdownMenuItem(
                                 text = { Text("Закреплённые") },
                                 onClick = { menuOpen = false; showPins = true },
-                            )
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        if (muted) "Включить уведомления"
-                                        else "Выключить уведомления"
-                                    )
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    muted = !muted
-                                    Prefs.setChatMuted("CHANNEL", channelId, muted)
-                                },
                             )
                         }
                     }
