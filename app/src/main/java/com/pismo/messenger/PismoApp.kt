@@ -6,7 +6,10 @@ import com.pismo.messenger.call.IncomingCallMonitor
 import com.pismo.messenger.core.EmojiCatalog
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.PresenceReporter
+import com.pismo.messenger.data.ChatDiskCache
+import com.pismo.messenger.data.ChatListMemory
 import com.pismo.messenger.data.MediaCache
+import com.pismo.messenger.data.ServerMemory
 import com.pismo.messenger.service.Notifications
 import com.pismo.messenger.ui.theme.PismoColors
 
@@ -17,6 +20,12 @@ class PismoApp : Application() {
         instance = this
         Prefs.init(this)
         MediaCache.init(this)
+        // Кеш переписок и раскладки серверов теперь переживает закрытие
+        // приложения: без диска первый заход в любой чат после запуска
+        // снова упирался бы в кружок на всё время запроса к базе.
+        ChatDiskCache.init(this)
+        ServerMemory.init(this)
+        ChatListMemory.init(this)
         EmojiCatalog.init(this)
         Notifications.createChannels(this)
         // Палитру ставим до первой отрисовки, иначе светлая тема мигнёт

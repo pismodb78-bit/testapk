@@ -48,7 +48,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pismo.messenger.core.Prefs
+import com.pismo.messenger.data.ChatDiskCache
+import com.pismo.messenger.data.ChatListMemory
 import com.pismo.messenger.data.MediaCache
+import com.pismo.messenger.data.MessageMemory
+import com.pismo.messenger.data.ServerMemory
 import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.media.MicLevelMonitor
 import com.pismo.messenger.media.Sounds
@@ -111,7 +115,9 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     // Обход кеша — это работа с файловой системой, в композиции ей не место.
     LaunchedEffect(Unit) {
-        cacheSize = withContext(Dispatchers.IO) { MediaCache.sizeBytes() }
+        cacheSize = withContext(Dispatchers.IO) {
+            MediaCache.sizeBytes() + ChatDiskCache.sizeBytes() + ChatListMemory.sizeBytes()
+        }
     }
 
     fun save() {
@@ -497,7 +503,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             )
 
             Spacer(Modifier.height(20.dp))
-            Section("Кеш медиа")
+            Section("Кеш")
             // Раньше здесь было деление на МБ в целых числах, и любой кеш
             // меньше мегабайта показывался как «0 МБ» — выглядело так, будто
             // ничего не сохраняется вообще.
@@ -505,10 +511,20 @@ fun SettingsScreen(onBack: () -> Unit) {
                 "Занято: " + formatBytes(cacheSize),
                 color = PismoColors.TextSecondary, fontSize = 13.sp,
             )
+            Text(
+                "Вложения и переписки хранятся на устройстве и переживают " +
+                        "закрытие приложения — поэтому чаты открываются сразу, " +
+                        "не дожидаясь ответа базы. Текст сообщений лежит " +
+                        "зашифрованным, тем же ключом, что и в базе.",
+                color = PismoColors.TextMuted, fontSize = 11.sp,
+            )
             Spacer(Modifier.height(8.dp))
             Button(
                 onClick = {
                     MediaCache.clear()
+                    MessageMemory.clear()
+                    ServerMemory.clear()
+                    ChatListMemory.clear()
                     cacheSize = 0
                     status = "Кеш очищен."
                 },

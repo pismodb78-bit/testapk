@@ -50,6 +50,7 @@ import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.formatListTime
 import com.pismo.messenger.core.parseHexColor
+import com.pismo.messenger.data.ChatListMemory
 import com.pismo.messenger.data.model.Conversation
 import com.pismo.messenger.data.model.Presence
 import com.pismo.messenger.data.model.GroupSummary
@@ -78,13 +79,20 @@ fun ChatListScreen(
     onLoggedOut: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var conversations by remember { mutableStateOf<List<Conversation>>(emptyList()) }
+    // Стартуем с того, что показывали в прошлый раз (в том числе в прошлый
+    // ЗАПУСК): список собирается двумя тяжёлыми запросами к удалённой базе,
+    // и до их ответа экран стоял пустым — как раз на старте приложения это
+    // и заметнее всего. Свежий список приезжает следом и подменяет.
+    val remembered = remember { ChatListMemory.peek() }
+    var conversations by remember { mutableStateOf(remembered.first) }
     // Статусы собеседников для точек на аватарках. Обновляются чаще списка:
     // сам список — тяжёлый запрос, а присутствие меняется каждые несколько
     // секунд, и точка обязана за ним поспевать.
     var presence by remember { mutableStateOf<Map<Int, Presence>>(emptyMap()) }
-    var groups by remember { mutableStateOf<List<GroupSummary>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
+    var groups by remember { mutableStateOf(remembered.second) }
+    var loading by remember {
+        mutableStateOf(remembered.first.isEmpty() && remembered.second.isEmpty())
+    }
     var error by remember { mutableStateOf("") }
     var showCreateGroup by remember { mutableStateOf(false) }
     var manageGroup by remember { mutableStateOf<GroupSummary?>(null) }
@@ -102,6 +110,7 @@ fun ChatListScreen(
             } else {
                 ChatRepository.loadConversations()
             }
+            ChatListMemory.put(conversations, groups)
             // Аватарки списка тянем одним запросом, а не по одной на строку.
             ProfileRepository.prefetchAvatars(conversations.map { it.userId })
             error = ""

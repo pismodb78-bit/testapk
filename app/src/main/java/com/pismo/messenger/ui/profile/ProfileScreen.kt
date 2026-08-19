@@ -46,6 +46,7 @@ import com.pismo.messenger.data.model.DmPrivacy
 import com.pismo.messenger.data.model.UserProfile
 import com.pismo.messenger.data.repo.AuthRepository
 import com.pismo.messenger.data.repo.FriendsRepository
+import com.pismo.messenger.data.ChatListMemory
 import com.pismo.messenger.data.MessageMemory
 import com.pismo.messenger.data.ServerMemory
 import com.pismo.messenger.data.repo.PresenceRepository
@@ -355,6 +356,7 @@ fun ProfileScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit) {
                     // на один кадр.
                     MessageMemory.clear()
                     ServerMemory.clear()
+                    ChatListMemory.clear()
                     PresenceRepository.clearCache()
                     ProfileRepository.clearAvatarCache()
                     Prefs.clearSavedCredentials()
