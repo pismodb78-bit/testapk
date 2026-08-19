@@ -356,6 +356,8 @@ fun ProfileScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit) {
                     PresenceRepository.clearCache()
                     ProfileRepository.clearAvatarCache()
                     Prefs.clearSavedCredentials()
+                    // Отметки «о чём уже сообщали» тоже чужие.
+                    Prefs.clearNotifyBaselines()
                     UserSession.clear()
                     onLoggedOut()
                 }

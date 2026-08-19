@@ -139,6 +139,44 @@ object Prefs {
         get() = sp.getBoolean("bg_polling", true)
         set(v) = sp.edit().putBoolean("bg_polling", v).apply()
 
+    // ── Отметки «о чём уже сообщали» ───────────────────────────────────
+    //
+    // Опрос уведомлений сравнивает текущее состояние с предыдущим, и
+    // предыдущее раньше жило только в памяти сервиса. Из-за этого первый
+    // проход после запуска ЛЮБОЕ накопившееся считал «уже известным»:
+    // написанное, пока приложение было закрыто, не давало уведомлений
+    // вообще — а это как раз тот случай, ради которого они и нужны.
+    // Теперь отметки переживают перезапуск процесса.
+    //
+    // Формат простой: «id:значение,id:значение». Заводить ради четырёх
+    // счётчиков базу или сериализацию незачем.
+
+    var notifyBaselineDm: String
+        get() = sp.getString("notify_base_dm", "")!!
+        set(v) = sp.edit().putString("notify_base_dm", v).apply()
+
+    var notifyBaselineGroup: String
+        get() = sp.getString("notify_base_group", "")!!
+        set(v) = sp.edit().putString("notify_base_group", v).apply()
+
+    var notifyBaselineChannel: String
+        get() = sp.getString("notify_base_channel", "")!!
+        set(v) = sp.edit().putString("notify_base_channel", v).apply()
+
+    var notifyBaselineFriends: String
+        get() = sp.getString("notify_base_friends", "")!!
+        set(v) = sp.edit().putString("notify_base_friends", v).apply()
+
+    /** Сброс отметок — при смене пользователя чужие счётчики не наши. */
+    fun clearNotifyBaselines() {
+        sp.edit()
+            .remove("notify_base_dm")
+            .remove("notify_base_group")
+            .remove("notify_base_channel")
+            .remove("notify_base_friends")
+            .apply()
+    }
+
     // ── Обработка звука в звонке ───────────────────────────────────────
     //
     // Это те же три галочки, что и в SettingsForm ПК-версии. Значения

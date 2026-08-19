@@ -59,6 +59,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -120,6 +121,9 @@ private const val VOICE_MAX_SECONDS = 180
  */
 private const val MAX_ATTACH_BYTES = 128L * 1024 * 1024
 
+/** Насколько расширяется страница за одну догрузку старых сообщений. */
+private const val PAGE_STEP = 40
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
@@ -160,7 +164,14 @@ fun ChatScreen(
     var iBlocked by remember { mutableStateOf(false) }
     var theyBlocked by remember { mutableStateOf(false) }
 
-    val listState = rememberLazyListState()
+    // Лента открывается СРАЗУ на последнем сообщении. Раньше стартовая
+    // позиция была нулевой, и чат на мгновение (а с запомненной лентой —
+    // надолго) показывал самое старое сообщение, пока прокрутка вниз не
+    // догоняла. Начальный индекс задаётся до первой компоновки, поэтому
+    // прыжка не видно вовсе.
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = (remembered?.first?.size ?: 1) - 1
+    )
     val recorder = remember { WavRecorder(scope) }
     var recording by remember { mutableStateOf(false) }
     var recordSeconds by remember { mutableStateOf(0) }
@@ -169,6 +180,9 @@ fun ChatScreen(
     var selectMode by remember(targetId) { mutableStateOf(false) }
     var selectedIds by remember(targetId) { mutableStateOf(setOf<Int>()) }
     var forwardBatch by remember(targetId) { mutableStateOf<List<ForwardItem>>(emptyList()) }
+    // Полноэкранное видео живёт на уровне экрана — переживает и прокрутку,
+    // и поворот, при которых пузырь уничтожается.
+    var fullscreenVideo by remember(targetId) { mutableStateOf<FullscreenVideo?>(null) }
     var showPins by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
     var showCalendar by remember { mutableStateOf(false) }
@@ -189,6 +203,11 @@ fun ChatScreen(
     // же, как _dmLimit на ПК: лента грузится с конца, и без расширения
     // прыжок в прошлый месяц упирался бы в незагруженную историю.
     var pageLimit by remember(targetId) { mutableStateOf(0) }
+    // Догрузка старых сообщений порциями — как постраничная лента на ПК.
+    // 0 в pageLimit означает «размер по умолчанию», поэтому первую порцию
+    // считаем от него же.
+    var loadingOlder by remember(targetId) { mutableStateOf(false) }
+    var noMoreOlder by remember(targetId) { mutableStateOf(false) }
 
     // force = «прокрути вниз обязательно». Обычный scrollToEnd уважает
     // положение пользователя в истории (чтобы чужое сообщение не выдёргивало
@@ -284,6 +303,29 @@ fun ChatScreen(
         // После переподключения — ставим всегда, лента могла устареть.
         if (remembered == null || isReconnect) loading = true
         reload(scrollToEnd = true)
+    }
+
+    // Поочерёдная догрузка старых сообщений — как постраничная лента на ПК.
+    // Дотянув прокрутку до верха, пользователь получает следующую порцию, а
+    // не всю историю разом: тянуть тысячу расшифровок ради одного взгляда
+    // назад незачем.
+    LaunchedEffect(targetId) {
+        snapshotFlow { listState.firstVisibleItemIndex }.collect { first ->
+            if (first > 2 || loading || loadingOlder || noMoreOlder) return@collect
+            if (messages.isEmpty()) return@collect
+
+            loadingOlder = true
+            val before = messages.size
+            pageLimit = (if (pageLimit > 0) pageLimit else before) + PAGE_STEP
+            reload()
+            val added = messages.size - before
+            // Ничего не добавилось — история кончилась, больше не дёргаем.
+            if (added <= 0) noMoreOlder = true
+            // Порция легла СВЕРХУ, поэтому позиция взгляда уезжает вниз ровно
+            // на столько же строк. Без поправки лента прыгала бы к началу.
+            else runCatching { listState.scrollToItem(first + added) }
+            loadingOlder = false
+        }
     }
 
     // Присутствие собеседника — отдельным лёгким запросом раз в 6 секунд,
@@ -387,7 +429,12 @@ fun ChatScreen(
                     text = text,
                     image = attach?.takeIf { it.isImage }?.bytes,
                     file = attach?.takeIf { !it.isImage }?.bytes,
-                    fileName = attach?.fileName,
+                    // Имя файла — ТОЛЬКО для не-картинок. Пока оно писалось
+                    // и для изображений, собеседник на ПК видел под фото
+                    // вторую строку — карточку «нажмите для загрузки», хотя
+                    // это одно и то же вложение. ПК при отправке картинки
+                    // тоже передаёт file_name как null.
+                    fileName = attach?.takeIf { !it.isImage }?.fileName,
                     replyToId = replyTo?.id ?: 0,
                 )
                 notifyPeers(isGroup, targetId)
@@ -543,6 +590,22 @@ fun ChatScreen(
                             horizontal = 10.dp, vertical = 8.dp
                         ),
                     ) {
+                        // Полоска сверху, пока едет следующая порция истории.
+                        if (loadingOlder) {
+                            item {
+                                Box(
+                                    Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    CircularProgressIndicator(
+                                        Modifier.size(20.dp),
+                                        color = PismoColors.Blurple,
+                                        strokeWidth = 2.dp,
+                                    )
+                                }
+                            }
+                        }
+
                         val visible = messages.filter { !readOnly || it.isMine }
                         itemsIndexedCompat(visible) { index, msg ->
                             val prev = visible.getOrNull(index - 1)
@@ -573,6 +636,9 @@ fun ChatScreen(
                                     }
                                 },
                                 scopeKind = scopeKind,
+                                onOpenVideo = { file, name, id ->
+                                    fullscreenVideo = FullscreenVideo(file, name, id)
+                                },
                                 selectMode = selectMode,
                                 selected = msg.id in selectedIds,
                                 onEnterSelect = {
@@ -846,6 +912,8 @@ fun ChatScreen(
             onDismiss = { showPins = false },
         )
     }
+
+    FullscreenVideoHost(fullscreenVideo) { fullscreenVideo = null }
 
     if (forwardBatch.isNotEmpty()) {
         ForwardDialog(

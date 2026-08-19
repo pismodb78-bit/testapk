@@ -9,6 +9,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -397,6 +398,16 @@ private fun CallScreen(
     val landscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
         android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
+    // «Назад» СВОРАЧИВАЕТ окно звонка, а не завершает разговор. Раньше
+    // системная кнопка просто закрывала активити, и звонок обрывался —
+    // выйти посмотреть сообщение, не бросив собеседника, было нельзя.
+    // Завершение осталось за красной кнопкой, как и на ПК, где закрытие
+    // окна звонка тоже не кладёт трубку.
+    val activity = androidx.compose.ui.platform.LocalContext.current as? Activity
+    androidx.activity.compose.BackHandler(enabled = true) {
+        activity?.moveTaskToBack(true)
+    }
+
     val screenCaptureLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -763,12 +774,21 @@ private fun ParticipantTile(
         else -> 16f / 9f
     }
 
+    // Зелёная рамка у говорящего — как на ПК, где плитка активного
+    // участника обводится по контуру. Имя жирным без рамки читалось плохо:
+    // на плитке с видео его почти не видно.
+    val speakingBorder by androidx.compose.animation.animateColorAsState(
+        targetValue = if (p.speaking) PismoColors.Green else Color.Transparent,
+        label = "speaking",
+    )
+
     Box(
         Modifier
             .fillMaxWidth()
             .aspectRatio(ratio)
             .clip(RoundedCornerShape(12.dp))
             .background(PismoColors.BgSidebar)
+            .border(3.dp, speakingBorder, RoundedCornerShape(12.dp))
             .focusProperties { canFocus = false }
             .combinedClickable(onClick = onClick, onLongClick = onLongPress),
         contentAlignment = Alignment.Center,

@@ -115,6 +115,9 @@ fun ChannelChatScreen(
     var forwardBatch by remember(channelId) {
         mutableStateOf<List<com.pismo.messenger.ui.chat.ForwardItem>>(emptyList())
     }
+    var fullscreenVideo by remember(channelId) {
+        mutableStateOf<com.pismo.messenger.ui.chat.FullscreenVideo?>(null)
+    }
 
     val listState = rememberLazyListState()
     var showSearch by remember { mutableStateOf(false) }
@@ -325,6 +328,10 @@ fun ChannelChatScreen(
                             MessageBubble(
                                 msg = msg,
                                 isGroup = true,          // в канале всегда показываем автора
+                                onOpenVideo = { file, name, id ->
+                                    fullscreenVideo =
+                                        com.pismo.messenger.ui.chat.FullscreenVideo(file, name, id)
+                                },
                                 mentioned = msg.senderId != UserSession.effectiveId &&
                                     Mentions.mentionsMe(msg.text, mentionMe.first, mentionMe.second),
                                 selectMode = selectMode,
@@ -461,6 +468,8 @@ fun ChannelChatScreen(
             }
         }
     }
+
+    com.pismo.messenger.ui.chat.FullscreenVideoHost(fullscreenVideo) { fullscreenVideo = null }
 
     if (forwardBatch.isNotEmpty()) {
         com.pismo.messenger.ui.chat.ForwardDialog(

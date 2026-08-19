@@ -59,6 +59,7 @@ import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.PinsRepository
 import com.pismo.messenger.data.repo.ReactionsRepository
 import com.pismo.messenger.media.WavPlayer
+import com.pismo.messenger.ui.components.AnimatedImage
 import com.pismo.messenger.ui.components.FileBadge
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.launch
@@ -91,6 +92,12 @@ fun MessageBubble(
     mentioned: Boolean = false,
     onEnterSelect: () -> Unit = {},
     onToggleSelect: () -> Unit = {},
+    /**
+     * Открыть видео во весь экран. Диалог принадлежит ЭКРАНУ, а не пузырю:
+     * пузырь уничтожается, стоит сообщению уйти за край видимой области, и
+     * вместе с ним закрывался бы просмотр.
+     */
+    onOpenVideo: (java.io.File, String, Int) -> Unit = { _, _, _ -> },
 ) {
     val scope = rememberCoroutineScope()
     val isMine = msg.isMine
@@ -237,14 +244,22 @@ fun MessageBubble(
                         }
 
                         image?.let { bytes ->
-                            AsyncImage(
-                                model = bytes,
-                                contentDescription = null,
-                                modifier = Modifier
-                                    .widthIn(max = 260.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable { viewerBytes = bytes },
-                            )
+                            val mod = Modifier
+                                .widthIn(max = 260.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { viewerBytes = bytes }
+                            // GIF узнаём по содержимому, как IsGif на ПК:
+                            // имя у картинок больше не хранится, да и из
+                            // буфера обмена оно и не приходило.
+                            if (MediaKinds.isGif(bytes)) {
+                                AnimatedImage(bytes, contentDescription = null, modifier = mod)
+                            } else {
+                                AsyncImage(
+                                    model = bytes,
+                                    contentDescription = null,
+                                    modifier = mod,
+                                )
+                            }
                             Spacer(Modifier.height(6.dp))
                         }
 
@@ -264,7 +279,13 @@ fun MessageBubble(
                         val playableVideo = msg.hasFile && MediaKinds.isVideo(msg.fileName)
                         val playableAudio = msg.hasFile && MediaKinds.isAudio(msg.fileName)
                         if (playableVideo) {
-                            InlineVideoBubble(msg.id, scopeKind, msg.fileName!!, isMine)
+                            InlineVideoBubble(
+                                msgId = msg.id,
+                                scopeKind = scopeKind,
+                                fileName = msg.fileName!!,
+                                isMine = isMine,
+                                onFullscreen = onOpenVideo,
+                            )
                             Spacer(Modifier.height(6.dp))
                         } else if (playableAudio) {
                             InlineAudioBubble(msg.id, scopeKind, msg.fileName!!, isMine)
@@ -432,7 +453,10 @@ fun MessageBubble(
         FullscreenImageViewer(
             bytes = bytes,
             onDismiss = { viewerBytes = null },
-            fileName = msg.fileName,
+            // У картинок имени в базе больше нет — собираем осмысленное из
+            // номера сообщения, чтобы в галерее не лежали «pismo_17…».
+            fileName = msg.fileName
+                ?: ("pismo_${msg.id}." + if (MediaKinds.isGif(bytes)) "gif" else "jpg"),
         )
     }
 

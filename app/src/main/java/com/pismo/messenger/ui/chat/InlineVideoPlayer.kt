@@ -95,6 +95,7 @@ fun InlineVideoBubble(
     scopeKind: Scope,
     fileName: String,
     isMine: Boolean = false,
+    onFullscreen: (java.io.File, String, Int) -> Unit = { _, _, _ -> },
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -104,13 +105,12 @@ fun InlineVideoBubble(
     var loading by remember(msgId) { mutableStateOf(false) }
     var status by remember(msgId) { mutableStateOf("") }
     var playing by remember(msgId) { mutableStateOf(false) }
-    var fullscreen by remember(msgId) { mutableStateOf(false) }
     // Позиция, с которой продолжает следующий плеер. Одновременно живым
     // должен быть РОВНО ОДИН: пока их было два, инлайновый продолжал играть
     // за диалогом, и слышно было обе дорожки с расхождением в пару секунд —
     // это и есть «рассинхрон звука в полном экране».
-    var handoffMs by remember(msgId) { mutableIntStateOf(0) }
-    var livePosMs by remember(msgId) { mutableIntStateOf(0) }
+    var handoffMs by remember(msgId) { mutableIntStateOf(VideoPositions.get(msgId)) }
+    var livePosMs by remember(msgId) { mutableIntStateOf(VideoPositions.get(msgId)) }
 
     // Обложка = первый кадр. Достаём в фоне: MediaMetadataRetriever
     // раскодирует кадр, на главном потоке это заметная пауза.
@@ -173,10 +173,16 @@ fun InlineVideoBubble(
                     // Инлайновый плеер именно ЗАКРЫВАЕТСЯ, а не остаётся
                     // играть под диалогом: уход из композиции вызывает
                     // stopPlayback, и второй дорожки просто не возникает.
+                    // Полный экран открывает ЭКРАН, а не пузырь. Пока диалог
+                    // жил внутри пузыря, он умирал вместе с ним: LazyColumn
+                    // уничтожает элемент, ушедший за край видимой области, а
+                    // при повороте в альбомную область становится ниже — и
+                    // видео закрывалось само, стоило прокрутить или повернуть
+                    // телефон.
                     onFullscreen = {
-                        handoffMs = livePosMs
+                        VideoPositions.put(msgId, livePosMs)
                         playing = false
-                        fullscreen = true
+                        onFullscreen(f, fileName, msgId)
                     },
                     onSave = {
                         scope.launch {
@@ -269,51 +275,6 @@ fun InlineVideoBubble(
             }
         }
     }
-
-    if (fullscreen) {
-        val f = file
-        // Закрытие в одном месте: и крестик, и системная «назад» должны
-        // вернуть инлайновый плеер на ту же секунду.
-        fun closeFullscreen() {
-            handoffMs = livePosMs
-            fullscreen = false
-            playing = true
-        }
-        Dialog(
-            onDismissRequest = { closeFullscreen() },
-            properties = DialogProperties(usePlatformDefaultWidth = false),
-        ) {
-            Box(Modifier.fillMaxSize().background(Color.Black)) {
-                if (f != null) {
-                    VideoSurface(
-                        file = f,
-                        startAtMs = handoffMs,
-                        autoPlay = true,
-                        onPositionChange = { livePosMs = it },
-                        // Панель управления во весь экран прижата к самому
-                        // низу, а там жестовая полоса и кнопки навигации —
-                        // ползунок перемотки оказывался под ними.
-                        insetBottom = true,
-                        onFullscreen = null,
-                        onSave = {
-                            scope.launch {
-                                MediaSaver.saveVideo(context, fileName, f.readBytes())
-                            }
-                        },
-                    )
-                }
-                IconButton(
-                    onClick = { closeFullscreen() },
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .statusBarsPadding()
-                        .padding(12.dp),
-                ) {
-                    Icon(Icons.Default.Close, "Закрыть", tint = Color.White)
-                }
-            }
-        }
-    }
 }
 
 /**
@@ -326,7 +287,7 @@ fun InlineVideoBubble(
  * громкость, полный экран.
  */
 @Composable
-private fun VideoSurface(
+internal fun VideoSurface(
     file: File,
     startAtMs: Int,
     autoPlay: Boolean,
@@ -378,13 +339,31 @@ private fun VideoSurface(
                     // ленту чата. Фокус нам не нужен: управление своё.
                     isFocusable = false
                     isFocusableInTouchMode = false
+                    // Одного VideoView мало: AndroidView заворачивает его в
+                    // собственный контейнер, и ФОКУСИРУЕМЫЙ там как раз
+                    // контейнер (isFocusable = true, FOCUS_BEFORE_DESCENDANTS).
+                    // Именно он и забирал фокус по касанию, из-за чего лента
+                    // продолжала прыгать вниз даже после того, как фокус сняли
+                    // с самого VideoView. Добраться до контейнера можно только
+                    // после присоединения к окну.
+                    blockHolderFocus(this)
                     setOnPreparedListener { mp ->
                         player = mp
                         prepared = true
                         durationMs = duration.coerceAtLeast(0)
                         mp.setVolume(if (muted) 0f else 1f, if (muted) 0f else 1f)
-                        if (startAtMs > 0) seekTo(startAtMs)
-                        if (autoPlay) start()
+                        // Слушатель срабатывает НЕ ТОЛЬКО при первом
+                        // открытии: при сворачивании приложения поверхность
+                        // SurfaceView уничтожается, а при возврате VideoView
+                        // открывает файл заново и снова зовёт сюда. Раньше
+                        // здесь стояло `if (autoPlay) start()` с изначальным
+                        // значением параметра — поэтому поставленное на паузу
+                        // видео после разворачивания уезжало дальше само.
+                        // Смотрим на ТЕКУЩЕЕ состояние и на позицию, где нас
+                        // прервали.
+                        val resumeAt = if (positionMs > 0) positionMs else startAtMs
+                        if (resumeAt > 0) seekTo(resumeAt)
+                        if (isPlaying) start() else pause()
                     }
                     setOnCompletionListener {
                         isPlaying = false
@@ -682,4 +661,102 @@ private fun firstFrame(file: File): Bitmap? = runCatching {
 internal fun formatClock(ms: Int): String {
     val total = (ms / 1000).coerceAtLeast(0)
     return "%d:%02d".format(total / 60, total % 60)
+}
+
+
+/**
+ * Где остановились в каждом видео.
+ *
+ * Пузырь живёт ровно столько, сколько виден: LazyColumn уничтожает элемент,
+ * ушедший за край. Без этой памяти возврат из полного экрана (или обычная
+ * прокрутка туда-обратно) начинал бы ролик заново.
+ */
+object VideoPositions {
+    private val positions = HashMap<Int, Int>()
+
+    fun get(msgId: Int): Int = synchronized(positions) { positions[msgId] ?: 0 }
+
+    fun put(msgId: Int, ms: Int) = synchronized(positions) {
+        if (ms > 0) positions[msgId] = ms else positions.remove(msgId)
+        Unit
+    }
+
+    fun clear() = synchronized(positions) { positions.clear() }
+}
+
+/** Что сейчас открыто во весь экран. */
+data class FullscreenVideo(val file: File, val fileName: String, val msgId: Int)
+
+/**
+ * Полноэкранный просмотр видео — живёт НА УРОВНЕ ЭКРАНА, а не внутри пузыря.
+ *
+ * Пока диалог принадлежал пузырю, он умирал вместе с ним: достаточно было
+ * прокрутить ленту так, чтобы сообщение ушло за край, — и просмотр
+ * закрывался сам. В альбомной ориентации видимая область ниже, поэтому там
+ * это случалось сразу после поворота.
+ */
+@Composable
+fun FullscreenVideoHost(
+    video: FullscreenVideo?,
+    onDismiss: () -> Unit,
+) {
+    if (video == null) return
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var livePos by remember(video.msgId) { mutableIntStateOf(VideoPositions.get(video.msgId)) }
+
+    fun close() {
+        VideoPositions.put(video.msgId, livePos)
+        onDismiss()
+    }
+
+    Dialog(
+        onDismissRequest = { close() },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            VideoSurface(
+                file = video.file,
+                startAtMs = VideoPositions.get(video.msgId),
+                autoPlay = true,
+                onPositionChange = { livePos = it },
+                insetBottom = true,
+                onFullscreen = null,
+                onSave = {
+                    scope.launch {
+                        MediaSaver.saveVideo(context, video.fileName, video.file.readBytes())
+                    }
+                },
+            )
+            IconButton(
+                onClick = { close() },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(12.dp),
+            ) {
+                Icon(Icons.Default.Close, "Закрыть", tint = Color.White)
+            }
+        }
+    }
+}
+
+/**
+ * Снимает фокусируемость с контейнера, в который AndroidView заворачивает
+ * встроенную View. Контейнер создаётся самим Compose, добраться до него
+ * можно только через parent и только после присоединения к окну.
+ */
+private fun blockHolderFocus(view: android.view.View) {
+    fun apply(v: android.view.View) {
+        (v.parent as? android.view.ViewGroup)?.apply {
+            isFocusable = false
+            isFocusableInTouchMode = false
+            descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        }
+    }
+    if (view.isAttachedToWindow) apply(view)
+    view.addOnAttachStateChangeListener(object : android.view.View.OnAttachStateChangeListener {
+        override fun onViewAttachedToWindow(v: android.view.View) = apply(v)
+        override fun onViewDetachedFromWindow(v: android.view.View) = Unit
+    })
 }

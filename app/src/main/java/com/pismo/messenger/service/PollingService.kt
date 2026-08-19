@@ -33,9 +33,59 @@ class PollingService : LifecycleService() {
     private val knownFriendRequests = HashSet<Int>()
     private var friendBaselineReady = false
 
+    /**
+     * Отметки «о чём уже сообщали» переживают перезапуск процесса.
+     *
+     * Пока они жили только в памяти сервиса, первый проход после запуска
+     * считал ЛЮБОЕ накопившееся уже известным — и сообщения, написанные
+     * пока приложение было закрыто, не давали уведомлений вообще. Ровно тот
+     * случай, ради которого уведомления и нужны.
+     */
+    private fun restoreBaselines() {
+        parseMap(Prefs.notifyBaselineDm).let { if (it.isNotEmpty()) previousUnread.putAll(it) }
+        parseMap(Prefs.notifyBaselineGroup).let {
+            if (it.isNotEmpty()) {
+                previousGroupMax.putAll(it)
+                groupBaselineReady = true
+            }
+        }
+        parseMap(Prefs.notifyBaselineChannel).let {
+            if (it.isNotEmpty()) {
+                previousChannelMax.putAll(it)
+                channelBaselineReady = true
+            }
+        }
+        val friends = Prefs.notifyBaselineFriends
+            .split(',').mapNotNull { it.trim().toIntOrNull() }
+        if (friends.isNotEmpty()) {
+            knownFriendRequests.addAll(friends)
+            friendBaselineReady = true
+        }
+    }
+
+    private fun saveBaselines() {
+        Prefs.notifyBaselineDm = formatMap(previousUnread)
+        Prefs.notifyBaselineGroup = formatMap(previousGroupMax)
+        Prefs.notifyBaselineChannel = formatMap(previousChannelMax)
+        Prefs.notifyBaselineFriends = knownFriendRequests.joinToString(",")
+    }
+
+    private fun parseMap(raw: String): Map<Int, Int> =
+        raw.split(',').mapNotNull { entry ->
+            val parts = entry.split(':')
+            if (parts.size != 2) return@mapNotNull null
+            val k = parts[0].trim().toIntOrNull() ?: return@mapNotNull null
+            val v = parts[1].trim().toIntOrNull() ?: return@mapNotNull null
+            k to v
+        }.toMap()
+
+    private fun formatMap(map: Map<Int, Int>): String =
+        map.entries.joinToString(",") { "${it.key}:${it.value}" }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         startForeground(Notifications.ID_SERVICE, Notifications.serviceNotification(this))
+        restoreBaselines()
 
         lifecycleScope.launch {
             while (isActive) {
@@ -92,6 +142,10 @@ class PollingService : LifecycleService() {
 
         pollChannels()
         pollFriendRequests()
+        // Сохраняем в конце прохода, одной записью: промежуточные состояния
+        // на диск класть незачем, а вот пережить убийство процесса отметки
+        // обязаны.
+        saveBaselines()
     }
 
     /**
