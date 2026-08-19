@@ -88,7 +88,7 @@ class MicProcessor(sampleRate: Int) {
         private set
 
     private var sr = sampleRate
-    private var spectral = SpectralDenoiser()
+    private var spectral = SpectralDenoiser(sampleRate)
     private var limiter = TransientLimiter(sampleRate)
 
     /** Сколько сэмплов ещё держать гейт открытым после падения ниже порога. */
@@ -109,7 +109,7 @@ class MicProcessor(sampleRate: Int) {
 
         if (sampleRate > 0 && sampleRate != sr) {
             sr = sampleRate
-            spectral = SpectralDenoiser()
+            spectral = SpectralDenoiser(sampleRate)
             limiter = TransientLimiter(sampleRate)
         }
 

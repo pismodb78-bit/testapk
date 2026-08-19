@@ -16,6 +16,7 @@ import io.livekit.android.LiveKit
 import com.twilio.audioswitch.AudioDevice
 import com.twilio.audioswitch.AudioDeviceChangeListener
 import io.livekit.android.RoomOptions
+import livekit.org.webrtc.RtpParameters
 import io.livekit.android.audio.ScreenAudioCapturer
 import io.livekit.android.events.RoomEvent
 import io.livekit.android.events.collect
@@ -336,6 +337,16 @@ class CallEngine(
                         // железом на любом телефоне, VP8 почти нигде, и на
                         // экране в полтора мегапикселя эта разница решает.
                         videoCodec = Prefs.screenShareCodec,
+                        // Чем жертвовать при нехватке канала. SDK для
+                        // демонстрации по умолчанию бережёт разрешение и
+                        // роняет кадры — отсюда и рывки. Настройкой
+                        // «плавность» это переворачивается.
+                        degradationPreference =
+                            if (Prefs.screenShareSmooth) {
+                                RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE
+                            } else {
+                                RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+                            },
                     ),
                 ),
             )
@@ -372,7 +383,28 @@ class CallEngine(
         }
     }
 
-    fun leave() {
+    /**
+     * Выход из разговора.
+     *
+     * Дорожки снимаются с публикации ПО ОТДЕЛЬНОСТИ и только потом рвётся
+     * соединение. Раньше всё заканчивалось одним disconnect(), и собеседник
+     * узнавал об уходе тем, что участник просто исчез — вместе с живыми,
+     * с его точки зрения, дорожками камеры и демонстрации. Приёмник в этот
+     * момент как раз декодирует их кадры, и такой обрыв ему приходится
+     * разгребать самому. Порядок «сняли публикации → вышли» — обычная
+     * вежливость протокола, и стоит она пары строк.
+     */
+    suspend fun leave() {
+        val r = room
+        if (r != null) {
+            // Демонстрация первой: она самая тяжёлая, и её приёмник у
+            // собеседника рисует прямо сейчас.
+            runCatching { stopBlackKeepalive(r) }
+            runCatching { r.localParticipant.setScreenShareEnabled(false) }
+            runCatching { r.localParticipant.setCameraEnabled(false) }
+            runCatching { r.localParticipant.setMicrophoneEnabled(false) }
+        }
+
         runCatching { eventJob?.cancel() }
         // Захват системного звука SDK не закрывает сам — забыть про release
         // означает, что AudioRecord продолжит писать звук после конца звонка.

@@ -93,6 +93,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     var screenGain by remember { mutableStateOf(Prefs.screenAudioGain) }
     var screenQuality by remember { mutableStateOf(Prefs.screenShareQuality) }
     var screenCodec by remember { mutableStateOf(Prefs.screenShareCodec) }
+    var screenSmooth by remember { mutableStateOf(Prefs.screenShareSmooth) }
     var denoiseStrength by remember { mutableStateOf(Prefs.denoiseStrength) }
     var voiceAuto by remember { mutableStateOf(Prefs.voiceAutoSensitivity) }
     var voiceThreshold by remember { mutableStateOf(Prefs.voiceThresholdDb.toFloat()) }
@@ -144,6 +145,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         Prefs.screenAudioGain = screenGain
         Prefs.screenShareQuality = screenQuality
         Prefs.screenShareCodec = screenCodec
+        Prefs.screenShareSmooth = screenSmooth
         Prefs.denoiseStrength = denoiseStrength
         Prefs.voiceAutoSensitivity = voiceAuto
         Prefs.voiceThresholdDb = voiceThreshold.toInt()
@@ -473,37 +475,60 @@ fun SettingsScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(6.dp))
             Text(
                 when (screenQuality) {
-                    2 -> "До 8 Мбит/с — для игр и видео. Канал нужен вдвое шире, " +
+                    2 -> "До 14 Мбит/с — для игр и видео. Канал нужен вдвое шире, " +
                             "и кодировщик телефона на родном разрешении экрана " +
                             "столько кадров может и не вытянуть."
-                    1 -> "До 6 Мбит/с — плавно, годится и для видео."
-                    else -> "До 4 Мбит/с. Экран почти всегда показывают ради " +
+                    1 -> "До 10 Мбит/с — плавно, годится и для видео."
+                    else -> "До 6 Мбит/с. Экран почти всегда показывают ради " +
                             "интерфейса и текста, а там важнее чёткость, чем " +
                             "частота кадров."
                 },
                 color = PismoColors.TextMuted, fontSize = 11.sp,
             )
             Spacer(Modifier.height(12.dp))
+            SwitchRow("Плавность важнее чёткости", screenSmooth) { screenSmooth = it }
+            Text(
+                if (screenSmooth)
+                    "При нехватке канала WebRTC понижает разрешение, но держит " +
+                            "частоту кадров — движение остаётся плавным. Так и " +
+                            "надо для игр, видео и вообще всего, что движется."
+                else
+                    "При нехватке канала WebRTC бережёт чёткость и роняет кадры — " +
+                            "картинка идёт рывками, зато мелкий текст читается. " +
+                            "Разумно, когда показывают код или документ.",
+                color = PismoColors.TextMuted, fontSize = 11.sp,
+            )
+
+            Spacer(Modifier.height(12.dp))
             Text("Кодек", color = PismoColors.TextSecondary, fontSize = 13.sp)
             Spacer(Modifier.height(6.dp))
             Row(Modifier.fillMaxWidth()) {
                 ThemeChip("H.264", screenCodec == "h264") { screenCodec = "h264" }
                 Spacer(Modifier.width(8.dp))
+                ThemeChip("AV1", screenCodec == "av1") { screenCodec = "av1" }
+                Spacer(Modifier.width(8.dp))
                 ThemeChip("VP8", screenCodec == "vp8") { screenCodec = "vp8" }
             }
             Spacer(Modifier.height(6.dp))
             Text(
-                if (screenCodec == "h264")
-                    "H.264 кодируется железом на любом телефоне — отсюда и " +
+                when (screenCodec) {
+                    "h264" -> "H.264 кодируется железом на любом телефоне — отсюда и " +
                             "чёткость на родном разрешении. ПК его понимает: это " +
                             "один из двух кодеков, которые он предлагает и для " +
                             "своей демонстрации."
-                else
-                    "VP8 почти нигде не кодируется железом — его считает " +
+                    "av1" -> "AV1 — то, чем показывает экран ПК. Но кодировать его " +
+                            "телефону почти наверняка придётся процессором: " +
+                            "аппаратный кодировщик AV1 есть лишь у единиц самых " +
+                            "свежих чипов, и на родном разрешении экрана это " +
+                            "означает единицы кадров в секунду. Пробуйте, но если " +
+                            "демонстрация станет рваной или не начнётся вовсе — " +
+                            "возвращайтесь на H.264."
+                    else -> "VP8 почти нигде не кодируется железом — его считает " +
                             "процессор, и на экране в полтора мегапикселя это " +
                             "упирается в потолок: кадры пропускаются, картинка " +
                             "расплывается. Оставляйте, только если на H.264 " +
-                            "демонстрация не идёт вовсе.",
+                            "демонстрация не идёт вовсе."
+                },
                 color = PismoColors.TextMuted, fontSize = 11.sp,
             )
             Spacer(Modifier.height(6.dp))

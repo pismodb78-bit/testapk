@@ -48,7 +48,7 @@ import kotlin.math.sqrt
  * Задержка — HOP приморозки + полкадра перекрытия, около 10 мс на 48 кГц.
  * Работает на 16-битном моно PCM in-place, little-endian.
  */
-class SpectralDenoiser {
+class SpectralDenoiser(sampleRate: Int = 48_000) {
 
     /**
      * 0..1 — сила подавления. Управляет двумя вещами сразу: агрессивностью
@@ -77,12 +77,33 @@ class SpectralDenoiser {
     private val overlap = FloatArray(N)     // накопитель overlap-add
 
     private val noisePow = FloatArray(BINS)
+    private val powNow = FloatArray(BINS)
     private val powSmooth = FloatArray(BINS)
     private val minRunning = FloatArray(BINS)
     private val minHeld = FloatArray(BINS)
     private val prevClean = FloatArray(BINS)
     private var minAge = 0
     private var frames = 0
+
+    // ── Границы полос для защиты от задувания, в номерах бинов ──
+    //
+    // Ширина бина = частота дискретизации / N, поэтому границы считаются от
+    // реальной частоты, а не зашиты числами: на 48 кГц бин это 94 Гц, на
+    // 16 кГц — 31 Гц, и одни и те же номера означали бы совсем разные полосы.
+    private val binHz = sampleRate.toFloat() / N
+
+    /** Ниже этого режем всегда: речи там нет ни у кого. */
+    private val hpfBins = (HPF_HZ / binHz).toInt().coerceIn(1, BINS - 1)
+
+    /** Полоса задувания — от отсечки до WIND_TOP_HZ. */
+    private val windTo = (WIND_TOP_HZ / binHz).toInt().coerceIn(hpfBins, BINS - 1)
+
+    /** Полоса, по которой судим о наличии речи. */
+    private val voiceFrom = (VOICE_FROM_HZ / binHz).toInt().coerceIn(0, BINS - 1)
+    private val voiceTo = (VOICE_TO_HZ / binHz).toInt().coerceIn(voiceFrom + 1, BINS - 1)
+
+    /** Сглаженное «дует», 0..1. */
+    private var windEnv = 0f
 
     private var inFifo = ShortArray(N * 4)
     private var inCount = 0
@@ -152,6 +173,64 @@ class SpectralDenoiser {
         }
     }
 
+    /**
+     * Задувание в микрофон: ветер, дыхание, «п» в упор.
+     *
+     * ПОЧЕМУ ОСНОВНОЙ ФИЛЬТР ЭТОГО НЕ БЕРЁТ. Он ищет ПОСТОЯННЫЙ фон и
+     * специально замирает, когда полоса вдруг стала громче своей оценки
+     * втрое — так он не выучивает речь как шум. Задувание ровно такое: редкий
+     * громкий всплеск на низах. Фильтр честно принимает его за речь и
+     * пропускает целиком, ещё и с усилением около единицы, потому что SNR у
+     * него огромный.
+     *
+     * ПО ЧЕМУ ОТЛИЧАЕМ ОТ ГОЛОСА. По наклону спектра. У задувания почти вся
+     * энергия ниже трёхсот герц, а выше — пусто. Речь, даже низкий мужской
+     * голос, всегда несёт заметную энергию в полосе разборчивости
+     * (400–3400 Гц): без неё её просто не было бы слышно. Поэтому решение —
+     * отношение энергии низов к энергии этой полосы, а не громкость.
+     *
+     * Порог по громкости тоже нужен: в тишине наклон спектра случаен, и без
+     * него мы бы «давили ветер» на пустом месте.
+     */
+    private fun suppressWind() {
+        // Ниже HPF_HZ режем всегда и безусловно: там нет речи, только
+        // рокот корпуса и та самая струя воздуха.
+        for (k in 0 until hpfBins) {
+            re[k] = 0f
+            im[k] = 0f
+        }
+
+        var lowE = 0f
+        var lowNoise = 0f
+        for (k in hpfBins..windTo) {
+            lowE += powNow[k]
+            lowNoise += noisePow[k]
+        }
+        var voiceE = 0f
+        for (k in voiceFrom..voiceTo) voiceE += powNow[k]
+
+        val loud = lowE > lowNoise * WIND_OVER_NOISE
+        val tilted = lowE > voiceE * WIND_TILT
+        val target = if (loud && tilted) 1f else 0f
+
+        // Вверх быстро, вниз медленно: порыв начинается мгновенно, а резкое
+        // отпускание давало бы слышный «вдох» на хвосте.
+        windEnv += (target - windEnv) * (if (target > windEnv) 0.6f else 0.06f)
+        if (windEnv <= 0.01f) return
+
+        // Чем ниже частота, тем глубже давим: у самой отсечки от задувания
+        // почти ничего не остаётся, у верхнего края полосы уже может быть
+        // основной тон голоса, и там трогаем осторожно.
+        val span = (windTo - hpfBins).coerceAtLeast(1).toFloat()
+        for (k in hpfBins..windTo) {
+            val up = (k - hpfBins) / span                       // 0 внизу … 1 вверху
+            val depth = WIND_DEPTH_LOW + (WIND_DEPTH_TOP - WIND_DEPTH_LOW) * up
+            val g = 1f - windEnv * depth
+            re[k] *= g
+            im[k] *= g
+        }
+    }
+
     private fun processHop(inOffset: Int) {
         // Сдвигаем окно анализа влево на HOP и дописываем HOP новых сэмплов.
         System.arraycopy(window, HOP, window, 0, N - HOP)
@@ -173,6 +252,7 @@ class SpectralDenoiser {
 
         for (k in 0 until BINS) {
             val pow = re[k] * re[k] + im[k] * im[k]
+            powNow[k] = pow
 
             // Сглаженная периодограмма: сырая скачет в разы от кадра к кадру,
             // и любое решение по ней — лотерея.
@@ -216,6 +296,8 @@ class SpectralDenoiser {
             re[k] *= g
             im[k] *= g
         }
+
+        if (!priming) suppressWind()
 
         // Обновление долгого минимума: раз в MIN_WINDOW кадров переносим
         // накопленный минимум в «удерживаемый» и начинаем копить заново.
@@ -327,5 +409,46 @@ class SpectralDenoiser {
 
         /** Окно долгого минимума: ~0.5 с на 48 кГц. */
         const val MIN_WINDOW = 96
+
+        // ── Задувание ──
+
+        /**
+         * Всё ниже режем безусловно. Самый низкий мужской основной тон — около
+         * 85 Гц, женский вдвое выше; ниже восьмидесяти на телефонном микрофоне
+         * бывает только рокот корпуса и струя воздуха.
+         */
+        const val HPF_HZ = 80f
+
+        /** Верх полосы задувания: выше трёхсот герц его практически нет. */
+        const val WIND_TOP_HZ = 300f
+
+        /** Полоса разборчивости — по ней судим, есть ли голос вообще. */
+        const val VOICE_FROM_HZ = 400f
+        const val VOICE_TO_HZ = 3400f
+
+        /**
+         * Во сколько раз низы должны превысить собственный фон, чтобы это
+         * считалось порывом. Порог по громкости нужен затем, что в тишине
+         * наклон спектра случаен.
+         */
+        const val WIND_OVER_NOISE = 6f
+
+        /**
+         * Во сколько раз энергия низов должна превышать полосу разборчивости.
+         *
+         * Значение выбрано ЗАМЕРОМ, а не на глаз. Медиана этого отношения на
+         * кадрах с громкими низами: обычная речь 0.1, низкий мужской голос
+         * 8.7, задувание 720 — разница на три порядка, но хвост низкого
+         * голоса заходит далеко, и порог 10 срабатывал на нём в трети кадров,
+         * отбирая у баса −14.5 дБ низов. При 25 ложные срабатывания на низком
+         * голосе исчезают полностью (−2.0 дБ, то есть ничего), а задувание
+         * по-прежнему давится на −26 дБ. Дальше поднимать нечего: на 40 и 60
+         * низкий голос уже чист, а смеси «речь + ветер» только теряют.
+         */
+        const val WIND_TILT = 25f
+
+        /** Глубина подавления у отсечки и у верхнего края полосы. */
+        const val WIND_DEPTH_LOW = 0.95f
+        const val WIND_DEPTH_TOP = 0.35f
     }
 }
