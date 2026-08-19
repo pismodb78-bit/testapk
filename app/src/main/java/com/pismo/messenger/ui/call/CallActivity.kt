@@ -78,7 +78,6 @@ import com.pismo.messenger.ui.theme.PismoColors
 import com.pismo.messenger.ui.theme.PismoTheme
 import io.livekit.android.renderer.TextureViewRenderer
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import android.os.Build
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -132,7 +131,13 @@ class CallActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         showOverLockScreen()
-        engine = CallEngine(applicationContext, lifecycleScope)
+
+        // Звонок уже идёт — значит окно просто открыли заново из дока.
+        // Берём ЖИВОЙ движок и ни в какую комнату повторно не заходим.
+        // Область корутин у движка процессная (ActiveCall.scope), а не
+        // lifecycleScope: с закрытием окна разговор не должен обрываться.
+        val resuming = ActiveCall.isActive && ActiveCall.engine != null
+        engine = ActiveCall.engine ?: CallEngine(applicationContext, ActiveCall.scope)
 
         val peerId = intent.getIntExtra(EXTRA_PEER_ID, -1)
         val groupId = intent.getIntExtra(EXTRA_GROUP_ID, -1)
@@ -152,7 +157,7 @@ class CallActivity : ComponentActivity() {
 
         setContent {
             PismoTheme {
-                var answered by remember { mutableStateOf(!ringing) }
+                var answered by remember { mutableStateOf(!ringing || resuming) }
 
                 if (!answered) {
                     RingingScreen(
@@ -185,33 +190,11 @@ class CallActivity : ComponentActivity() {
             }
         }
 
-        if (!ringing) joinRoom(peerId, groupId, peerName, withVideo, isCaller)
+        if (!ringing && !resuming) joinRoom(peerId, groupId, peerName, withVideo, isCaller)
 
-        // Состояние микрофона и подключения для дока.
-        lifecycleScope.launch {
-            while (isActive) {
-                ActiveCall.updateState(
-                    micMuted = engine.micMuted.value,
-                    connected = engine.state.value == CallEngine.State.CONNECTED,
-                )
-                delay(1000)
-            }
-        }
-
-        // Присутствие в голосовом канале — heartbeat, как на ПК.
-        lifecycleScope.launch {
-            while (isActive) {
-                if (channelId > 0) {
-                    PresenceRepository.voiceHeartbeat(
-                        channelId,
-                        streaming = engine.screenSharing.value || engine.cameraOn.value,
-                        micMuted = engine.micMuted.value,
-                        deafened = engine.deafened.value,
-                    )
-                }
-                delay(10_000)
-            }
-        }
+        // Состояние для дока и heartbeat голосового канала теперь крутятся в
+        // ActiveCall, на уровне процесса: со свёрнутым окном они обязаны
+        // продолжаться, иначе остальные участники увидят, что вы вышли.
     }
 
     /** Показ поверх экрана блокировки — иначе входящий ночью просто не увидят. */
@@ -275,33 +258,40 @@ class CallActivity : ComponentActivity() {
                     peerId = peerId,
                     groupId = groupId,
                     withVideo = withVideo,
-                )
+                ),
+                engine,
             )
 
             engine.join(room, withVideo)
         }
     }
 
+    /**
+     * Завершение разговора. Корутина живёт в процессной области, а не в
+     * lifecycleScope: активити закрывается сразу, и привязанная к ней
+     * корутина не успела бы даже сообщить серверу об уходе из канала.
+     */
     private fun finishCall() {
-        lifecycleScope.launch {
+        val ch = channelId
+        val sid = sessionId
+        val e = engine
+        ActiveCall.scope.launch {
             runCatching {
-                if (channelId > 0) PresenceRepository.voiceLeave(channelId)
-                if (sessionId > 0) CallRepository.leave(sessionId)
+                if (ch > 0) PresenceRepository.voiceLeave(ch)
+                if (sid > 0) CallRepository.leave(sid)
             }
-            engine.leave()
+            e.leave()
             ActiveCall.clear()
-            finish()
         }
+        finish()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        // Активити могла быть снята системой — звонок при этом заканчивается,
-        // и док не должен остаться висеть.
-        if (isFinishing) {
-            engine.leave()
-            ActiveCall.clear()
-        }
+        // Закрытие окна разговор НЕ завершает. Движок и все его подписки
+        // живут в ActiveCall.scope, поэтому звонок продолжается, а вернуться
+        // в него можно из дока — как на ПК, где закрытие окна тоже не кладёт
+        // трубку. Единственная точка завершения — finishCall().
     }
 }
 
@@ -398,14 +388,14 @@ private fun CallScreen(
     val landscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
         android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
-    // «Назад» СВОРАЧИВАЕТ окно звонка, а не завершает разговор. Раньше
-    // системная кнопка просто закрывала активити, и звонок обрывался —
-    // выйти посмотреть сообщение, не бросив собеседника, было нельзя.
-    // Завершение осталось за красной кнопкой, как и на ПК, где закрытие
-    // окна звонка тоже не кладёт трубку.
+    // «Назад» СВОРАЧИВАЕТ окно звонка, а не завершает разговор: окно
+    // закрывается, разговор продолжается, и по приложению можно ходить
+    // свободно — читать чат, крутить шумодав, — а вернуться одним нажатием
+    // на полоску активного звонка снизу. Завершение осталось за красной
+    // кнопкой, как и на ПК.
     val activity = androidx.compose.ui.platform.LocalContext.current as? Activity
     androidx.activity.compose.BackHandler(enabled = true) {
-        activity?.moveTaskToBack(true)
+        activity?.finish()
     }
 
     val screenCaptureLauncher = rememberLauncherForActivityResult(
@@ -667,7 +657,7 @@ private fun FullscreenTile(
     // 15 секунд — то же окно, что и у _resumeWatch на ПК.
     LaunchedEffect(track == null) {
         if (track != null) return@LaunchedEffect
-        kotlinx.coroutines.delay(15_000)
+        delay(15_000)
         onDismiss()
     }
 

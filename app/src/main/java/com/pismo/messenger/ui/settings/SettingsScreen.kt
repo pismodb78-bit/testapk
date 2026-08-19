@@ -89,6 +89,17 @@ fun SettingsScreen(onBack: () -> Unit) {
     var voiceAuto by remember { mutableStateOf(Prefs.voiceAutoSensitivity) }
     var voiceThreshold by remember { mutableStateOf(Prefs.voiceThresholdDb.toFloat()) }
     var voiceOutGain by remember { mutableStateOf(Prefs.voiceOutputGain.toFloat()) }
+
+    // Настройки обработки микрофона применяются к ИДУЩЕМУ разговору сразу.
+    // Это наш обработчик, а не цепочка WebRTC, поэтому пересобирать комнату
+    // не нужно — и ради этого звонок теперь можно свернуть, а не бросить.
+    fun applyLive() {
+        val engine = com.pismo.messenger.call.ActiveCall.engine ?: return
+        engine.setNoiseSuppression(noiseSuppression)
+        engine.setDenoiseStrength(denoiseStrength)
+        engine.setVoiceGate(voiceAuto, voiceThreshold.toInt())
+        engine.setVoiceOutputGain(voiceOutGain.toInt())
+    }
     // Тема применяется сразу по нажатию, а не по кнопке «Сохранить»: иначе
     // непонятно, что именно выбрал — палитра-то не поменялась.
     var theme by remember { mutableStateOf(themeMode) }
@@ -131,6 +142,10 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     Scaffold(
         containerColor = PismoColors.BgMain,
+        // Полоска активного звонка и здесь: настройки шумодава крутят как раз
+        // во время разговора, и возвращаться в него нужно одним нажатием, а
+        // не через два экрана назад.
+        bottomBar = { com.pismo.messenger.ui.call.VoiceDock() },
         topBar = {
             TopAppBar(
                 title = { Text("Настройки", color = PismoColors.TextPrimary, fontSize = 18.sp) },
@@ -287,7 +302,19 @@ fun SettingsScreen(onBack: () -> Unit) {
 
             Spacer(Modifier.height(20.dp))
             Section("Обработка звука в звонке")
-            SwitchRow("Шумоподавление", noiseSuppression) { noiseSuppression = it }
+            val inCall = com.pismo.messenger.call.ActiveCall.isActive
+            if (inCall) {
+                Text(
+                    "Идёт разговор — эти настройки применяются сразу, на лету.",
+                    color = PismoColors.Green, fontSize = 12.sp,
+                )
+                Spacer(Modifier.height(6.dp))
+            }
+            SwitchRow("Шумоподавление", noiseSuppression) {
+                noiseSuppression = it
+                Prefs.noiseSuppression = it
+                applyLive()
+            }
             if (noiseSuppression) {
                 Text(
                     "Сила подавления: ${(denoiseStrength * 100).toInt()}%",
@@ -296,6 +323,10 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Slider(
                     value = denoiseStrength,
                     onValueChange = { denoiseStrength = it },
+                    onValueChangeFinished = {
+                        Prefs.denoiseStrength = denoiseStrength
+                        applyLive()
+                    },
                     valueRange = 0f..1f,
                     colors = SliderDefaults.colors(thumbColor = PismoColors.Blurple),
                 )
@@ -311,7 +342,11 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
 
             Spacer(Modifier.height(10.dp))
-            SwitchRow("Автоопределение чувствительности", voiceAuto) { voiceAuto = it }
+            SwitchRow("Автоопределение чувствительности", voiceAuto) {
+                voiceAuto = it
+                Prefs.voiceAutoSensitivity = it
+                applyLive()
+            }
             if (!voiceAuto) {
                 Text(
                     "Порог активации голоса: ${voiceThreshold.toInt()} дБ",
@@ -320,6 +355,10 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Slider(
                     value = voiceThreshold,
                     onValueChange = { voiceThreshold = it },
+                    onValueChangeFinished = {
+                        Prefs.voiceThresholdDb = voiceThreshold.toInt()
+                        applyLive()
+                    },
                     valueRange = -60f..0f,
                     colors = SliderDefaults.colors(thumbColor = PismoColors.Blurple),
                 )
@@ -351,6 +390,10 @@ fun SettingsScreen(onBack: () -> Unit) {
             Slider(
                 value = voiceOutGain,
                 onValueChange = { voiceOutGain = it },
+                onValueChangeFinished = {
+                    Prefs.voiceOutputGain = voiceOutGain.toInt()
+                    applyLive()
+                },
                 valueRange = 0f..300f,
                 colors = SliderDefaults.colors(thumbColor = PismoColors.Blurple),
             )
@@ -533,7 +576,8 @@ private fun MicLevelBar(thresholdDb: Float) {
     val level by MicLevelMonitor.levelDb.collectAsState()
 
     // В звонке микрофон уже занят движком: второй AudioRecord либо не
-    // откроется, либо отберёт поток у разговора.
+    // откроется, либо отберёт поток у разговора. Сами настройки при этом
+    // крутить можно — они применяются на лету, просто без полосы уровня.
     val busy = com.pismo.messenger.call.IncomingCallMonitor.inCall
 
     DisposableEffect(busy) {
@@ -578,7 +622,8 @@ private fun MicLevelBar(thresholdDb: Float) {
         }
         Spacer(Modifier.height(2.dp))
         Text(
-            if (busy) "Идёт звонок — микрофон занят разговором"
+            if (busy) "Идёт звонок — микрофон занят им, полоса недоступна.\n" +
+                "Порог при этом меняется на лету"
             else if (level <= floor + 0.5f) "Тишина"
             else "${level.toInt()} дБ",
             color = if (busy) PismoColors.Yellow else PismoColors.TextMuted,
