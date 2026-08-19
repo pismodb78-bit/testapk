@@ -503,6 +503,7 @@ private fun CallScreen(
                 engine.selectAudioOutput(it)
                 showOutputs = false
             },
+            onBluetoothGranted = { engine.refreshAudioOutputs() },
             onDismiss = { showOutputs = false },
         )
     }
@@ -632,22 +633,24 @@ private fun CallScreen(
             }
 
             // Куда выводить звук: bluetooth-гарнитура, проводные наушники,
-            // динамик телефона, разговорный динамик у уха. Список живой —
-            // гарнитуру подключают и отключают посреди разговора.
-            if (outputs.size > 1) {
-                CallButton(
-                    icon = when (output) {
-                        CallEngine.AudioOutput.BLUETOOTH -> Icons.Default.BluetoothAudio
-                        CallEngine.AudioOutput.WIRED -> Icons.Default.Headphones
-                        CallEngine.AudioOutput.EARPIECE -> Icons.Default.PhoneInTalk
-                        else -> Icons.Default.VolumeUp
-                    },
-                    active = true,
-                    label = outputLabel(output),
-                    modifier = itemMod,
-                    showLabel = !vertical,
-                ) { showOutputs = true }
-            }
+            // динамик телефона, разговорный динамик у уха.
+            //
+            // Кнопка стоит ВСЕГДА, даже когда выход всего один. Раньше она
+            // появлялась от двух — и ровно в том случае, когда гарнитуры не
+            // видно, у человека не было ни возможности её выбрать, ни намёка
+            // на то, почему её нет.
+            CallButton(
+                icon = when (output) {
+                    CallEngine.AudioOutput.BLUETOOTH -> Icons.Default.BluetoothAudio
+                    CallEngine.AudioOutput.WIRED -> Icons.Default.Headphones
+                    CallEngine.AudioOutput.EARPIECE -> Icons.Default.PhoneInTalk
+                    else -> Icons.Default.VolumeUp
+                },
+                active = true,
+                label = outputLabel(output),
+                modifier = itemMod,
+                showLabel = !vertical,
+            ) { showOutputs = true }
 
             CallButton(
                 icon = if (sharing) Icons.Default.StopScreenShare else Icons.Default.ScreenShare,
@@ -1076,8 +1079,32 @@ private fun AudioOutputDialog(
     available: List<CallEngine.AudioOutput>,
     selected: CallEngine.AudioOutput?,
     onPick: (CallEngine.AudioOutput) -> Unit,
+    onBluetoothGranted: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val context = LocalContext.current
+
+    // Без BLUETOOTH_CONNECT системный перечислитель гарнитур бросает
+    // SecurityException, и audioswitch просто не видит ни одной — список
+    // выходов молча остаётся без Bluetooth. Разрешение спрашивается на
+    // старте приложения вместе с тремя другими, и отказать там проще
+    // простого; здесь его можно выдать осмысленно.
+    var btGranted by remember {
+        mutableStateOf(
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context, android.Manifest.permission.BLUETOOTH_CONNECT
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val askBluetooth = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        btGranted = granted
+        if (granted) onBluetoothGranted()
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgElevated,
@@ -1115,6 +1142,44 @@ private fun AudioOutputDialog(
                             color = if (out == selected) PismoColors.Green else PismoColors.TextPrimary,
                             fontSize = 15.sp,
                         )
+                    }
+                }
+
+                // Гарнитуры в списке нет — объясняем, почему, вместо того
+                // чтобы оставлять человека с одним «динамиком».
+                if (CallEngine.AudioOutput.BLUETOOTH !in available) {
+                    Spacer(Modifier.height(8.dp))
+                    if (!btGranted) {
+                        Text(
+                            "Bluetooth-гарнитуру не видно: приложению не выдан " +
+                                    "доступ к Bluetooth. Без него система не " +
+                                    "показывает подключённые гарнитуры.",
+                            color = PismoColors.TextMuted,
+                            fontSize = 12.sp,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        TextButton(
+                            onClick = {
+                                askBluetooth.launch(
+                                    android.Manifest.permission.BLUETOOTH_CONNECT
+                                )
+                            }
+                        ) {
+                            Text("Разрешить доступ к Bluetooth", color = PismoColors.Blurple)
+                        }
+                    } else {
+                        Text(
+                            "Bluetooth-гарнитура не найдена. Проверьте, что она " +
+                                    "подключена к телефону и поддерживает режим " +
+                                    "разговора (профиль гарнитуры, а не только " +
+                                    "музыку) — без него звонок идёт через динамик.",
+                            color = PismoColors.TextMuted,
+                            fontSize = 12.sp,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        TextButton(onClick = onBluetoothGranted) {
+                            Text("Обновить список", color = PismoColors.Blurple)
+                        }
                     }
                 }
             }

@@ -156,6 +156,18 @@ object ActiveCall {
     fun hangUp() {
         val info = _current.value ?: return
         val e = engine
+
+        // Heartbeat глушим ПЕРВЫМ делом, до удаления присутствия.
+        //
+        // Он пишет INSERT ... ON DUPLICATE KEY UPDATE last_seen = NOW(), то
+        // есть возвращает строку обратно. Удаление уходит в базу и ждёт
+        // ответа, а тик heartbeat в это время спокойно успевает выстрелить —
+        // и человек, который только что вышел из голосового канала,
+        // продолжал висеть в нём аватаркой ещё двадцать секунд, пока запись
+        // не протухнет.
+        loops?.cancel()
+        loops = null
+
         scope.launch {
             runCatching {
                 if (info.channelId > 0) PresenceRepository.voiceLeave(info.channelId)

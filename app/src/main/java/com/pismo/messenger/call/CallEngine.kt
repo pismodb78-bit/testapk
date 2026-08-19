@@ -893,6 +893,19 @@ class CallEngine(
     }
 
     /**
+     * Перечитать список выходов у SDK.
+     *
+     * Нужно после выдачи разрешения на Bluetooth: без BLUETOOTH_CONNECT
+     * системный перечислитель гарнитуру просто не видит и события об этом не
+     * присылает — список так и остался бы без неё до следующего звонка.
+     */
+    fun refreshAudioOutputs() {
+        val h = room?.audioSwitchHandler ?: return
+        _audioOutputs.value = h.availableAudioDevices.map { outputKindOf(it) }.distinct()
+        _audioOutput.value = h.selectedAudioDevice?.let { outputKindOf(it) }
+    }
+
+    /**
      * Переключить вывод: bluetooth-гарнитура, проводные наушники, динамик
      * телефона или разговорный динамик у уха.
      *

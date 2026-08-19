@@ -151,6 +151,14 @@ fun ServersScreen(
     LaunchedEffect(Unit) { reloadServers() }
     LaunchedEffect(selected?.id) { reloadChannels() }
 
+    // Свой заход в голосовой канал и выход из него показываем сразу, не
+    // дожидаясь очередного опроса: пять секунд с собственной аватаркой в
+    // канале, из которого только что вышел, выглядят как «не вышло».
+    val activeCall by com.pismo.messenger.call.ActiveCall.current.collectAsState()
+    LaunchedEffect(activeCall?.channelId) {
+        runCatching { selected?.let { voice = PresenceRepository.voiceForServer(it.id) } }
+    }
+
     // Присутствие в голосовых и бейджи обновляются часто — как на ПК.
     LaunchedEffect(selected?.id) {
         while (isActive) {
