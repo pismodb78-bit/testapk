@@ -119,7 +119,10 @@ fun ChannelChatScreen(
         mutableStateOf<com.pismo.messenger.ui.chat.FullscreenVideo?>(null)
     }
 
-    val listState = rememberLazyListState()
+    // Открываемся сразу на последнем сообщении, как в личных чатах.
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = (remembered?.first?.size ?: 1) - 1
+    )
     var showSearch by remember { mutableStateOf(false) }
     var showCalendar by remember { mutableStateOf(false) }
     var showPins by remember { mutableStateOf(false) }
@@ -132,7 +135,13 @@ fun ChannelChatScreen(
     suspend fun reload(scrollToEnd: Boolean = false) {
         runCatching {
             val loaded = ServerRepository.channelMessages(channelId, limit = pageLimit)
-            messages = loaded
+            // Присваиваем только при реальном изменении — иначе одинаковый
+            // список каждые 2,5 секунды перекомпоновывал бы все пузыри.
+            if (loaded.size != messages.size ||
+                loaded.zip(messages).any { (a, b) -> a != b }
+            ) {
+                messages = loaded
+            }
             lastCount = loaded.size
             reactions = ReactionsRepository.forMessages(loaded.map { it.id }, Scope.SERVER)
             MessageMemory.put(Scope.SERVER, channelId, loaded, reactions)
@@ -148,7 +157,10 @@ fun ChannelChatScreen(
         // истории, которую он читает.
         val atBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()
             ?.index?.let { it >= listState.layoutInfo.totalItemsCount - 3 } ?: true
-        if (scrollToEnd && messages.isNotEmpty() && atBottom) {
+        // Пока ленту листает пользователь — не трогаем: scrollToItem
+        // мгновенно обрывает инерцию, а опрос приходит раз в две с половиной
+        // секунды и легко попадает в разгон пальца.
+        if (scrollToEnd && messages.isNotEmpty() && atBottom && !listState.isScrollInProgress) {
             listState.scrollToItem(messages.lastIndex)
         }
     }

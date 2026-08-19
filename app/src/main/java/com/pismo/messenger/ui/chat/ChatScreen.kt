@@ -221,7 +221,14 @@ fun ChatScreen(
                 if (pageLimit > 0) ChatRepository.loadDirectMessages(targetId, pageLimit)
                 else ChatRepository.loadDirectMessages(targetId)
             }
-            messages = loaded
+            // Присваиваем ТОЛЬКО при реальном изменении: одинаковый по
+            // содержимому список всё равно заставил бы перекомпоновать все
+            // пузыри, а это заметный рывок посреди прокрутки.
+            if (loaded.size != messages.size ||
+                loaded.zip(messages).any { (a, b) -> a != b }
+            ) {
+                messages = loaded
+            }
             lastCount = loaded.size
             reactions = ReactionsRepository.forMessages(loaded.map { it.id }, scopeKind)
             MessageMemory.put(scopeKind, targetId, loaded, reactions)
@@ -244,7 +251,12 @@ fun ChatScreen(
         // иначе новое сообщение выдёргивало бы его из середины истории.
         val atBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()
             ?.index?.let { it >= listState.layoutInfo.totalItemsCount - 3 } ?: true
-        if (messages.isNotEmpty() && (force || (scrollToEnd && atBottom))) {
+        // И НЕ ТРОГАЕМ ленту, пока её листает пользователь. scrollToItem
+        // мгновенно обрывает инерцию, а опрос приходит раз в две с половиной
+        // секунды — попасть им в разгон пальца проще простого. Отсюда и
+        // «скролл может застопиться» на пути от старых сообщений к новым.
+        val userScrolling = listState.isScrollInProgress
+        if (messages.isNotEmpty() && !userScrolling && (force || (scrollToEnd && atBottom))) {
             listState.scrollToItem(messages.lastIndex)
         }
     }
@@ -318,12 +330,13 @@ fun ChatScreen(
             val before = messages.size
             pageLimit = (if (pageLimit > 0) pageLimit else before) + PAGE_STEP
             reload()
-            val added = messages.size - before
             // Ничего не добавилось — история кончилась, больше не дёргаем.
-            if (added <= 0) noMoreOlder = true
-            // Порция легла СВЕРХУ, поэтому позиция взгляда уезжает вниз ровно
-            // на столько же строк. Без поправки лента прыгала бы к началу.
-            else runCatching { listState.scrollToItem(first + added) }
+            if (messages.size <= before) noMoreOlder = true
+            // Поправлять позицию руками НЕ НУЖНО и вредно: LazyColumn держит
+            // якорь на первом видимом элементе по его ключу, поэтому порция,
+            // легшая сверху, сама сдвигает содержимое, не трогая взгляд. А
+            // ручной scrollToItem поверх этого обрывал бы инерцию — палец в
+            // этот момент как раз ведёт ленту вверх.
             loadingOlder = false
         }
     }
