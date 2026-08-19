@@ -51,6 +51,7 @@ import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.data.MediaCache
 import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.media.MicLevelMonitor
+import com.pismo.messenger.media.Sounds
 import com.pismo.messenger.ui.login.PismoField
 import com.pismo.messenger.ui.theme.PismoColors
 import com.pismo.messenger.ui.theme.ThemeMode
@@ -77,6 +78,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     var wsUrl by remember { mutableStateOf(Prefs.wsUrlOverride) }
     var wsEnabled by remember { mutableStateOf(Prefs.wsEnabled) }
     var notifications by remember { mutableStateOf(Prefs.notificationsEnabled) }
+    var sounds by remember { mutableStateOf(Prefs.soundsEnabled) }
     var micGain by remember { mutableStateOf(Prefs.micGain) }
     var frontCamera by remember { mutableStateOf(Prefs.frontCamera) }
     var bgPolling by remember { mutableStateOf(Prefs.backgroundPolling) }
@@ -124,6 +126,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         Prefs.wsUrlOverride = wsUrl.trim()
         Prefs.wsEnabled = wsEnabled
         Prefs.notificationsEnabled = notifications
+        Prefs.soundsEnabled = sounds
         Prefs.micGain = micGain
         Prefs.frontCamera = frontCamera
         Prefs.backgroundPolling = bgPolling
@@ -248,6 +251,21 @@ fun SettingsScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             SwitchRow("Мгновенные события через WebSocket", wsEnabled) { wsEnabled = it }
             SwitchRow("Уведомления о новых сообщениях", notifications) { notifications = it }
+
+            // Звук применяется сразу, без «Сохранить»: иначе непонятно, что
+            // именно переключили — проверить-то можно только на слух.
+            SwitchRow("Звуки событий", sounds) {
+                sounds = it
+                Prefs.soundsEnabled = it
+                if (it) Sounds.micOn()
+            }
+            Text(
+                "Короткие сигналы на микрофон, «наушники», камеру, демонстрацию, " +
+                        "вход и выход собеседников и новое сообщение. Половина кнопок " +
+                        "в звонке меняет то, чего на экране не видно, — по звуку " +
+                        "понятно, что нажатие сработало.",
+                color = PismoColors.TextMuted, fontSize = 11.sp,
+            )
 
             Spacer(Modifier.height(20.dp))
             Section("Устройства")

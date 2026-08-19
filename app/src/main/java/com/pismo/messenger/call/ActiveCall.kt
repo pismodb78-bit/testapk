@@ -1,5 +1,6 @@
 package com.pismo.messenger.call
 
+import com.pismo.messenger.data.repo.CallRepository
 import com.pismo.messenger.data.repo.PresenceRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -61,6 +62,9 @@ object ActiveCall {
     private val _micMuted = MutableStateFlow(false)
     val micMuted: StateFlow<Boolean> = _micMuted.asStateFlow()
 
+    private val _deafened = MutableStateFlow(false)
+    val deafened: StateFlow<Boolean> = _deafened.asStateFlow()
+
     private val _connected = MutableStateFlow(false)
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
 
@@ -73,13 +77,20 @@ object ActiveCall {
         // остальные участники увидят, что вы вышли из канала.
         loops?.cancel()
         loops = scope.launch {
-            var tick = 0
+            // Флаги зеркалим подпиской, а не опросом раз в секунду: кнопки
+            // микрофона и «наушников» есть и в самом доке, и значок обязан
+            // перекрашиваться в тот же момент, когда по нему нажали, а не
+            // когда-нибудь в течение секунды.
+            launch { engine.micMuted.collect { _micMuted.value = it } }
+            launch { engine.deafened.collect { _deafened.value = it } }
+            launch {
+                engine.state.collect { _connected.value = it == CallEngine.State.CONNECTED }
+            }
+
+            // А вот heartbeat голосового канала — именно опрос: он пишет в
+            // базу, и чаще раза в 10 секунд там делать нечего.
             while (isActive) {
-                updateState(
-                    micMuted = engine.micMuted.value,
-                    connected = engine.state.value == CallEngine.State.CONNECTED,
-                )
-                if (info.channelId > 0 && tick % 10 == 0) {
+                if (info.channelId > 0) {
                     runCatching {
                         PresenceRepository.voiceHeartbeat(
                             info.channelId,
@@ -89,8 +100,7 @@ object ActiveCall {
                         )
                     }
                 }
-                tick++
-                delay(1000)
+                delay(10_000)
             }
         }
     }
@@ -100,12 +110,51 @@ object ActiveCall {
         _connected.value = connected
     }
 
+    /**
+     * Положить трубку — единственная точка завершения разговора, общая для
+     * окна звонка и для дока.
+     *
+     * Порядок важен: сначала отметиться в базе (выйти из голосового канала,
+     * закрыть сессию звонка), и только потом рвать комнату. Наоборот —
+     * и собеседник ещё какое-то время видит вас в канале, откуда вы уже
+     * ушли.
+     */
+    fun hangUp() {
+        val info = _current.value ?: return
+        val e = engine
+        scope.launch {
+            runCatching {
+                if (info.channelId > 0) PresenceRepository.voiceLeave(info.channelId)
+                if (info.sessionId > 0) CallRepository.leave(info.sessionId)
+            }
+            e?.leave()
+            clear()
+            // После clear(), а не до: маршрут звука выбирается по тому, идёт
+            // ли разговор, и «положили трубку» должно уйти уже обычным
+            // трактом, а не в голосовой, которого больше нет.
+            com.pismo.messenger.media.Sounds.hangup()
+        }
+    }
+
+    /** Микрофон из дока — не открывая окно звонка. Порт ToggleMicGlobal. */
+    fun toggleMic() {
+        val e = engine ?: return
+        scope.launch { runCatching { e.toggleMic() } }
+    }
+
+    /** «Наушники» из дока. Порт ToggleDeafenGlobal. */
+    fun toggleDeafen() {
+        val e = engine ?: return
+        scope.launch { runCatching { e.toggleDeafen() } }
+    }
+
     fun clear() {
         loops?.cancel()
         loops = null
         engine = null
         _current.value = null
         _micMuted.value = false
+        _deafened.value = false
         _connected.value = false
     }
 

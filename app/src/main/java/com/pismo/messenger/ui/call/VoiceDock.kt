@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.Headset
+import androidx.compose.material.icons.filled.HeadsetOff
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.VolumeUp
@@ -56,6 +58,7 @@ fun VoiceDock() {
     val context = LocalContext.current
     val call by ActiveCall.current.collectAsState()
     val micMuted by ActiveCall.micMuted.collectAsState()
+    val deafened by ActiveCall.deafened.collectAsState()
     val connected by ActiveCall.connected.collectAsState()
 
     var elapsed by remember { mutableLongStateOf(0L) }
@@ -119,22 +122,50 @@ fun VoiceDock() {
                 )
             }
 
-            Icon(
-                if (micMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                contentDescription = if (micMuted) "Микрофон выключен" else "Микрофон включён",
+            // Микрофон, «наушники» и трубка прямо в доке — порт кнопок
+            // футера с ПК (ToggleMicGlobal/ToggleDeafenGlobal). Смысл именно
+            // в том, чтобы не открывать окно звонка ради одного щелчка: с
+            // телефона мьютятся обычно на ходу, посреди переписки.
+            DockButton(
+                icon = if (micMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                description = if (micMuted) "Включить микрофон" else "Выключить микрофон",
                 tint = if (micMuted) PismoColors.Red else PismoColors.TextSecondary,
-                modifier = Modifier.size(18.dp),
+                onClick = { ActiveCall.toggleMic() },
             )
 
-            IconButton(onClick = { reopenCall(context, info) }) {
-                Icon(
-                    Icons.Default.CallEnd,
-                    contentDescription = "Открыть звонок",
-                    tint = PismoColors.Red,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
+            DockButton(
+                icon = if (deafened) Icons.Default.HeadsetOff else Icons.Default.Headset,
+                description = if (deafened) "Включить звук" else "Выключить звук",
+                tint = if (deafened) PismoColors.Red else PismoColors.TextSecondary,
+                onClick = { ActiveCall.toggleDeafen() },
+            )
+
+            // Трубка кладёт трубку. Раньше этой же красной трубкой открывался
+            // звонок — иконка обещала одно, делала другое. Открыть окно можно
+            // тапом по самой полоске.
+            DockButton(
+                icon = Icons.Default.CallEnd,
+                description = "Завершить звонок",
+                tint = PismoColors.Red,
+                onClick = { ActiveCall.hangUp() },
+            )
         }
+    }
+}
+
+/**
+ * Кнопка в доке: касание не должно проваливаться в полоску под ней —
+ * иначе мьют микрофона попутно открывал бы окно звонка.
+ */
+@Composable
+private fun DockButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    description: String,
+    tint: Color,
+    onClick: () -> Unit,
+) {
+    IconButton(onClick = onClick, modifier = Modifier.size(34.dp)) {
+        Icon(icon, description, tint = tint, modifier = Modifier.size(19.dp))
     }
 }
 

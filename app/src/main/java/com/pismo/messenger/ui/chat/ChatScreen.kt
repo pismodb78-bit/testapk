@@ -55,6 +55,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -91,6 +92,7 @@ import com.pismo.messenger.data.model.headerText
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.data.repo.ReactionsRepository
+import com.pismo.messenger.media.Sounds
 import com.pismo.messenger.media.WavPlayer
 import com.pismo.messenger.media.WavRecorder
 import com.pismo.messenger.net.SignalingClient
@@ -209,6 +211,13 @@ fun ChatScreen(
     var loadingOlder by remember(targetId) { mutableStateOf(false) }
     var noMoreOlder by remember(targetId) { mutableStateOf(false) }
 
+    /**
+     * Самое свежее ЧУЖОЕ сообщение, о котором уже отзвучали. −1 — ленту ещё
+     * не видели: на первой загрузке звучать нечему, иначе открытие любого
+     * чата встречало бы «плипом».
+     */
+    var lastHeardId by remember(targetId) { mutableIntStateOf(-1) }
+
     // force = «прокрути вниз обязательно». Обычный scrollToEnd уважает
     // положение пользователя в истории (чтобы чужое сообщение не выдёргивало
     // из середины), но СВОЮ отправку показать нужно всегда.
@@ -230,6 +239,15 @@ fun ChatScreen(
                 messages = loaded
             }
             lastCount = loaded.size
+
+            // «Плип» на чужое сообщение в открытом чате — как на ПК. Системное
+            // уведомление сюда не доходит: приложение на экране, и звук —
+            // единственный признак, что пришло что-то новое, если человек
+            // смотрит в другой конец переписки.
+            val newestIncoming = loaded.filterNot { it.isMine }.maxOfOrNull { it.id } ?: -1
+            if (lastHeardId >= 0 && newestIncoming > lastHeardId) Sounds.message()
+            if (newestIncoming > lastHeardId) lastHeardId = newestIncoming
+
             reactions = ReactionsRepository.forMessages(loaded.map { it.id }, scopeKind)
             MessageMemory.put(scopeKind, targetId, loaded, reactions)
             ChatRepository.prefetchPageMedia(loaded, scopeKind)

@@ -134,6 +134,17 @@ object Prefs {
         get() = sp.getBoolean("notifications", true)
         set(v) = sp.edit().putBoolean("notifications", v).apply()
 
+    /**
+     * Короткие звуки событий: микрофон, «наушники», камера, демонстрация,
+     * вход и выход участников, новое сообщение. Порт Sounds.Enabled.
+     *
+     * Нужны не для красоты: половина кнопок в звонке меняет то, чего на
+     * экране не видно, и без отклика непонятно, сработало нажатие или нет.
+     */
+    var soundsEnabled: Boolean
+        get() = sp.getBoolean("sounds_enabled", true)
+        set(v) = sp.edit().putBoolean("sounds_enabled", v).apply()
+
     /** Фоновый опрос новых сообщений, когда приложение свёрнуто. */
     var backgroundPolling: Boolean
         get() = sp.getBoolean("bg_polling", true)

@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -58,6 +59,7 @@ import com.pismo.messenger.data.MessageMemory
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.ReactionsRepository
 import com.pismo.messenger.data.repo.ServerRepository
+import com.pismo.messenger.media.Sounds
 import com.pismo.messenger.core.PresenceReporter
 import com.pismo.messenger.core.Mentions
 import com.pismo.messenger.core.UserSession
@@ -132,6 +134,9 @@ fun ChannelChatScreen(
     // прыжок на старую дату требует дотянуть ленту до неё.
     var pageLimit by remember(channelId) { mutableStateOf(40) }
 
+    /** Самое свежее чужое сообщение, о котором уже отзвучали. См. ChatScreen. */
+    var lastHeardId by remember(channelId) { mutableIntStateOf(-1) }
+
     suspend fun reload(scrollToEnd: Boolean = false) {
         runCatching {
             val loaded = ServerRepository.channelMessages(channelId, limit = pageLimit)
@@ -143,6 +148,12 @@ fun ChannelChatScreen(
                 messages = loaded
             }
             lastCount = loaded.size
+
+            // «Плип» на чужое сообщение в открытом канале — как на ПК.
+            val newestIncoming = loaded.filterNot { it.isMine }.maxOfOrNull { it.id } ?: -1
+            if (lastHeardId >= 0 && newestIncoming > lastHeardId) Sounds.message()
+            if (newestIncoming > lastHeardId) lastHeardId = newestIncoming
+
             reactions = ReactionsRepository.forMessages(loaded.map { it.id }, Scope.SERVER)
             MessageMemory.put(Scope.SERVER, channelId, loaded, reactions)
             ServerRepository.prefetchChannelMedia(loaded)

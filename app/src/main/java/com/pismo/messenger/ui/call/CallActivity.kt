@@ -72,7 +72,6 @@ import com.pismo.messenger.call.CallEngine
 import com.pismo.messenger.call.LiveKitToken
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.repo.CallRepository
-import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.components.LetterAvatar
 import com.pismo.messenger.ui.components.UserAvatar
@@ -183,6 +182,19 @@ class CallActivity : ComponentActivity() {
                         },
                     )
                 } else {
+                    // Трубку можно положить и из дока, не открывая это окно.
+                    // Тогда разговора уже нет, а окно осталось бы висеть в
+                    // стеке задач — вернулись бы в мёртвый экран.
+                    val live by ActiveCall.current.collectAsState()
+                    // Именно «был и пропал», а не просто «нет»: в комнату мы
+                    // ещё только заходим, и в первые секунды ActiveCall пуст —
+                    // окно закрылось бы само на каждом исходящем звонке.
+                    var wasLive by remember { mutableStateOf(live != null) }
+                    LaunchedEffect(live) {
+                        if (live != null) wasLive = true
+                        else if (wasLive && !isFinishing) finish()
+                    }
+
                     CallScreen(
                         engine = engine,
                         peerName = peerName,
@@ -274,17 +286,9 @@ class CallActivity : ComponentActivity() {
      * корутина не успела бы даже сообщить серверу об уходе из канала.
      */
     private fun finishCall() {
-        val ch = channelId
-        val sid = sessionId
-        val e = engine
-        ActiveCall.scope.launch {
-            runCatching {
-                if (ch > 0) PresenceRepository.voiceLeave(ch)
-                if (sid > 0) CallRepository.leave(sid)
-            }
-            e.leave()
-            ActiveCall.clear()
-        }
+        // Сама трубка кладётся в ActiveCall: та же кнопка есть и в доке, а
+        // порядок «отметиться в базе → выйти из комнаты» должен быть один.
+        ActiveCall.hangUp()
         finish()
     }
 

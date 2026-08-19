@@ -7,6 +7,7 @@ import android.graphics.Color as AndroidColor
 import android.os.Build
 import android.util.Log
 import com.pismo.messenger.core.Prefs
+import com.pismo.messenger.media.Sounds
 import com.pismo.messenger.core.PresenceReporter
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.service.CallForegroundService
@@ -200,6 +201,10 @@ class CallEngine(
     private val screenWatches = HashMap<String, ScreenWatch>()
     private var remoteScreenWatchdog: Job? = null
 
+    /** Кто был в комнате в прошлый раз — чтобы озвучить приход и уход. */
+    private var knownPeers: Set<String> = emptySet()
+    private var peersSeeded = false
+
     // Громкости входящего звука — модель один в один с NativeCallTransport.
     // Голос и звук демки живут по РАЗНЫМ правилам, и путать их нельзя:
     // «наушники» (deafen) глушат голос, но НЕ демку — стрим должно быть
@@ -320,6 +325,7 @@ class CallEngine(
             publishVoiceState()
 
             _state.value = State.CONNECTED
+            Sounds.callConnected()
             // Демонстрацию может начать кто угодно и когда угодно, а пауза
             // трека случается как раз в момент подключения к нему — поэтому
             // сторож живёт весь звонок, а не только пока смотрим.
@@ -362,6 +368,8 @@ class CallEngine(
         eventJob = null
         currentRoom = ""
         _participants.value = emptyList()
+        knownPeers = emptySet()
+        peersSeeded = false
         _cameraOn.value = false
         _screenSharing.value = false
         _micMuted.value = false
@@ -377,6 +385,7 @@ class CallEngine(
         val r = room ?: return
         val willUnmute = _micMuted.value
         setMicMuted(r, !_micMuted.value)
+        if (willUnmute) Sounds.micOn() else Sounds.micOff()
 
         // Включение микрофона ИЗ ПОЛНОГО МУТА снимает и «наушники» — порт
         // ToggleMute с ПК. Логика простая: человек, который снова хочет
@@ -434,6 +443,10 @@ class CallEngine(
     suspend fun toggleDeafen() {
         val r = room ?: return
         _deafened.value = !_deafened.value
+        // Тот же отклик, что на ПК (SetDeafenState). Он же и ответ на
+        // вопрос «а кнопка вообще работает?»: увидеть глушение входящего
+        // звука нельзя, услышать — можно.
+        if (_deafened.value) Sounds.micOff() else Sounds.micOn()
 
         // Заглушив вход, принято глушить и свой микрофон — как в Discord и на ПК.
         if (_deafened.value && !_micMuted.value) setMicMuted(r, true)
@@ -447,6 +460,7 @@ class CallEngine(
         val r = room ?: return
         val on = !_cameraOn.value
         _cameraOn.value = on
+        if (on) Sounds.cameraOn() else Sounds.cameraOff()
         runCatching { r.localParticipant.setCameraEnabled(on) }
         refreshParticipants()
     }
@@ -504,6 +518,7 @@ class CallEngine(
             return
         }
 
+        Sounds.screenOn()
         if (withAudio && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) attachScreenAudio(r)
         watchScreenFrames(r)
         refreshParticipants()
@@ -517,6 +532,7 @@ class CallEngine(
         runCatching { r.localParticipant.setScreenShareEnabled(false) }
         _screenSharing.value = false
         _screenFrozen.value = false
+        Sounds.screenOff()
         refreshParticipants()
     }
 
@@ -1094,6 +1110,19 @@ class CallEngine(
         }
 
         _participants.value = list
+
+        // Кто пришёл и кто ушёл — «буп↑»/«буп↓», как на ПК. В свёрнутом
+        // окне это единственный способ узнать, что собеседник отвалился.
+        val ids = list.filterNot { it.isLocal }.map { it.identity }.toSet()
+        if (peersSeeded) {
+            if (ids.any { it !in knownPeers }) Sounds.userJoined()
+            if (knownPeers.any { it !in ids }) Sounds.userLeft()
+        }
+        // Первый список — это те, кто УЖЕ был в комнате, когда мы вошли (в
+        // голосовом канале часто пустой). Пропеть им «зашёл» значило бы
+        // устроить очередь бупов на входе, поэтому его только запоминаем.
+        peersSeeded = true
+        knownPeers = ids
 
         // Новая дорожка приходит с громкостью 1.0 — если её не привести к
         // нашим правилам сразу, чужая демка заорёт до того, как её начали
