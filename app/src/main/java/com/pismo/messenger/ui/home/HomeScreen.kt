@@ -25,11 +25,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.sp
+import com.pismo.messenger.core.Prefs
+import com.pismo.messenger.core.Updater
 import com.pismo.messenger.data.repo.FriendsRepository
 
 import com.pismo.messenger.ui.call.VoiceDock
 import com.pismo.messenger.ui.chats.ChatListScreen
 import com.pismo.messenger.ui.components.UnreadBadge
+import com.pismo.messenger.ui.components.UpdateDialogHost
 import com.pismo.messenger.ui.friends.FriendsScreen
 import com.pismo.messenger.ui.profile.ProfileScreen
 import com.pismo.messenger.ui.servers.ServersScreen
@@ -66,6 +69,14 @@ fun HomeScreen(
             runCatching { friendRequests = FriendsRepository.incomingCount() }
             delay(15_000)
         }
+    }
+
+    // Проверка обновления при запуске — порт Updater.CheckOnStartup с ПК.
+    // Молчаливая: окно появится, только если версия действительно новее.
+    // Отсюда, а не из MainActivity: до главного экрана человек ещё вводит
+    // логин, и предлагать обновление поверх формы входа незачем.
+    LaunchedEffect(Unit) {
+        if (Prefs.checkUpdatesOnStart) runCatching { Updater.check(manual = false) }
     }
 
     Scaffold(
@@ -141,6 +152,10 @@ fun HomeScreen(
                     onLoggedOut = onLoggedOut,
                 )
             }
+
+            // Окно обновления. Внутри Box, а не рядом со Scaffold: AlertDialog
+            // рисуется в своём окне, положение в дереве на него не влияет.
+            UpdateDialogHost()
         }
     }
 }

@@ -15,9 +15,37 @@ android {
         // versionCode ОБЯЗАН расти с каждой сборкой: Android ставит поверх
         // старой только версию с бо́льшим номером, и на равном откажет молча.
         // versionName — то, что видит человек.
-        versionCode = 2
-        versionName = "1.1"
+        //
+        // Оба значения переопределяются из командной строки: сборка релиза в
+        // GitHub Actions считает их из тега (v1.2 → versionName 1.2,
+        // versionCode 10200) — см. .github/workflows/release.yml. Здесь
+        // остаются значения для сборки руками.
+        versionCode = (providers.gradleProperty("pismoVersionCode").orNull)?.toIntOrNull() ?: 2
+        versionName = providers.gradleProperty("pismoVersionName").orNull ?: "1.1"
         vectorDrawables { useSupportLibrary = true }
+    }
+
+    /**
+     * Подпись релиза.
+     *
+     * Обновление «из приложения» работает, только пока APK подписан ОДНИМ И
+     * ТЕМ ЖЕ ключом: Android откажется ставить поверх сборку с другой
+     * подписью. Поэтому ключ один, лежит в секретах репозитория и
+     * подставляется через переменные окружения в GitHub Actions.
+     *
+     * Локальная сборка переменных не видит и подписывается отладочным
+     * ключом, как и раньше, — но такой APK обновиться уже не сможет.
+     */
+    signingConfigs {
+        create("release") {
+            val storePath = System.getenv("PISMO_KEYSTORE")
+            if (!storePath.isNullOrBlank()) {
+                storeFile = file(storePath)
+                storePassword = System.getenv("PISMO_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("PISMO_KEY_ALIAS")
+                keyPassword = System.getenv("PISMO_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
@@ -25,6 +53,9 @@ android {
             isMinifyEnabled = false
         }
         release {
+            signingConfig = signingConfigs.getByName(
+                if (System.getenv("PISMO_KEYSTORE").isNullOrBlank()) "debug" else "release"
+            )
             // Минификация выключена: JDBC-драйвер и LiveKit активно используют
             // рефлексию, а неполные ProGuard-правила ломают их молча, уже в APK.
             isMinifyEnabled = false

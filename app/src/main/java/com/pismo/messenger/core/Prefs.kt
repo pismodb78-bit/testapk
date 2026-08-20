@@ -189,6 +189,14 @@ object Prefs {
         get() = sp.getBoolean("sounds_enabled", true)
         set(v) = sp.edit().putBoolean("sounds_enabled", v).apply()
 
+    /**
+     * Проверять обновление при запуске — как Updater.CheckOnStartup на ПК.
+     * Молча: сообщение появляется, только если версия и правда новее.
+     */
+    var checkUpdatesOnStart: Boolean
+        get() = sp.getBoolean("check_updates", true)
+        set(v) = sp.edit().putBoolean("check_updates", v).apply()
+
     /** Фоновый опрос новых сообщений, когда приложение свёрнуто. */
     var backgroundPolling: Boolean
         get() = sp.getBoolean("bg_polling", true)

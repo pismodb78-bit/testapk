@@ -48,6 +48,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pismo.messenger.core.Prefs
+import com.pismo.messenger.core.Updater
 import com.pismo.messenger.data.ChatDiskCache
 import com.pismo.messenger.data.ChatListMemory
 import com.pismo.messenger.data.MediaCache
@@ -57,6 +58,7 @@ import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.media.MicLevelMonitor
 import com.pismo.messenger.media.MicTester
 import com.pismo.messenger.media.Sounds
+import com.pismo.messenger.ui.components.UpdateDialogHost
 import com.pismo.messenger.ui.login.PismoField
 import com.pismo.messenger.ui.theme.PismoColors
 import com.pismo.messenger.ui.theme.ThemeMode
@@ -85,6 +87,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     var notifications by remember { mutableStateOf(Prefs.notificationsEnabled) }
     var sounds by remember { mutableStateOf(Prefs.soundsEnabled) }
     var micGain by remember { mutableStateOf(Prefs.micGain) }
+    var checkUpdates by remember { mutableStateOf(Prefs.checkUpdatesOnStart) }
     var frontCamera by remember { mutableStateOf(Prefs.frontCamera) }
     var bgPolling by remember { mutableStateOf(Prefs.backgroundPolling) }
     var noiseSuppression by remember { mutableStateOf(Prefs.noiseSuppression) }
@@ -137,6 +140,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         Prefs.notificationsEnabled = notifications
         Prefs.soundsEnabled = sounds
         Prefs.micGain = micGain
+        Prefs.checkUpdatesOnStart = checkUpdates
         Prefs.frontCamera = frontCamera
         Prefs.backgroundPolling = bgPolling
         Prefs.noiseSuppression = noiseSuppression
@@ -576,6 +580,27 @@ fun SettingsScreen(onBack: () -> Unit) {
                         "(сборка ${com.pismo.messenger.BuildConfig.VERSION_CODE})",
                 color = PismoColors.TextSecondary, fontSize = 13.sp,
             )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { scope.launch { Updater.check(manual = true) } },
+                colors = ButtonDefaults.buttonColors(containerColor = PismoColors.BgElevated),
+                shape = RoundedCornerShape(8.dp),
+            ) {
+                Text("Проверить обновления", color = PismoColors.TextPrimary)
+            }
+            SwitchRow("Проверять при запуске", checkUpdates) { checkUpdates = it }
+            Text(
+                "Приложение берёт новую версию со страницы релизов на GitHub и " +
+                        "отдаёт её системному установщику — как на ПК, где оно " +
+                        "распаковывает архив поверх себя. Android поставит " +
+                        "обновление, только если оно подписано тем же ключом, " +
+                        "поэтому обновляются сборки из GitHub Actions; APK, " +
+                        "собранный вручную, придётся один раз заменить.",
+                color = PismoColors.TextMuted, fontSize = 11.sp,
+            )
+            // Тот же диалог, что и на главном экране: одновременно составлен
+            // ровно один из этих экранов, так что двух окон не будет.
+            UpdateDialogHost()
 
             Spacer(Modifier.height(20.dp))
             Section("Кеш")
