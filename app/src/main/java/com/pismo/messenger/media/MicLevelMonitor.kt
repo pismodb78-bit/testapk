@@ -72,16 +72,27 @@ object MicLevelMonitor {
      */
     private const val AGC_TARGET_DB = -18f
 
-    /** Потолок автоусиления — столько же, сколько отдаёт цифровой AGC. */
-    private const val AGC_MAX_GAIN_DB = 30f
+    /**
+     * Потолок автоусиления. 36 дБ, а не 30: на тихом микрофоне сырая речь
+     * идёт около −55 дБ, и тридцати не хватало, чтобы дотянуть её до цели —
+     * шкала упиралась в потолок ниже, чем показывает разговор.
+     */
+    private const val AGC_MAX_GAIN_DB = 36f
 
     /**
-     * Тише этого усиление не трогаем. Иначе в тишине оно доехало бы до
-     * потолка, и шумок комнаты показывался бы как громкая речь.
+     * Насколько сигнал должен подняться над фоном комнаты, чтобы считаться
+     * речью. Десять децибел — обычный разрыв между «человек молчит» и
+     * «человек говорит»; ниже начинается шум вентилятора.
      */
-    private const val AGC_SPEECH_FLOOR_DB = -55f
+    private const val SPEECH_OVER_NOISE_DB = 10f
+
+    /** Ниже этого — цифровая тишина, усиливать нечего. */
+    private const val HARD_FLOOR_DB = -75f
 
     private var agcGainDb = 0f
+
+    /** Оценка фона комнаты, см. applyAgc. */
+    private var noiseFloorDb = -60f
 
     private val _levelDb = MutableStateFlow(FLOOR_DB)
     val levelDb: StateFlow<Float> = _levelDb.asStateFlow()
@@ -187,6 +198,7 @@ object MicLevelMonitor {
 
     private fun closeRecord() {
         agcGainDb = 0f
+        noiseFloorDb = -60f
         val r = record ?: return
         record = null
         runCatching { r.stop() }
@@ -209,7 +221,25 @@ object MicLevelMonitor {
      * начало фразы не оставалось за кадром.
      */
     private fun applyAgc(rawDb: Float): Float {
-        if (rawDb > AGC_SPEECH_FLOOR_DB) {
+        // ФОН СЧИТАЕМ САМИ, А НЕ БЕРЁМ КОНСТАНТОЙ.
+        //
+        // Раньше здесь стояла граница «тише −55 дБ не усиливаем». Задумана
+        // она была как защита от накрутки тишины, но на тихом микрофоне под
+        // неё попадала САМА РЕЧЬ: усиление не включалось вовсе, и шкала
+        // показывала −55 там, где разговор показывает −35…−20. Порог,
+        // выставленный по такой шкале, в звонке оказывался бессмысленным.
+        //
+        // Чувствительность микрофонов различается на десятки децибел, поэтому
+        // судить надо не по абсолютной величине, а по тому, насколько сигнал
+        // поднялся над фоном ЭТОЙ комнаты. Вниз фон падает сразу — тишина
+        // наступила, вот она; вверх ползёт еле-еле, иначе длинная фраза
+        // утянула бы фон за собой и речь перестала бы считаться речью.
+        noiseFloorDb =
+            if (rawDb < noiseFloorDb) rawDb
+            else noiseFloorDb + (rawDb - noiseFloorDb) * 0.0015f
+
+        val speech = rawDb > HARD_FLOOR_DB && rawDb > noiseFloorDb + SPEECH_OVER_NOISE_DB
+        if (speech) {
             val want = (AGC_TARGET_DB - rawDb).coerceIn(0f, AGC_MAX_GAIN_DB)
             agcGainDb += (want - agcGainDb) * (if (want > agcGainDb) 0.15f else 0.03f)
         } else {
