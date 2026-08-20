@@ -303,6 +303,10 @@ object ServerRepository {
         }
     }
 
+    /** Максимальный id канала — дешёвая замена счёту всех строк, см. ChatRepository. */
+    suspend fun channelMaxId(channelId: Int): Int =
+        Db.scalarInt("SELECT MAX(id) FROM server_messages WHERE channel_id=?", channelId)
+
     suspend fun channelMessageCount(channelId: Int): Int =
         Db.scalarInt("SELECT COUNT(*) FROM server_messages WHERE channel_id=?", channelId)
 

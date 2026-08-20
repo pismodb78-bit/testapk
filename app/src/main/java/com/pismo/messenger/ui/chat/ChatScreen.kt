@@ -167,7 +167,27 @@ fun ChatScreen(
     // Кружок нужен, только когда показать нечего.
     var loading by remember(targetId) { mutableStateOf(remembered == null) }
     var sending by remember { mutableStateOf(false) }
-    var lastCount by remember { mutableStateOf(0) }
+    /**
+     * Что мы уже знаем о переписке НА СЕРВЕРЕ: самый большой id, сколько
+     * всего сообщений и сколько моих ещё не прочитано. Опрос сравнивает
+     * свежие ответы именно с этим.
+     *
+     * ЗДЕСЬ И БЫЛА ПОСТОЯННАЯ НАГРУЗКА. Раньше вместо этих трёх чисел жило
+     * одно — размер загруженной СТРАНИЦЫ (сорок сообщений), — а сравнивали
+     * его с общим числом сообщений в переписке. На любой переписке длиннее
+     * страницы они не совпадают никогда, поэтому «что-то изменилось»
+     * срабатывало КАЖДЫЕ 2,5 СЕКУНДЫ и лента перечитывалась целиком без
+     * всякого повода. Отсюда же и «долистал до начала чата — нагрузка
+     * спала»: когда страница дорастала до всей истории, числа наконец
+     * сходились и опрос затихал.
+     *
+     * −1 значит «ещё не спрашивали»: первое измерение ничего не сравнивает,
+     * иначе открытие чата сразу тянуло бы вторую перезагрузку.
+     */
+    var lastMaxId by remember(targetId) { mutableIntStateOf(-1) }
+    var lastTotal by remember(targetId) { mutableIntStateOf(-1) }
+    var lastUnreadToPartner by remember(targetId) { mutableIntStateOf(-1) }
+    var tick by remember(targetId) { mutableIntStateOf(0) }
 
     // Режимы ответа и редактирования — как панель над строкой ввода на ПК.
     var replyTo by remember { mutableStateOf<ChatMessage?>(null) }
@@ -260,7 +280,10 @@ fun ChatScreen(
             ) {
                 messages = loaded
             }
-            lastCount = loaded.size
+            // Максимум ленты — это и есть максимум переписки: страница
+            // грузится с конца. Записываем его здесь, чтобы опрос не считал
+            // только что показанное сообщение новостью.
+            lastMaxId = loaded.maxOfOrNull { it.id } ?: -1
 
             // «Плип» на чужое сообщение в открытом чате — как на ПК. Системное
             // уведомление сюда не доходит: приложение на экране, и звук —
@@ -283,7 +306,14 @@ fun ChatScreen(
                 // уничтожена), и раньше он молча помечал всё прочитанным —
                 // из-за этого от собеседника, чат с которым остался открыт,
                 // уведомления не приходили вообще.
-                if (PresenceReporter.isForeground) ChatRepository.markAsRead(targetId)
+                //
+                // И только если есть что отмечать. UPDATE без строк всё равно
+                // стоит серверу прохода по сообщениям собеседника, а уходил
+                // он на каждую перезагрузку ленты.
+                val unreadIncoming = loaded.any { !it.isMine && !it.isRead }
+                if (PresenceReporter.isForeground && unreadIncoming) {
+                    ChatRepository.markAsRead(targetId)
+                }
             }
         }
         loading = false
@@ -430,19 +460,36 @@ fun ChatScreen(
     // сообщений не меняет, поэтому синие галочки появлялись только тогда,
     // когда кто-нибудь напишет следующее сообщение. Запрос ложится на индекс
     // целиком и стоит копейки.
-    var lastUnreadToPartner by remember(targetId) { mutableIntStateOf(-1) }
     LaunchedEffect(targetId, isGroup) {
         while (isActive) {
             delay(2500)
             runCatching {
-                val count = if (isGroup) ChatRepository.groupMessageCount(targetId)
-                else ChatRepository.directMessageCount(targetId)
+                // Каждый тик — только дешёвое: MAX(id) это одно движение по
+                // индексу, сколько бы сообщений ни накопилось.
+                val maxId = if (isGroup) ChatRepository.groupMaxId(targetId)
+                else ChatRepository.directMaxId(targetId)
 
                 val mineUnread =
                     if (isGroup) -1 else ChatRepository.unreadToPartner(targetId)
 
-                val changed = count != lastCount ||
-                    (!isGroup && mineUnread != lastUnreadToPartner)
+                // Счёт всех строк оставлен только затем, чтобы заметить
+                // УДАЛЁННОЕ: при удалении максимум не меняется. Но идёт он по
+                // всей переписке, поэтому спрашиваем раз в восемь тиков —
+                // двадцать секунд, — а не каждые две с половиной.
+                tick++
+                val total = if (tick % 8 != 0) lastTotal
+                else if (isGroup) ChatRepository.groupMessageCount(targetId)
+                else ChatRepository.directMessageCount(targetId)
+
+                // Каждое сравнение — только против ранее ИЗМЕРЕННОГО значения
+                // того же рода. Первое измерение (−1) поводом не считается.
+                val changed = (lastMaxId >= 0 && maxId != lastMaxId) ||
+                    (lastTotal >= 0 && total != lastTotal) ||
+                    (!isGroup && lastUnreadToPartner >= 0 &&
+                            mineUnread != lastUnreadToPartner)
+
+                lastMaxId = maxId
+                lastTotal = total
                 lastUnreadToPartner = mineUnread
                 if (changed) reload(scrollToEnd = true)
             }
@@ -452,6 +499,13 @@ fun ChatScreen(
     DisposableEffect(targetId) {
         val listener: (String, Int, Int, String) -> Unit = { type, sender, session, payload ->
             if (type == "new_message") scope.launch { reload(scrollToEnd = true) }
+
+            // Собеседник прочитал мои сообщения — обновляем галочки сразу, не
+            // дожидаясь опроса. Событие шлёт и ПК, и мы сами (см. markAsRead):
+            // в поле userId едет тот, КТО прочитал.
+            if (type == "read" && !isGroup && sender == targetId) {
+                scope.launch { reload() }
+            }
 
             // «печатает…». Раскладка полей взята с ПК один в один, иначе
             // индикатор не совпадёт между телефоном и компьютером: в группе

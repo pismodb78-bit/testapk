@@ -2,6 +2,7 @@ package com.pismo.messenger.data.db
 
 import android.util.Log
 import java.sql.Connection
+import java.sql.SQLException
 
 /**
  * Порт PISMO/DbMigrator.cs — версионированные миграции схемы.
@@ -181,6 +182,35 @@ object DbMigrator {
                 exec(c, "ALTER TABLE messages ADD INDEX idx_msg_pair_time (sender_id, receiver_id, id)")
             }
         },
+        Migration(18, "индексы лент: messages, group_messages, server_messages") { c ->
+            // ПОЧЕМУ ИНДЕКСЫ messages ПЕРЕЧИСЛЕНЫ ЗДЕСЬ ЕЩЁ РАЗ. Миграция 17
+            // спрашивала у information_schema, есть ли уже такой индекс, и при
+            // отказе в доступе (на этом хостинге он вполне вероятен, #1044)
+            // считала, что индекс есть. То есть могла молча НИЧЕГО не создать и
+            // при этом отметиться выполненной — а журнал общий с ПК, и второй
+            // клиент такую отметку уважает. Здесь у information_schema ничего не
+            // спрашиваем вовсе: пробуем создать и глотаем ошибку 1061
+            // «Duplicate key name», которая означает ровно то, что нужно.
+            //
+            // Зачем они. Запросы, которые идут ОТ ПОЛУЧАТЕЛЯ, опереться на
+            // idx_msg_pair (sender_id, receiver_id) не могут и сканируют
+            // messages целиком: непрочитанные по отправителям (каждые 2,5
+            // секунды у списка чатов), отметка «прочитано», список диалогов.
+            // Это и есть та самая полка чтения на сотню мегабайт после каждого
+            // отправленного сообщения.
+            addIndex(c, "messages", "idx_msg_recv_read", "(receiver_id, is_read, sender_id)")
+            addIndex(c, "messages", "idx_msg_recv_time", "(receiver_id, created_at, id)")
+            addIndex(c, "messages", "idx_msg_send_time", "(sender_id, created_at, id)")
+            addIndex(c, "messages", "idx_msg_pair_time", "(sender_id, receiver_id, id)")
+
+            // Группы и каналы: опрос спрашивает «есть ли новое» максимальным id,
+            // лента берёт последнюю страницу. И то и другое должно быть
+            // движением к концу индекса, а не проходом по всей истории.
+            if (tableExists(c, "group_messages"))
+                addIndex(c, "group_messages", "idx_gm_group_id", "(group_id, id)")
+            if (tableExists(c, "server_messages"))
+                addIndex(c, "server_messages", "idx_sm_channel_id", "(channel_id, id)")
+        },
     )
 
     /**
@@ -239,6 +269,24 @@ object DbMigrator {
     // ── Помощники ──────────────────────────────────────────────────────
     private fun exec(c: Connection, sql: String) {
         c.createStatement().use { it.execute(sql) }
+    }
+
+    /**
+     * Создаёт индекс, если его ещё нет.
+     *
+     * Существование заранее НЕ проверяем: на части хостингов закрыт доступ к
+     * information_schema, и проверка упала бы раньше самого ALTER. Вместо неё
+     * просто пробуем создать и глотаем 1061 «Duplicate key name» — она значит,
+     * что индекс уже на месте. Любая другая ошибка (например, нет права ALTER)
+     * уходит наверх, миграция не отмечается применённой и повторится при
+     * следующем запуске; до тех пор индексы кладутся руками скриптом из sql/.
+     */
+    private fun addIndex(c: Connection, table: String, name: String, columns: String) {
+        try {
+            exec(c, "ALTER TABLE `$table` ADD INDEX `$name` $columns")
+        } catch (e: SQLException) {
+            if (e.errorCode != 1061) throw e
+        }
     }
 
     /**

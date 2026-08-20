@@ -120,7 +120,19 @@ fun ChannelChatScreen(
     var replyTo by remember { mutableStateOf<ChatMessage?>(null) }
     var editing by remember { mutableStateOf<ChatMessage?>(null) }
     var loading by remember(channelId) { mutableStateOf(remembered == null) }
-    var lastCount by remember { mutableStateOf(0) }
+    /**
+     * Что мы знаем о канале НА СЕРВЕРЕ: максимальный id и общее число
+     * сообщений. Ровно как в личных чатах — и ровно с той же историей: сюда
+     * клали размер загруженной СТРАНИЦЫ, а сравнивали с числом всех
+     * сообщений канала, поэтому на канале длиннее сорока сообщений опрос
+     * считал, что «что-то изменилось», каждые 2,5 секунды и перечитывал
+     * ленту вхолостую. −1 — «ещё не измеряли».
+     */
+    var lastMaxId by remember(channelId) { mutableIntStateOf(-1) }
+    var lastTotal by remember(channelId) { mutableIntStateOf(-1) }
+    var tick by remember(channelId) { mutableIntStateOf(0) }
+    /** Докуда уже отмечено прочитанным — чтобы не писать одно и то же. */
+    var lastReadMarked by remember(channelId) { mutableIntStateOf(-1) }
     // Логин и роль — для подсветки сообщений, где упомянули меня.
     var mentionMe by remember(channelId) { mutableStateOf("" to "") }
     // Множественное выделение — то же, что в личных чатах.
@@ -169,7 +181,8 @@ fun ChannelChatScreen(
             ) {
                 messages = loaded
             }
-            lastCount = loaded.size
+            // Максимум ленты = максимум канала: страница грузится с конца.
+            lastMaxId = loaded.maxOfOrNull { it.id } ?: -1
 
             // «Плип» на чужое сообщение в открытом канале — как на ПК.
             val newestIncoming = loaded.filterNot { it.isMine }.maxOfOrNull { it.id } ?: -1
@@ -182,7 +195,13 @@ fun ChannelChatScreen(
             perms = ServerRepository.permissions(serverId)
             // То же, что в личных чатах: свёрнутое приложение не должно
             // «прочитывать» канал за пользователя и глушить уведомления.
-            if (PresenceReporter.isForeground) ServerRepository.markChannelRead(channelId)
+            // Отметка прочитанного — это запись в server_reads. Без
+            // условия она уходила на КАЖДУЮ перезагрузку ленты, то есть
+            // писала в базу одно и то же значение раз за разом.
+            if (PresenceReporter.isForeground && lastMaxId > lastReadMarked) {
+                ServerRepository.markChannelRead(channelId)
+                lastReadMarked = lastMaxId
+            }
         }
         loading = false
         // Прокручиваем вниз, только если пользователь и так был у конца
@@ -214,8 +233,24 @@ fun ChannelChatScreen(
         while (isActive) {
             delay(2500)
             runCatching {
-                val count = ServerRepository.channelMessageCount(channelId)
-                if (count != lastCount) reload(scrollToEnd = true)
+                // Каждый тик — только MAX(id): одно движение по индексу,
+                // сколько бы сообщений в канале ни накопилось. Счёт строк
+                // проходил по всему каналу и делал это каждые 2,5 секунды у
+                // каждого читателя — отсюда и бралась постоянная нагрузка.
+                val maxId = ServerRepository.channelMaxId(channelId)
+
+                // Счёт оставлен только ради удалений: при них максимум не
+                // меняется. Раз в восемь тиков — двадцать секунд, — а не
+                // каждый раз.
+                tick++
+                val total = if (tick % 8 != 0) lastTotal
+                else ServerRepository.channelMessageCount(channelId)
+
+                val changed = (lastMaxId >= 0 && maxId != lastMaxId) ||
+                    (lastTotal >= 0 && total != lastTotal)
+                lastMaxId = maxId
+                lastTotal = total
+                if (changed) reload(scrollToEnd = true)
             }
         }
     }

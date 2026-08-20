@@ -15,6 +15,7 @@ import com.pismo.messenger.data.model.Conversation
 import com.pismo.messenger.data.model.GroupSummary
 import com.pismo.messenger.data.model.ReplyQuote
 import com.pismo.messenger.data.model.Scope
+import com.pismo.messenger.net.SignalingClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -60,28 +61,37 @@ object ChatRepository {
         // UNION ALL, каждая ложится на свой индекс, а текст последнего
         // сообщения берётся одной выборкой по первичному ключу. Порт запроса
         // с ПК — там его переписали ровно по этой же жалобе.
+        //
+        // ВТОРОЙ ЗАХОД. Прошлый вариант брал из messages created_at и is_read по
+        // КАЖДОМУ своему сообщению — этих колонок нет в индексах, поэтому на
+        // каждую строку шёл поход в основную таблицу. Теперь из индекса берётся
+        // только максимальный id по собеседнику (id есть в любом индексе InnoDB —
+        // он первичный ключ), а время и текст последнего сообщения читаются одной
+        // строкой по этому id. Непрочитанные считаются отдельно и только по
+        // непрочитанным строкам. Запрос слово в слово совпадает с ПК.
         val sql = """
             SELECT u.id, u.Name, u.Surname, u.login,
-                   UNIX_TIMESTAMP(c.last_time) AS last_time,
-                   mm.text AS last_msg,
-                   IFNULL(c.unread, 0) AS unread
+                   UNIX_TIMESTAMP(lm.created_at) AS last_time,
+                   lm.text AS last_msg,
+                   IFNULL(ur.unread, 0) AS unread
             FROM users u
             LEFT JOIN (
-                SELECT partner_id,
-                       MAX(created_at) AS last_time,
-                       MAX(id)         AS last_id,
-                       SUM(unread)     AS unread
+                SELECT partner_id, MAX(id) AS last_id
                 FROM (
-                    SELECT receiver_id AS partner_id, created_at, id, 0 AS unread
-                    FROM messages WHERE sender_id = ?
+                    SELECT receiver_id AS partner_id, MAX(id) AS id
+                    FROM messages WHERE sender_id = ? GROUP BY receiver_id
                     UNION ALL
-                    SELECT sender_id AS partner_id, created_at, id,
-                           CASE WHEN is_read = 0 THEN 1 ELSE 0 END AS unread
-                    FROM messages WHERE receiver_id = ?
+                    SELECT sender_id AS partner_id, MAX(id) AS id
+                    FROM messages WHERE receiver_id = ? GROUP BY sender_id
                 ) t
                 GROUP BY partner_id
             ) c ON c.partner_id = u.id
-            LEFT JOIN messages mm ON mm.id = c.last_id
+            LEFT JOIN messages lm ON lm.id = c.last_id
+            LEFT JOIN (
+                SELECT sender_id AS partner_id, COUNT(*) AS unread
+                FROM messages WHERE receiver_id = ? AND is_read = 0
+                GROUP BY sender_id
+            ) ur ON ur.partner_id = u.id
             WHERE u.id <> ?
               AND ( c.partner_id IS NOT NULL
                  OR EXISTS (SELECT 1 FROM friends f
@@ -90,7 +100,7 @@ object ChatRepository {
             ORDER BY last_time DESC, u.Name ASC
         """.trimIndent()
 
-        return Db.query(sql, me, me, me, me, me) { rs ->
+        return Db.query(sql, me, me, me, me, me, me) { rs ->
             val lastRaw = rs.getString("last_msg")
             Conversation(
                 userId = rs.getInt("id"),
@@ -242,7 +252,37 @@ object ChatRepository {
 
     suspend fun loadDirectMessages(partnerId: Int, limit: Int = PAGE_SIZE, beforeId: Int = 0): List<ChatMessage> {
         val me = UserSession.effectiveId
-        val cursor = if (beforeId > 0) "AND m.id < $beforeId " else ""
+        val cursor = if (beforeId > 0) "AND id < $beforeId " else ""
+
+        /*
+         * СНАЧАЛА ТОЛЬКО НОМЕРА, И ТОЛЬКО СОРОК ШТУК.
+         *
+         * Было: одно условие «(я→он) OR (он→я)» с ORDER BY id DESC LIMIT 40.
+         * Ни один индекс не покрывает OR целиком, поэтому сервер собирал
+         * объединением ВСЮ переписку и сортировал её в файле, чтобы отдать
+         * сорок последних строк. На переписке в десятки тысяч сообщений это
+         * значит поднять с диска десятки тысяч строк — а строки здесь
+         * широкие, вложения лежат в этой же таблице. И так на каждый заход в
+         * чат и на каждое обновление ленты.
+         *
+         * Стало: две отдельные ветки, каждая — своё направление переписки.
+         * Каждая ложится на (sender_id, receiver_id, id) и берёт ровно сорок
+         * последних движением к концу индекса. Итого не больше восьмидесяти
+         * строк, из которых внешний LIMIT оставит сорок.
+         *
+         * UNION, а не UNION ALL: если переписку открыли с самим собой, обе
+         * ветки совпадают, и без слияния сообщения задвоились бы.
+         */
+        val keys = """
+            (SELECT id FROM messages
+              WHERE sender_id=? AND receiver_id=? $cursor
+              ORDER BY id DESC LIMIT $limit)
+            UNION
+            (SELECT id FROM messages
+              WHERE sender_id=? AND receiver_id=? $cursor
+              ORDER BY id DESC LIMIT $limit)
+        """.trimIndent()
+
         val inner = """
             SELECT m.id, m.sender_id, m.text, m.file_name,
                    m.reply_to_id, m.is_deleted, m.edited_at, m.is_read,
@@ -259,10 +299,9 @@ object ChatRepository {
                    -- нагрузки на диск. Столбец при этом никто не читал.
                    -- Размер нужен только карточке файла — она берёт его
                    -- отдельным запросом по одному сообщению (fileSize).
-            FROM messages m
+            FROM ($keys) k
+            JOIN messages m ON m.id = k.id
             JOIN users u ON u.id = m.sender_id
-            WHERE ((m.sender_id=? AND m.receiver_id=?) OR (m.sender_id=? AND m.receiver_id=?))
-              $cursor
             ORDER BY m.id DESC LIMIT $limit
         """.trimIndent()
         val sql = "SELECT * FROM ($inner) sub ORDER BY id ASC"
@@ -331,6 +370,33 @@ object ChatRepository {
     }
 
     // ── Счётчики для polling ──────────────────────────────────────────
+    /**
+     * Самый большой id в переписке — по нему опрос и узнаёт о новом.
+     *
+     * ПОЧЕМУ НЕ COUNT(*). Счёт обязан пройти по ВСЕМ строкам переписки, и
+     * делал он это каждые 2.5 секунды у каждого открытого чата — на большой
+     * истории это и есть та самая постоянная нагрузка. MAX(id) по индексу
+     * (sender_id, receiver_id, id) — одно движение к концу индекса,
+     * независимо от размера переписки.
+     *
+     * Две ветки UNION ALL, а не OR: с OR ни одна из них на индекс не ляжет.
+     */
+    suspend fun directMaxId(partnerId: Int): Int {
+        val me = UserSession.effectiveId
+        return Db.scalarInt(
+            "SELECT MAX(id) FROM (" +
+                    "(SELECT MAX(id) AS id FROM messages WHERE sender_id=? AND receiver_id=?) " +
+                    "UNION ALL " +
+                    "(SELECT MAX(id) AS id FROM messages WHERE sender_id=? AND receiver_id=?)" +
+                    ") t",
+            me, partnerId, partnerId, me
+        )
+    }
+
+    /** То же для группы: MAX по индексу вместо счёта всех строк. */
+    suspend fun groupMaxId(groupId: Int): Int =
+        Db.scalarInt("SELECT MAX(id) FROM group_messages WHERE group_id=?", groupId)
+
     suspend fun directMessageCount(partnerId: Int): Int {
         val me = UserSession.effectiveId
         return Db.scalarInt(
@@ -441,10 +507,18 @@ object ChatRepository {
 
     suspend fun markAsRead(partnerId: Int) {
         runCatching {
-            Db.exec(
+            val affected = Db.exec(
                 "UPDATE messages SET is_read=1 WHERE sender_id=? AND receiver_id=? AND is_read=0",
                 partnerId, UserSession.effectiveId
             )
+            // Говорим отправителю, что его сообщения прочитаны. Без этого синяя
+            // галочка на ПК не появлялась ВООБЩЕ: его опрос следит за числом
+            // сообщений открытого чата, а прочтение число не меняет — он узнавал
+            // о нём только из этого события, которого мы не слали. Раскладка
+            // полей взята с ПК (MarkAsRead): в userId едет тот, кто прочитал.
+            if (affected > 0) {
+                SignalingClient.send("read", partnerId, UserSession.effectiveId, "direct")
+            }
         }
     }
 
