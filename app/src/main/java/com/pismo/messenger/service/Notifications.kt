@@ -20,7 +20,16 @@ object Notifications {
 
     const val CHANNEL_MESSAGES = "pismo_messages"
     const val CHANNEL_CALLS = "pismo_calls"
-    const val CHANNEL_SERVICE = "pismo_service"
+    /**
+     * Канал фоновой работы. Идентификатор со суффиксом _quiet — новый:
+     * важность у уже созданного канала программно не меняется (её решает
+     * пользователь), поэтому «сделать тише» можно только заведя другой канал,
+     * а старый удалив. См. createChannels.
+     */
+    const val CHANNEL_SERVICE = "pismo_service_quiet"
+
+    /** Прежний канал фоновой работы — удаляем, чтобы не висел в настройках. */
+    private const val CHANNEL_SERVICE_OLD = "pismo_service"
 
     const val ID_SERVICE = 1001
     const val ID_CALL = 1002
@@ -44,10 +53,23 @@ object Notifications {
                 setBypassDnd(true)
             }
         )
+        // Фоновая проверка сообщений. IMPORTANCE_MIN, а не LOW: при LOW
+        // Android держит значок в строке состояния, и «Проверка новых
+        // сообщений» висела там постоянно. При MIN значка нет, звука нет, а
+        // сама запись уезжает в самый низ шторки, в свёрнутые.
+        //
+        // Совсем убрать её нельзя: пока работает фоновый сервис, система
+        // ОБЯЗАНА показывать уведомление — это её способ сообщить, что
+        // приложение работает за спиной. Выключить целиком можно только
+        // вместе с самой фоновой проверкой, переключателем в настройках.
+        runCatching { nm.deleteNotificationChannel(CHANNEL_SERVICE_OLD) }
         nm.createNotificationChannel(
             NotificationChannel(
-                CHANNEL_SERVICE, "Фоновая работа", NotificationManager.IMPORTANCE_LOW
-            ).apply { description = "Проверка новых сообщений, когда приложение свёрнуто" }
+                CHANNEL_SERVICE, "Фоновая работа", NotificationManager.IMPORTANCE_MIN
+            ).apply {
+                description = "Проверка новых сообщений, когда приложение свёрнуто"
+                setShowBadge(false)
+            }
         )
     }
 
@@ -176,12 +198,26 @@ object Notifications {
         runCatching { NotificationManagerCompat.from(context).cancel(ID_MESSAGE_BASE + senderId) }
     }
 
+    /**
+     * Уведомление фонового сервиса — то, что должно мозолить глаза как можно
+     * меньше.
+     *
+     * Строчка «Проверка новых сообщений» убрана: она ничего не сообщала, а
+     * висела всегда. Заголовок оставлен один — совсем без текста уведомление
+     * показывать нельзя, да и понимать, чьё оно, всё-таки нужно.
+     *
+     * FOREGROUND_SERVICE_DEFERRED (Android 12 и новее) откладывает показ на
+     * десять секунд: короткий заход в фон успевает закончиться раньше, чем
+     * уведомление появится, и человек его не увидит вовсе.
+     */
     fun serviceNotification(context: Context): android.app.Notification =
         NotificationCompat.Builder(context, CHANNEL_SERVICE)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("PISMO")
-            .setContentText("Проверка новых сообщений")
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setSilent(true)
+            .setShowWhen(false)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_DEFERRED)
             .setOngoing(true)
             .setContentIntent(openAppIntent(context))
             .build()
