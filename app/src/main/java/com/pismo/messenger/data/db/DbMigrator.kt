@@ -157,53 +157,36 @@ object DbMigrator {
                 exec(c, "UPDATE server_roles SET can_channels=1 WHERE can_manage=1")
             }
         },
-        Migration(17, "messages: индексы под горячие запросы личных сообщений") { c ->
-            // В messages были только idx_msg_pair (sender_id, receiver_id) и
-            // idx_msg_created (created_at). Запросы, которые идут «от
-            // получателя» — непрочитанные, отметка прочитанного, список
-            // диалогов — опереться на них не могут и сканируют таблицу
-            // целиком. А вложения лежат в этой же таблице, в LONGBLOB, и с
-            // диска поднимаются вместе со строками: отсюда десятки МБ/с при
-            // отправке простого текста.
+        Migration(17, "messages: индекс под запросы «от получателя»") { c ->
+            // ЭТО ЛЕЧИТ «СОТНЮ МЕГАБАЙТ ЧТЕНИЯ НА КАЖДОЕ СООБЩЕНИЕ».
             //
-            // На ПК те же индексы кладут вручную скриптом
-            // sql/2026-08-19_message_indexes.sql — там приложение DDL не
-            // делает. Здесь мигратор есть, поэтому доводим сами.
-            if (!indexExists(c, "messages", "idx_msg_recv_read")) {
-                exec(c, "ALTER TABLE messages ADD INDEX idx_msg_recv_read (receiver_id, is_read, sender_id)")
-            }
-            if (!indexExists(c, "messages", "idx_msg_recv_time")) {
-                exec(c, "ALTER TABLE messages ADD INDEX idx_msg_recv_time (receiver_id, created_at, id)")
-            }
-            if (!indexExists(c, "messages", "idx_msg_send_time")) {
-                exec(c, "ALTER TABLE messages ADD INDEX idx_msg_send_time (sender_id, created_at, id)")
-            }
-            if (!indexExists(c, "messages", "idx_msg_pair_time")) {
-                exec(c, "ALTER TABLE messages ADD INDEX idx_msg_pair_time (sender_id, receiver_id, id)")
-            }
-        },
-        Migration(18, "messages: индекс под запросы «от получателя»") { c ->
-            // ПОЧЕМУ ЕЩЁ РАЗ, ПОСЛЕ 17. Миграция 17 спрашивала у
-            // information_schema, есть ли уже такой индекс, и при отказе в
-            // доступе (#1044) считала, что есть. То есть могла молча ничего не
-            // создать и при этом отметиться выполненной — а журнал общий с ПК,
-            // и второй клиент такую отметку уважает. Здесь у information_schema
-            // не спрашиваем вовсе: пробуем создать и глотаем 1061 «Duplicate
-            // key name», которая означает ровно то, что нужно.
+            // В боевой базе на messages стоят PRIMARY (id), idx_sender
+            // (sender_id), idx_receiver (receiver_id) и idx_conv (sender_id,
+            // receiver_id). Индекс по получателю ЕСТЬ — и всё равно больно:
             //
-            // Зачем он. Всё, что спрашивается ОТ ПОЛУЧАТЕЛЯ, на существующие
-            // idx_msg_pair (sender_id, receiver_id) и idx_msg_created опереться
-            // не может и сканирует messages целиком: непрочитанные по
-            // отправителям (у списка чатов — каждые 2,5 секунды), отметка
-            // «прочитано», список диалогов. Это и есть та самая полка чтения на
-            // сотню мегабайт после каждого отправленного сообщения.
+            //   WHERE receiver_id=? AND is_read=0 [AND sender_id=?]
             //
-            // Индекс ровно один. Направление «я писал» ложится на idx_msg_pair;
-            // (sender_id, receiver_id, id) — это он и есть, потому что в InnoDB
-            // первичный ключ дописывается в конец любого вторичного индекса. У
-            // group_messages и server_messages индексы по (group_id) и
-            // (channel_id) есть с самого начала, и MAX(id) по ним — движение к
-            // концу индекса.
+            // по idx_receiver находит все входящие, но is_read и sender_id в
+            // индексе нет, поэтому за каждым письмом идёт поход в саму таблицу.
+            // А строка там широкая: longtext с текстом и четыре longblob. Вот
+            // эти походы и дают полку чтения. Запрос уходит на каждый опрос
+            // списка чатов (2,5 с) у КАЖДОГО клиента, плюс на каждую отметку
+            // прочитанного, плюс на каждый показ списка диалогов.
+            //
+            // (receiver_id, is_read, sender_id) закрывает такой запрос целиком:
+            // ответ собирается из самого индекса, в таблицу ходить незачем.
+            //
+            // Индекс ровно один. Направление «я писал» ложится на idx_conv, а
+            // (sender_id, receiver_id, id) — это он и есть: в InnoDB первичный
+            // ключ дописывается в конец любого вторичного индекса. У
+            // group_messages и server_messages есть idx_group (group_id) и
+            // idx_ch (channel_id), и MAX(id) по ним — движение к концу индекса.
+            //
+            // information_schema ни о чём не спрашиваем: на части хостингов
+            // доступ к ней закрыт, и проверка упала бы раньше самого ALTER,
+            // либо (хуже) ответила бы «индекс уже есть» и миграция молча
+            // отметилась бы выполненной. Просто пробуем создать и глотаем 1061
+            // «Duplicate key name» — она значит ровно то, что нужно.
             //
             // Права ALTER у учётной записи приложения может не быть; тогда
             // индекс кладётся руками, см. sql/2026-08-20_feed_indexes.sql.
@@ -310,22 +293,6 @@ object DbMigrator {
             }
             false
         }.getOrDefault(false)
-    }
-
-    private fun indexExists(c: Connection, table: String, index: String): Boolean {
-        runCatching {
-            c.prepareStatement(
-                "SELECT COUNT(*) FROM information_schema.STATISTICS " +
-                        "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND INDEX_NAME=?"
-            ).use { ps ->
-                ps.setString(1, table)
-                ps.setString(2, index)
-                ps.executeQuery().use { rs -> return rs.next() && rs.getInt(1) > 0 }
-            }
-        }
-        // Не смогли спросить — считаем, что индекс есть: лишний ALTER на
-        // большой таблице дороже, чем его отсутствие.
-        return true
     }
 
     private fun columnExists(c: Connection, table: String, column: String): Boolean {
