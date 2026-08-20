@@ -20,8 +20,8 @@ android {
         // GitHub Actions считает их из тега (v1.2 → versionName 1.2,
         // versionCode 10200) — см. .github/workflows/release.yml. Здесь
         // остаются значения для сборки руками.
-        versionCode = (providers.gradleProperty("pismoVersionCode").orNull)?.toIntOrNull() ?: 2
-        versionName = providers.gradleProperty("pismoVersionName").orNull ?: "1.1"
+        versionCode = (providers.gradleProperty("pismoVersionCode").orNull)?.toIntOrNull() ?: 10400
+        versionName = providers.gradleProperty("pismoVersionName").orNull ?: "1.4"
         vectorDrawables { useSupportLibrary = true }
     }
 

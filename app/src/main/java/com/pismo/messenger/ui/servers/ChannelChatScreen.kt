@@ -3,6 +3,7 @@ package com.pismo.messenger.ui.servers
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -62,10 +63,13 @@ import com.pismo.messenger.core.PresenceReporter
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.ellipsize
 import com.pismo.messenger.core.formatDateSeparator
+import com.pismo.messenger.core.formatDuration
 import com.pismo.messenger.data.MessageMemory
 import com.pismo.messenger.data.model.ChatMessage
 import com.pismo.messenger.data.model.ReactionSummary
 import com.pismo.messenger.data.model.Scope
+import com.pismo.messenger.media.WavPlayer
+import com.pismo.messenger.media.WavRecorder
 import com.pismo.messenger.data.model.ServerPermissions
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.ReactionsRepository
@@ -77,9 +81,11 @@ import com.pismo.messenger.ui.chat.MAX_ATTACH_BYTES
 import com.pismo.messenger.ui.chat.MessageBubble
 import com.pismo.messenger.ui.chat.PendingFile
 import com.pismo.messenger.ui.chat.PinnedMessagesDialog
+import com.pismo.messenger.ui.chat.VOICE_MAX_SECONDS
 import com.pismo.messenger.ui.chat.fileSizeOf
 import com.pismo.messenger.ui.chat.queryFileName
 import com.pismo.messenger.ui.components.DateSeparator
+import com.pismo.messenger.ui.components.VoiceDraftBar
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -171,6 +177,23 @@ fun ChannelChatScreen(
 
     var attachNote by remember(channelId) { mutableStateOf("") }
 
+    // Голосовые в каналах. Раньше их здесь не было вовсе — записать голосовое
+    // можно было только в личном чате. Устроено так же, как там: тап
+    // начинает запись, второй заканчивает, записанное ждёт в полосе над
+    // строкой ввода и уходит обычной кнопкой отправки.
+    val recorder = remember { WavRecorder(scope) }
+    var recording by remember(channelId) { mutableStateOf(false) }
+    var recordSeconds by remember(channelId) { mutableIntStateOf(0) }
+    var pendingVoice by remember(channelId) { mutableStateOf<ByteArray?>(null) }
+
+    fun keepVoice(wav: ByteArray?) {
+        recording = false
+        WavPlayer.stop()
+        // Меньше 4 КБ — случайный двойной тап, а не голосовое.
+        if (wav == null || wav.size <= 4000) return
+        pendingVoice = wav
+    }
+
     suspend fun reload(scrollToEnd: Boolean = false) {
         runCatching {
             val loaded = ServerRepository.channelMessages(channelId, limit = pageLimit)
@@ -215,6 +238,21 @@ fun ChannelChatScreen(
         if (scrollToEnd && messages.isNotEmpty() && atBottom && !listState.isScrollInProgress) {
             listState.scrollToItem(messages.lastIndex)
         }
+    }
+
+    // Таймер записи и тот же потолок в три минуты, что в личных чатах:
+    // голосовое целиком лежит в памяти и уходит одним BLOB'ом.
+    LaunchedEffect(recording) {
+        if (!recording) {
+            recordSeconds = 0
+            return@LaunchedEffect
+        }
+        recordSeconds = 0
+        while (isActive && recording && recordSeconds < VOICE_MAX_SECONDS) {
+            delay(1000)
+            recordSeconds++
+        }
+        if (recording && recordSeconds >= VOICE_MAX_SECONDS) keepVoice(recorder.stop())
     }
 
     LaunchedEffect(channelId) {
@@ -284,6 +322,28 @@ fun ChannelChatScreen(
             }
             return
         }
+        // Записанное голосовое уходит здесь же, вместе с подписью, если она есть.
+        val voice = pendingVoice
+        if (voice != null) {
+            sending = true
+            WavPlayer.stop()
+            scope.launch {
+                runCatching {
+                    ServerRepository.sendChannelMessage(
+                        channelId = channelId,
+                        text = text,
+                        replyToId = replyTo?.id ?: 0,
+                        audio = voice,
+                    )
+                    SignalingClient.send("new_message", 0, channelId, "server")
+                }
+                input = TextFieldValue(""); replyTo = null; pendingVoice = null
+                sending = false
+                reload(scrollToEnd = true)
+            }
+            return
+        }
+
         val attach = pending
         // С вложением подпись необязательна — как в личных чатах.
         if (text.isEmpty() && attach == null) return
@@ -604,7 +664,57 @@ fun ChannelChatScreen(
                 )
             }
 
-            Row(
+            // Записанное и ещё не отправленное голосовое.
+            pendingVoice?.let { wav ->
+                VoiceDraftBar(
+                    wav = wav,
+                    onRerecord = {
+                        pendingVoice = null
+                        recording = recorder.start()
+                    },
+                    onDrop = { pendingVoice = null },
+                )
+            }
+
+            // Во время записи строку ввода подменяет панель с таймером —
+            // один в один как в личных чатах.
+            if (recording) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(PismoColors.BgDarkest)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(PismoColors.Red)
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        formatDuration(recordSeconds.toLong()),
+                        color = PismoColors.TextPrimary, fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        "из ${VOICE_MAX_SECONDS / 60} мин",
+                        color = PismoColors.TextMuted, fontSize = 12.sp,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    androidx.compose.material3.TextButton(onClick = {
+                        recorder.cancel()
+                        recording = false
+                    }) { Text("Отмена", color = PismoColors.Red, fontSize = 13.sp) }
+                    IconButton(onClick = { keepVoice(recorder.stop()) }) {
+                        Icon(Icons.Default.Stop, "Остановить", tint = PismoColors.Blurple)
+                    }
+                }
+            }
+
+            if (!recording) Row(
                 Modifier
                     .fillMaxWidth()
                     .background(PismoColors.BgDarkest)
@@ -613,6 +723,15 @@ fun ChannelChatScreen(
             ) {
                 IconButton(onClick = { filePicker.launch(arrayOf("*/*")) }, enabled = !sending) {
                     Icon(Icons.Default.AttachFile, "Прикрепить", tint = PismoColors.TextMuted)
+                }
+                IconButton(
+                    onClick = {
+                        if (recording) keepVoice(recorder.stop())
+                        else recording = recorder.start()
+                    },
+                    enabled = !sending,
+                ) {
+                    Icon(Icons.Default.Mic, "Голосовое", tint = PismoColors.TextMuted)
                 }
                 IconButton(onClick = { showGifPicker = true }, enabled = !sending) {
                     Icon(Icons.Default.Gif, "Гифки", tint = PismoColors.TextMuted)

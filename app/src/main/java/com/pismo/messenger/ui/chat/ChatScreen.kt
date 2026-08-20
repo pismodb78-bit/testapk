@@ -104,6 +104,7 @@ import com.pismo.messenger.ui.components.FileBadge
 import com.pismo.messenger.ui.components.GroupAvatar
 import com.pismo.messenger.ui.components.LetterAvatar
 import com.pismo.messenger.ui.components.UserAvatar
+import com.pismo.messenger.ui.components.VoiceDraftBar
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -113,7 +114,11 @@ import kotlinx.coroutines.launch
  * Потолок длительности голосового — 3 минуты. Запись целиком держится в
  * памяти и уходит в БД одним BLOB'ом, поэтому верхняя граница обязательна.
  */
-private const val VOICE_MAX_SECONDS = 180
+/**
+ * Потолок длительности голосового. internal, а не private: тем же числом
+ * ограничены голосовые в каналах серверов — пусть оно будет одно на всех.
+ */
+internal const val VOICE_MAX_SECONDS = 180
 
 /**
  * Потолок размера вложения.
@@ -207,6 +212,17 @@ fun ChatScreen(
     )
     val recorder = remember { WavRecorder(scope) }
     var recording by remember { mutableStateOf(false) }
+
+    /**
+     * Записанное, но ещё НЕ отправленное голосовое.
+     *
+     * Раньше остановка записи сразу отправляла её собеседнику: ни послушать
+     * себя, ни передумать, ни перезаписать. Теперь записанное ждёт здесь, а
+     * над строкой ввода появляется полоса — прослушать, перезаписать,
+     * выбросить. Уходит оно обычной кнопкой отправки, вместе с текстом, если
+     * его набрали.
+     */
+    var pendingVoice by remember(targetId) { mutableStateOf<ByteArray?>(null) }
     var recordSeconds by remember { mutableStateOf(0) }
     var showCircleRecorder by remember { mutableStateOf(false) }
     var showGifPicker by remember { mutableStateOf(false) }
@@ -331,6 +347,19 @@ fun ChatScreen(
         }
     }
 
+    /**
+     * Остановили запись — оставляем записанное в полосе предпрослушивания.
+     *
+     * Меньше 4 КБ (примерно десятая доля секунды) — это случайный двойной тап
+     * по кнопке, а не голосовое: молча выбрасываем.
+     */
+    fun keepVoice(wav: ByteArray?) {
+        recording = false
+        WavPlayer.stop()
+        if (wav == null || wav.size <= 4000) return
+        pendingVoice = wav
+    }
+
     fun sendVoice(wav: ByteArray?) {
         recording = false
         // Запись останавливают и кнопкой, и таймером на три минуты. Если оба
@@ -367,7 +396,7 @@ fun ChatScreen(
             delay(1000)
             recordSeconds++
         }
-        if (recording && recordSeconds >= VOICE_MAX_SECONDS) sendVoice(recorder.stop())
+        if (recording && recordSeconds >= VOICE_MAX_SECONDS) keepVoice(recorder.stop())
     }
 
     // reconnects в ключе: после восстановления связи с базой экран
@@ -584,6 +613,33 @@ fun ChatScreen(
             }
             return
         }
+        // Записанное голосовое уходит отсюда же — вместе с текстом, если он
+        // набран. Забираем его до проверки на пустоту: подпись необязательна.
+        val voice = pendingVoice
+        if (voice != null) {
+            if (sending) return
+            sending = true
+            WavPlayer.stop()
+            scope.launch {
+                runCatching {
+                    ChatRepository.sendMessage(
+                        scope = scopeKind,
+                        target = targetId,
+                        text = text,
+                        audio = voice,
+                        replyToId = replyTo?.id ?: 0,
+                    )
+                    notifyPeers(isGroup, targetId)
+                }
+                input = ""
+                replyTo = null
+                pendingVoice = null
+                sending = false
+                reload(scrollToEnd = true, force = true)
+            }
+            return
+        }
+
         // Без вложения пустой текст отправлять нечего; с вложением —
         // наоборот, подпись необязательна.
         if ((text.isEmpty() && attach == null) || sending) return
@@ -915,6 +971,21 @@ fun ChatScreen(
                 }
             }
 
+            // Записанное и ещё не отправленное — полоса над строкой ввода.
+            pendingVoice?.let { wav ->
+                VoiceDraftBar(
+                    wav = wav,
+                    onRerecord = {
+                        // Старое стираем сразу и тут же начинаем новую запись —
+                        // как просили: «перезаписать» это одно действие, а не
+                        // «удалить», потом «записать».
+                        pendingVoice = null
+                        recording = recorder.start()
+                    },
+                    onDrop = { pendingVoice = null },
+                )
+            }
+
             // Во время записи строку ввода подменяет панель с таймером и
             // явной кнопкой отмены. Скрытый свайп-жест здесь не подходит:
             // запись включается тапом, а не удержанием, и «смахнуть» просто
@@ -954,8 +1025,8 @@ fun ChatScreen(
                         recorder.cancel()
                         recording = false
                     }) { Text("Отмена", color = PismoColors.Red, fontSize = 13.sp) }
-                    IconButton(onClick = { sendVoice(recorder.stop()) }) {
-                        Icon(Icons.Default.Send, "Отправить", tint = PismoColors.Blurple)
+                    IconButton(onClick = { keepVoice(recorder.stop()) }) {
+                        Icon(Icons.Default.Stop, "Остановить", tint = PismoColors.Blurple)
                     }
                 }
             }
@@ -1029,7 +1100,7 @@ fun ChatScreen(
                         // Удержание — запись голосового, как кнопка 🎤 на ПК.
                         IconButton(
                             onClick = {
-                                if (recording) sendVoice(recorder.stop())
+                                if (recording) keepVoice(recorder.stop())
                                 else recording = recorder.start()
                             },
                         ) {
