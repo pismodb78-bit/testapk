@@ -120,18 +120,31 @@ object ChatRepository {
      * строка в списке вела в пустой чат и только путала. Обычный список
      * диалогов делает то же самое условием `u.id <> ?`.
      */
-    suspend fun loadAllUsers(): List<Conversation> = Db.query(
-        "SELECT id, Name, Surname, login, role FROM users WHERE id <> ? ORDER BY Name",
-        UserSession.effectiveId
-    ) { rs ->
-        Conversation(
-            userId = rs.getInt("id"),
-            name = buildName(rs.str("Name"), rs.str("Surname"), rs.str("login")),
-            lastMessage = rs.str("role"),
-            lastTimeMs = null,
-            unread = 0,
-            login = rs.str("login"),
-        )
+    suspend fun loadAllUsers(): List<Conversation> {
+        // Непрочитанные здесь тоже нужны. На ПК админские карточки складывает
+        // AddAdminUserCard, но красит их тот же UpdateBadgesOnCards, что и
+        // обычный список, — то есть красный кружок с числом на них есть. У нас
+        // он был всегда нулевой: запрос про сообщения не спрашивал вовсе.
+        //
+        // Берём тем же методом, что и обычный список: там уже и блокировки
+        // исключены, и запрос ложится на индекс целиком. Опрос списка чатов
+        // и так зовёт его каждые 2,5 секунды и перезагружает список при
+        // изменении — значит, цифры будут обновляться сами.
+        val unread = runCatching { unreadBySender() }.getOrDefault(emptyMap())
+        return Db.query(
+            "SELECT id, Name, Surname, login, role FROM users WHERE id <> ? ORDER BY Name",
+            UserSession.effectiveId
+        ) { rs ->
+            val id = rs.getInt("id")
+            Conversation(
+                userId = id,
+                name = buildName(rs.str("Name"), rs.str("Surname"), rs.str("login")),
+                lastMessage = rs.str("role"),
+                lastTimeMs = null,
+                unread = unread[id] ?: 0,
+                login = rs.str("login"),
+            )
+        }
     }
 
     /**
