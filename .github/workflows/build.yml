@@ -30,8 +30,19 @@ jobs:
 
       - run: chmod +x ./gradlew
 
+      # Ошибки компиляции печатаем отдельно и первыми. Без этого в конце лога
+      # оказывается стек Gradle на полтораста строк, а строки «e: file: …» —
+      # единственное, что нужно, — тонут где-то в середине.
       - name: Собрать debug
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          ./gradlew assembleDebug --no-daemon 2>&1 | tee build.log
+
+      - name: Ошибки компиляции
+        if: failure()
+        run: |
+          echo "──────── ошибки компиляции ────────"
+          grep -E "^e: |^w: .*error" build.log || echo "(строк 'e:' в логе нет — смотрите полный лог)"
 
       - uses: actions/upload-artifact@v4
         with:
