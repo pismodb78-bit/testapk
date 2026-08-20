@@ -816,6 +816,8 @@ private fun MicTestRow() {
 private fun MicLevelBar(thresholdDb: Float) {
     val scope = rememberCoroutineScope()
     val level by MicLevelMonitor.levelDb.collectAsState()
+    val testPhase by MicTester.phase.collectAsState()
+    val testing = testPhase != MicTester.Phase.IDLE
 
     // В звонке уровень берётся прямо из цепочки разговора, а не из своего
     // микрофона: у той величины и порог, и звук — общие.
@@ -824,6 +826,19 @@ private fun MicLevelBar(thresholdDb: Float) {
     DisposableEffect(Unit) {
         MicLevelMonitor.acquire(scope)
         onDispose { MicLevelMonitor.release() }
+    }
+
+    // Во время проверки микрофона шкалы нет. Она мерила бы сырой вход, до
+    // автоусиления, — то есть показывала бы на два-три десятка децибел
+    // меньше, чем показывает всё остальное время и чем видит порог в
+    // разговоре. Полоска, которая врёт, хуже отсутствующей.
+    if (testing) {
+        Text(
+            "Шкала на время проверки скрыта: она показывала бы сырой уровень " +
+                    "микрофона, до автоусиления, и расходилась бы со звонком.",
+            color = PismoColors.TextMuted, fontSize = 10.sp,
+        )
+        return
     }
 
     val floor = MicLevelMonitor.FLOOR_DB
@@ -866,15 +881,12 @@ private fun MicLevelBar(thresholdDb: Float) {
             when {
                 level <= floor + 0.5f -> if (inCall) "Тишина (уровень из звонка)" else "Тишина"
                 inCall -> "${level.toInt()} дБ — уровень из идущего разговора"
-                MicTester.isRunning ->
-                    "${level.toInt()} дБ — настоящий уровень, идёт проверка"
                 // Вне звонка меряется сырой микрофон, а порог сравнивается с
                 // сигналом ПОСЛЕ автоусиления WebRTC. Разницу компенсируем
                 // такой же автоматикой, но это оценка — точная цифра в звонке.
                 else -> "${level.toInt()} дБ — оценка, точный уровень виден в звонке"
             },
-            color = if (inCall || MicTester.isRunning) PismoColors.Green
-            else PismoColors.TextMuted,
+            color = if (inCall) PismoColors.Green else PismoColors.TextMuted,
             fontSize = 10.sp,
         )
     }
