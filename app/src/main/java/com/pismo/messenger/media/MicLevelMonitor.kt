@@ -5,6 +5,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import com.pismo.messenger.call.ActiveCall
+import com.pismo.messenger.core.Prefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -151,7 +152,10 @@ object MicLevelMonitor {
                     }
                     val rms = sqrt(sum / read)
                     val raw = if (rms > 1.0) (20.0 * log10(rms / 32768.0)).toFloat() else -100f
-                    _levelDb.value = smooth(_levelDb.value, applyAgc(raw))
+                    // Усиление микрофона в звонке применяется ДО замера уровня,
+                    // значит и шкала обязана его учитывать: иначе выставленный
+                    // по ней порог в разговоре окажется не там, где ставили.
+                    _levelDb.value = smooth(_levelDb.value, applyAgc(raw + gainDb()))
                 }
             } finally {
                 closeRecord()
@@ -187,6 +191,13 @@ object MicLevelMonitor {
         record = null
         runCatching { r.stop() }
         runCatching { r.release() }
+    }
+
+    /** Ползунок «усиление микрофона» в децибелах: ×2 это +6 дБ. */
+    private fun gainDb(): Float {
+        val g = Prefs.micGain
+        if (g > 0.99f && g < 1.01f) return 0f
+        return (20.0 * log10(g.coerceAtLeast(0.05f).toDouble())).toFloat()
     }
 
     /**

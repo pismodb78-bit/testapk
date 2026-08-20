@@ -68,6 +68,21 @@ class MicProcessor(sampleRate: Int) {
     var voiceThresholdDb: Int = -40
 
     /**
+     * Усиление на ВХОДЕ цепочки — порт MicrophoneGain из devices.ini.
+     *
+     * На ПК его ставит сам транспорт (SetMicGain), то есть ДО всякой
+     * обработки, и меняется оно прямо в разговоре. Здесь так же — и по той же
+     * причине: тихий микрофон надо поднять раньше, чем его увидят порог
+     * активации и шумодав. Если поднимать после, гейт успеет посчитать речь
+     * фоном и вырезать её, а шумодав будет чистить сигнал, которого почти нет.
+     *
+     * Этим он и отличается от outputGainPercent: тот добирает громкость уже
+     * ПОСЛЕ чистки и на решения цепочки не влияет.
+     */
+    @Volatile
+    var inputGain: Float = 1f
+
+    /**
      * Makeup-усиление на выходе цепи, 0..300 %. Порт VoiceOutputGain: шумодав
      * неизбежно приглушает голос, и этим ползунком громкость добирают обратно.
      */
@@ -113,7 +128,19 @@ class MicProcessor(sampleRate: Int) {
             limiter = TransientLimiter(sampleRate)
         }
 
-        // ── 1) Уровень сырого блока в дБFS ──
+        // ── 0) Усиление на входе ──
+        //
+        // Строго до замера уровня: порог активации обязан судить по тому же
+        // сигналу, который уйдёт в эфир.
+        val ig = inputGain.coerceIn(0.1f, 4f)
+        if (ig < 0.99f || ig > 1.01f) {
+            for (i in 0 until n) {
+                val idx = i * 2
+                writeShort(buffer, idx, softGain(readShort(buffer, idx), ig))
+            }
+        }
+
+        // ── 1) Уровень блока в дБFS ──
         var sum = 0.0
         for (i in 0 until n) {
             val s = readShort(buffer, i * 2).toDouble()

@@ -286,7 +286,14 @@ fun SettingsScreen(onBack: () -> Unit) {
             )
             Slider(
                 value = micGain,
-                onValueChange = { micGain = it },
+                onValueChange = {
+                    micGain = it
+                    com.pismo.messenger.call.ActiveCall.engine?.previewMicGain(it)
+                },
+                onValueChangeFinished = {
+                    Prefs.micGain = micGain
+                    com.pismo.messenger.call.ActiveCall.engine?.setMicGain(micGain)
+                },
                 valueRange = 0.5f..2.0f,
                 steps = 14,
                 colors = SliderDefaults.colors(
@@ -295,8 +302,12 @@ fun SettingsScreen(onBack: () -> Unit) {
                 ),
             )
             Text(
-                "Применяется к голосовым сообщениям и видео-кружочкам — тот же " +
-                        "множитель, что MicrophoneGain в devices.ini на ПК.",
+                "Тот же множитель, что MicrophoneGain в devices.ini на ПК: он " +
+                        "поднимает микрофон в самом начале цепочки — до порога " +
+                        "активации и шумодава, — поэтому тихий микрофон стоит " +
+                        "вытягивать именно здесь, а не громкостью на выходе. " +
+                        "Действует и в звонке (сразу, не выходя из разговора), и в " +
+                        "голосовых сообщениях с видео-кружочками.",
                 color = PismoColors.TextMuted, fontSize = 12.sp,
             )
             Spacer(Modifier.height(8.dp))
@@ -690,58 +701,88 @@ private fun RowScope.ThemeChip(label: String, selected: Boolean, onClick: () -> 
  *
  * Шкала отвечает на вопрос «громко ли», а главный вопрос другой: «как это
  * звучит у собеседника». Шумодав и порог слышны, а не видны — по полоске не
- * понять, что подавление съедает окончания слов. Тест гоняет микрофон через
- * ту же цепочку, что и звонок, и возвращает в наушники.
+ * понять, что подавление съедает окончания слов. Проверка гоняет микрофон
+ * через ту же цепочку, что и звонок.
+ *
+ * Режим выбирается сам, по наличию наушников: с ними — сквозная проверка,
+ * как на ПК; без них телефон сначала записывает несколько секунд, а потом
+ * проигрывает их вслух. Причина в MicTester: сквозной возврат в динамик,
+ * стоящий рядом с микрофоном, заводится в свист.
  */
 @Composable
 private fun MicTestRow() {
-    var running by remember { mutableStateOf(MicTester.isRunning) }
+    val phase by MicTester.phase.collectAsState()
+    val left by MicTester.secondsLeft.collectAsState()
     // В разговоре проверять нечего: микрофон занят звонком, и там и так
     // слышно, как ты звучишь. Кнопку в этом случае просто гасим.
     val inCall = com.pismo.messenger.call.ActiveCall.engine != null
+    // Спрашиваем при каждой перерисовке: наушники втыкают ровно тогда, когда
+    // собрались проверять микрофон, и подсказка обязана это заметить.
+    val headphones = remember(phase) { MicTester.headphonesConnected() }
+    val idle = phase == MicTester.Phase.IDLE
 
-    // Тест держит микрофон: уходя с экрана, его надо гасить, иначе он
+    // Проверка держит микрофон: уходя с экрана, её надо гасить, иначе она
     // продолжит писать в фоне и займёт микрофон следующему звонку.
     DisposableEffect(Unit) {
-        onDispose {
-            MicTester.stop()
-        }
+        onDispose { MicTester.stop() }
     }
 
     Spacer(Modifier.height(8.dp))
     Button(
-        onClick = {
-            if (running) MicTester.stop() else MicTester.start()
-            // Не `!running`: start() может и отказаться (микрофон занят),
-            // и кнопка осталась бы в состоянии «идёт проверка» без проверки.
-            running = MicTester.isRunning
-        },
+        onClick = { if (idle) MicTester.start() else MicTester.stop() },
         enabled = !inCall,
         colors = ButtonDefaults.buttonColors(
-            containerColor = if (running) PismoColors.Red else PismoColors.BgElevated
+            containerColor = if (idle) PismoColors.BgElevated else PismoColors.Red
         ),
         shape = RoundedCornerShape(8.dp),
     ) {
         Text(
-            if (running) "Остановить проверку" else "Проверить микрофон",
+            when (phase) {
+                MicTester.Phase.IDLE ->
+                    if (headphones) "Проверить микрофон"
+                    else "Записать ${MicTester.RECORD_SECONDS} секунд и прослушать"
+
+                MicTester.Phase.LOOPBACK -> "Остановить проверку"
+                MicTester.Phase.RECORDING -> "Идёт запись… $left с"
+                MicTester.Phase.PLAYING -> "Проигрываю — стоп"
+            },
             color = PismoColors.TextPrimary,
         )
     }
     Text(
-        if (inCall)
-            "Идёт разговор — проверять нечего: собеседники слышат вас прямо " +
-                    "сейчас, а шкала выше показывает настоящий уровень из звонка."
-        else if (running)
-            "Говорите — вы слышите себя ровно так, как вас слышат в звонке. " +
-                    "Шкала выше сейчас показывает настоящий уровень, а не оценку: " +
-                    "порог по ней можно выставлять точно. Шумодав и порог крутятся " +
-                    "прямо во время проверки."
-        else
-            "Микрофон пойдёт через ту же цепочку, что и в звонке, и вернётся " +
-                    "в наушники. ОБЯЗАТЕЛЬНО НАДЕНЬТЕ НАУШНИКИ: через динамик " +
-                    "телефона это заведётся в свист — эхоподавления в этой " +
-                    "цепочке нет.",
-        color = if (running) PismoColors.Green else PismoColors.TextMuted,
+        when {
+            inCall ->
+                "Идёт разговор — проверять нечего: собеседники слышат вас прямо " +
+                        "сейчас, а шкала выше показывает настоящий уровень из звонка."
+
+            phase == MicTester.Phase.LOOPBACK ->
+                "Говорите — вы слышите себя ровно так, как вас слышат в звонке. " +
+                        "Шкала выше сейчас показывает настоящий уровень, а не оценку: " +
+                        "порог по ней можно выставлять точно. Шумодав, порог и " +
+                        "усиление крутятся прямо во время проверки."
+
+            phase == MicTester.Phase.RECORDING ->
+                "Говорите. Шкала выше сейчас показывает настоящий уровень — тот, " +
+                        "с которым сравнивается порог. Как только запись кончится, " +
+                        "телефон проиграет её вслух."
+
+            phase == MicTester.Phase.PLAYING ->
+                "Это ровно то, что услышал бы собеседник: тот же шумодав, тот же " +
+                        "порог, то же усиление. Не нравится — поправьте ползунки и " +
+                        "запишите ещё раз."
+
+            headphones ->
+                "Наушники подключены — проверка будет сквозной: говорите и сразу " +
+                        "слышите себя, как на ПК."
+
+            else ->
+                "Наушников нет, поэтому телефон сначала запишет " +
+                        "${MicTester.RECORD_SECONDS} секунд, а потом проиграет их вслух: " +
+                        "сквозной возврат в динамик, который стоит рядом с " +
+                        "микрофоном, завёлся бы в свист. Наденьте наушники — " +
+                        "проверка станет сквозной."
+        },
+        color = if (idle) PismoColors.TextMuted else PismoColors.Green,
         fontSize = 11.sp,
     )
 }

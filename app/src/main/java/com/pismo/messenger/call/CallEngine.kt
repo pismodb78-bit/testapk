@@ -988,6 +988,7 @@ class CallEngine(
             voiceGateAuto = Prefs.voiceAutoSensitivity
             voiceThresholdDb = Prefs.voiceThresholdDb
             outputGainPercent = Prefs.voiceOutputGain
+            inputGain = Prefs.micGain
         }
     }
 
@@ -1037,6 +1038,17 @@ class CallEngine(
     }
 
     /**
+     * Усиление микрофона на лету — порт SetMicGain.
+     *
+     * На ПК CallForm сверяет DeviceSettings.MicrophoneGain на каждом тике и
+     * при изменении зовёт транспорт, поэтому ползунок слышно, не выходя из
+     * разговора. Здесь то же самое делается прямо из настроек.
+     */
+    fun previewMicGain(gain: Float) {
+        audio.mic?.inputGain = gain
+    }
+
+    /**
      * Уровень микрофона в дБFS, каким его видит порог активации.
      *
      * Отдаётся шкале в настройках: сравнивать имеет смысл только с тем же
@@ -1055,6 +1067,12 @@ class CallEngine(
     /** Makeup-усиление голоса на выходе цепи, 0..300 % — порт SetOutputGain. */
     fun setVoiceOutputGain(percent: Int) {
         Prefs.voiceOutputGain = percent
+        audio.mic = newMicProcessor()
+    }
+
+    /** Усиление микрофона на входе цепи — порт SetMicGain. */
+    fun setMicGain(gain: Float) {
+        Prefs.micGain = gain
         audio.mic = newMicProcessor()
     }
 
