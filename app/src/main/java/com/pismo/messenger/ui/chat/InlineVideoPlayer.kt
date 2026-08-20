@@ -627,7 +627,7 @@ fun InlineAudioBubble(
                     }.getOrNull()
                     status = when {
                         bytes == null -> "Не удалось загрузить"
-                        MediaSaver.saveFile(context, fileName, bytes) -> "Сохранено"
+                        MediaSaver.saveFile(context, fileName, bytes) -> "Сохранено в загрузки"
                         else -> "Не удалось сохранить"
                     }
                 }

@@ -17,11 +17,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -61,6 +63,7 @@ import com.pismo.messenger.data.model.Scope
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.PinsRepository
 import com.pismo.messenger.data.repo.ReactionsRepository
+import com.pismo.messenger.media.MediaSaver
 import com.pismo.messenger.media.WavPlayer
 import com.pismo.messenger.ui.components.AnimatedImage
 import com.pismo.messenger.ui.components.FileBadge
@@ -322,7 +325,7 @@ fun MessageBubble(
                             ) {
                                 FileBadge(fileBadge(msg.fileName), fileColor(msg.fileName), 36.dp)
                                 Spacer(Modifier.width(8.dp))
-                                Column {
+                                Column(Modifier.weight(1f, fill = false)) {
                                     Text(
                                         msg.fileName,
                                         color = PismoColors.onBubble(isMine),
@@ -334,6 +337,43 @@ fun MessageBubble(
                                         fileStatus.ifBlank { "Нажмите, чтобы открыть" },
                                         color = PismoColors.TextMuted,
                                         fontSize = 11.sp,
+                                    )
+                                }
+                                // Отдельная кнопка «скачать». Раньше у обычных
+                                // файлов её не было вовсе: нажатие на карточку
+                                // клало файл во временную папку приложения и
+                                // отдавало стороннему приложению — то есть
+                                // «открыть», а не «сохранить». Файл после этого
+                                // жил в кеше, который система вправе почистить,
+                                // и найти его человек не мог нигде.
+                                //
+                                // Своё вложение скачивается так же, как чужое:
+                                // отправить документ с телефона и потом не суметь
+                                // его оттуда достать — странность, которой на ПК
+                                // нет.
+                                Spacer(Modifier.width(4.dp))
+                                IconButton(
+                                    onClick = {
+                                        scope.launch {
+                                            fileStatus = "Сохранение…"
+                                            val data = runCatching {
+                                                ChatRepository.loadFile(msg.id, scopeKind, msg.fileName)
+                                            }.getOrNull()
+                                            fileStatus = when {
+                                                data == null -> "Не удалось загрузить"
+                                                MediaSaver.saveFile(context, msg.fileName, data) ->
+                                                    "Сохранено в загрузки"
+                                                else -> "Не удалось сохранить"
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.size(32.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Default.Download,
+                                        "Сохранить в загрузки",
+                                        tint = PismoColors.onBubble(isMine),
+                                        modifier = Modifier.size(18.dp),
                                     )
                                 }
                             }
