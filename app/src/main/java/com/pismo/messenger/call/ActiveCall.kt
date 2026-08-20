@@ -1,5 +1,7 @@
 package com.pismo.messenger.call
 
+import android.os.SystemClock
+
 import com.pismo.messenger.data.repo.CallRepository
 import com.pismo.messenger.data.repo.PresenceRepository
 import kotlinx.coroutines.CoroutineScope
@@ -71,8 +73,25 @@ object ActiveCall {
     @Volatile
     private var starting = false
 
+    /** Когда взяли право начать — для срока годности защёлки, см. isBusy. */
+    private var startedAt = 0L
+
+    /**
+     * Сколько защёлка «звонок поднимается» живёт, если её так и не сняли.
+     *
+     * Она нужна против двойного запуска, но у неё оказалось скверное
+     * свойство: любой путь, на котором её забыли отпустить, глушил звонки
+     * НАВСЕГДА — до перезапуска приложения. Снаружи это выглядело так, что
+     * окно разговора открывается и тут же само закрывается. Срок годности
+     * превращает «навсегда» в полминуты: за это время подключение либо
+     * состоялось, либо провалилось, и держать право дальше не за чем.
+     */
+    private const val CLAIM_TTL_MS = 30_000L
+
     /** Идёт разговор или он прямо сейчас поднимается. */
-    val isBusy: Boolean get() = starting || _current.value != null
+    val isBusy: Boolean
+        get() = _current.value != null ||
+                (starting && SystemClock.elapsedRealtime() - startedAt < CLAIM_TTL_MS)
 
     /**
      * Взять право начать звонок. false — начинать не надо: либо разговор уже
@@ -82,6 +101,7 @@ object ActiveCall {
     fun claimStart(): Boolean {
         if (isBusy) return false
         starting = true
+        startedAt = SystemClock.elapsedRealtime()
         return true
     }
 
@@ -154,6 +174,14 @@ object ActiveCall {
      * ушли.
      */
     fun hangUp() {
+        // Защёлку снимаем ДО всего остального и даже если разговора нет.
+        //
+        // Раньше здесь стоял голый ранний выход, и это был один из путей, на
+        // котором право «звонок поднимается» оставалось взятым: положили
+        // трубку, пока комната ещё подключалась, — разговора в _current ещё
+        // нет, выход происходит немедленно, защёлка остаётся. После этого
+        // войти куда-либо больше не удавалось.
+        starting = false
         val info = _current.value ?: return
         val e = engine
 

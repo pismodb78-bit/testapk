@@ -56,7 +56,6 @@ import com.pismo.messenger.data.MessageMemory
 import com.pismo.messenger.data.ServerMemory
 import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.media.MicLevelMonitor
-import com.pismo.messenger.media.MicTester
 import com.pismo.messenger.media.Sounds
 import com.pismo.messenger.ui.components.UpdateDialogHost
 import com.pismo.messenger.ui.login.PismoField
@@ -457,10 +456,6 @@ fun SettingsScreen(onBack: () -> Unit) {
                 colors = SliderDefaults.colors(thumbColor = PismoColors.Blurple),
             )
 
-            // Тест проверяет ВСЮ цепочку, а не только порог, поэтому стоит
-            // после всех её ползунков и виден независимо от того, включена
-            // автоматическая чувствительность или нет.
-            MicTestRow()
             Text(
                 "Шумодав неизбежно приглушает голос — здесь громкость добирается " +
                         "обратно. Усиление линейное до самого потолка и лишь на пиках " +
@@ -721,103 +716,10 @@ private fun RowScope.ThemeChip(label: String, selected: Boolean, onClick: () -> 
  * только пока индикатор на экране: микрофон — общий ресурс, и оставлять его
  * занятым после ухода из настроек нельзя.
  */
-/**
- * «Проверить микрофон» — порт MicTestForm с ПК.
- *
- * Шкала отвечает на вопрос «громко ли», а главный вопрос другой: «как это
- * звучит у собеседника». Шумодав и порог слышны, а не видны — по полоске не
- * понять, что подавление съедает окончания слов. Проверка гоняет микрофон
- * через ту же цепочку, что и звонок.
- *
- * Режим выбирается сам, по наличию наушников: с ними — сквозная проверка,
- * как на ПК; без них телефон сначала записывает несколько секунд, а потом
- * проигрывает их вслух. Причина в MicTester: сквозной возврат в динамик,
- * стоящий рядом с микрофоном, заводится в свист.
- */
-@Composable
-private fun MicTestRow() {
-    val phase by MicTester.phase.collectAsState()
-    val left by MicTester.secondsLeft.collectAsState()
-    // В разговоре проверять нечего: микрофон занят звонком, и там и так
-    // слышно, как ты звучишь. Кнопку в этом случае просто гасим.
-    val inCall = com.pismo.messenger.call.ActiveCall.engine != null
-    // Спрашиваем при каждой перерисовке: наушники втыкают ровно тогда, когда
-    // собрались проверять микрофон, и подсказка обязана это заметить.
-    val headphones = remember(phase) { MicTester.headphonesConnected() }
-    val idle = phase == MicTester.Phase.IDLE
-
-    // Проверка держит микрофон: уходя с экрана, её надо гасить, иначе она
-    // продолжит писать в фоне и займёт микрофон следующему звонку.
-    DisposableEffect(Unit) {
-        onDispose { MicTester.stop() }
-    }
-
-    Spacer(Modifier.height(8.dp))
-    Button(
-        onClick = { if (idle) MicTester.start() else MicTester.stop() },
-        enabled = !inCall,
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (idle) PismoColors.BgElevated else PismoColors.Red
-        ),
-        shape = RoundedCornerShape(8.dp),
-    ) {
-        Text(
-            when (phase) {
-                MicTester.Phase.IDLE ->
-                    if (headphones) "Проверить микрофон"
-                    else "Записать ${MicTester.RECORD_SECONDS} секунд и прослушать"
-
-                MicTester.Phase.LOOPBACK -> "Остановить проверку"
-                MicTester.Phase.RECORDING -> "Идёт запись… $left с"
-                MicTester.Phase.PLAYING -> "Проигрываю — стоп"
-            },
-            color = PismoColors.TextPrimary,
-        )
-    }
-    Text(
-        when {
-            inCall ->
-                "Идёт разговор — проверять нечего: собеседники слышат вас прямо " +
-                        "сейчас, а шкала выше показывает настоящий уровень из звонка."
-
-            phase == MicTester.Phase.LOOPBACK ->
-                "Говорите — вы слышите себя ровно так, как вас слышат в звонке. " +
-                        "Шкала выше сейчас показывает настоящий уровень, а не оценку: " +
-                        "порог по ней можно выставлять точно. Шумодав, порог и " +
-                        "усиление крутятся прямо во время проверки."
-
-            phase == MicTester.Phase.RECORDING ->
-                "Говорите. Шкала выше сейчас показывает настоящий уровень — тот, " +
-                        "с которым сравнивается порог. Как только запись кончится, " +
-                        "телефон проиграет её вслух."
-
-            phase == MicTester.Phase.PLAYING ->
-                "Это ровно то, что услышал бы собеседник: тот же шумодав, тот же " +
-                        "порог, то же усиление. Не нравится — поправьте ползунки и " +
-                        "запишите ещё раз."
-
-            headphones ->
-                "Наушники подключены — проверка будет сквозной: говорите и сразу " +
-                        "слышите себя, как на ПК."
-
-            else ->
-                "Наушников нет, поэтому телефон сначала запишет " +
-                        "${MicTester.RECORD_SECONDS} секунд, а потом проиграет их вслух: " +
-                        "сквозной возврат в динамик, который стоит рядом с " +
-                        "микрофоном, завёлся бы в свист. Наденьте наушники — " +
-                        "проверка станет сквозной."
-        },
-        color = if (idle) PismoColors.TextMuted else PismoColors.Green,
-        fontSize = 11.sp,
-    )
-}
-
 @Composable
 private fun MicLevelBar(thresholdDb: Float) {
     val scope = rememberCoroutineScope()
     val level by MicLevelMonitor.levelDb.collectAsState()
-    val testPhase by MicTester.phase.collectAsState()
-    val testing = testPhase != MicTester.Phase.IDLE
 
     // В звонке уровень берётся прямо из цепочки разговора, а не из своего
     // микрофона: у той величины и порог, и звук — общие.
@@ -826,19 +728,6 @@ private fun MicLevelBar(thresholdDb: Float) {
     DisposableEffect(Unit) {
         MicLevelMonitor.acquire(scope)
         onDispose { MicLevelMonitor.release() }
-    }
-
-    // Во время проверки микрофона шкалы нет. Она мерила бы сырой вход, до
-    // автоусиления, — то есть показывала бы на два-три десятка децибел
-    // меньше, чем показывает всё остальное время и чем видит порог в
-    // разговоре. Полоска, которая врёт, хуже отсутствующей.
-    if (testing) {
-        Text(
-            "Шкала на время проверки скрыта: она показывала бы сырой уровень " +
-                    "микрофона, до автоусиления, и расходилась бы со звонком.",
-            color = PismoColors.TextMuted, fontSize = 10.sp,
-        )
-        return
     }
 
     val floor = MicLevelMonitor.FLOOR_DB
