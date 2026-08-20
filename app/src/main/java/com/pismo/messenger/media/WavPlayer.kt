@@ -40,7 +40,19 @@ object WavPlayer {
     private var player: MediaPlayer? = null
     private var ticker: Job? = null
 
-    private val _playingId = MutableStateFlow(-1)
+    /**
+     * «Ничего не играет». Именно ЭТО значение и означает покой — а не «любое
+     * отрицательное».
+     *
+     * Разница неочевидная и уже стоила одной поломки: счётчик позиции крутился
+     * по условию `playingId >= 0`, и неотправленное голосовое, у которого номер
+     * отрицательный (настоящих id с таким знаком не бывает, поэтому он и был
+     * выбран), останавливало счётчик сразу же. Звук шёл, а ползунок и секунды
+     * стояли на нуле.
+     */
+    const val NONE = -1
+
+    private val _playingId = MutableStateFlow(NONE)
 
     /** id сообщения, которое сейчас играет; −1 — тишина. */
     val playingId: StateFlow<Int> = _playingId.asStateFlow()
@@ -145,7 +157,7 @@ object WavPlayer {
         runCatching { player?.stop() }
         runCatching { player?.release() }
         player = null
-        _playingId.value = -1
+        _playingId.value = NONE
         _positionMs.value = 0
         _durationMs.value = 0
     }
@@ -153,7 +165,7 @@ object WavPlayer {
     private fun startTicker() {
         ticker?.cancel()
         ticker = scope.launch {
-            while (isActive && _playingId.value >= 0) {
+            while (isActive && _playingId.value != NONE) {
                 _positionMs.value = runCatching { player?.currentPosition ?: 0 }.getOrDefault(0)
 
                 // Начавшийся разговор голосовое глушит: слушать сообщение и
