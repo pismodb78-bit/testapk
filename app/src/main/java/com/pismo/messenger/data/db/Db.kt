@@ -36,7 +36,28 @@ object Db {
 
     private const val MAX_POOL = 4
 
-    private val pool = ArrayDeque<Connection>()
+    /**
+     * Соединение в пуле вместе со временем, когда его последний раз отдавали.
+     *
+     * Время нужно, чтобы НЕ проверять соединение перед каждой выдачей. Проверка
+     * (`isValid`) — это пинг до сервера, то есть полный круг по сети ДО того,
+     * как уйдёт сам запрос. На дистанции в 64 мс каждая операция стоила из-за
+     * неё вдвое дороже: 64 на проверку и 64 на дело. При открытии чата запросов
+     * подряд идёт полдесятка, и лишние круги складывались в заметную паузу.
+     *
+     * Проверять всё же надо: соединение, пролежавшее долго, сервер мог закрыть
+     * сам по wait_timeout, и тогда запрос уйдёт в никуда. Поэтому проверяем
+     * только те, что залежались, — свежие отдаём как есть.
+     */
+    private class Pooled(val conn: Connection, var idleSince: Long)
+
+    /**
+     * Сколько соединение считается заведомо живым. wait_timeout на сервере —
+     * полчаса, так что тридцать секунд это с большим запасом.
+     */
+    private const val FRESH_MS = 30_000L
+
+    private val pool = ArrayDeque<Pooled>()
     private val lock = Mutex()
 
     @Volatile private var driverLoaded = false
@@ -80,15 +101,20 @@ object Db {
         lock.withLock {
             if (key != configKey) {
                 // Настройки подключения изменились — старые соединения не годятся.
-                pool.forEach { runCatching { it.close() } }
+                pool.forEach { runCatching { it.conn.close() } }
                 pool.clear()
                 configKey = key
             }
+            val now = System.currentTimeMillis()
             while (pool.isNotEmpty()) {
-                val c = pool.removeFirst()
-                val alive = runCatching { !c.isClosed && c.isValid(2) }.getOrDefault(false)
-                if (alive) return c
-                runCatching { c.close() }
+                val p = pool.removeFirst()
+                val fresh = now - p.idleSince < FRESH_MS
+                val alive = runCatching {
+                    // Свежее — только закрыто оно или нет, без похода на сервер.
+                    !p.conn.isClosed && (fresh || p.conn.isValid(2))
+                }.getOrDefault(false)
+                if (alive) return p.conn
+                runCatching { p.conn.close() }
             }
         }
         return openNew()
@@ -97,7 +123,7 @@ object Db {
     private suspend fun giveBack(conn: Connection) {
         lock.withLock {
             if (pool.size < MAX_POOL && runCatching { !conn.isClosed }.getOrDefault(false)) {
-                pool.addLast(conn)
+                pool.addLast(Pooled(conn, System.currentTimeMillis()))
             } else {
                 runCatching { conn.close() }
             }
@@ -107,7 +133,7 @@ object Db {
     /** Закрывает пул — вызывать при выходе из аккаунта и смене настроек БД. */
     suspend fun closeAll() = withContext(Dispatchers.IO) {
         lock.withLock {
-            pool.forEach { runCatching { it.close() } }
+            pool.forEach { runCatching { it.conn.close() } }
             pool.clear()
             configKey = ""
         }
@@ -250,7 +276,7 @@ object Db {
             // Пул после обрыва целиком под подозрением — выбрасываем его,
             // иначе повтор возьмёт следующее такое же мёртвое соединение.
             lock.withLock {
-                pool.forEach { runCatching { it.close() } }
+                pool.forEach { runCatching { it.conn.close() } }
                 pool.clear()
             }
 
