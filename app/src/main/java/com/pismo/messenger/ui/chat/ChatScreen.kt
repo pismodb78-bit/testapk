@@ -1248,10 +1248,22 @@ private fun CircleRecorderHost(
     if (visible) VideoCircleRecorderDialog(onDismiss = onDismiss, onRecorded = onRecorded)
 }
 
-/** Сообщаем собеседнику о новом сообщении — событие ws-сервера, как на ПК. */
+/**
+ * Сообщаем о новом сообщении — событие ws-сервера, как на ПК.
+ *
+ * АДРЕСАТ 0, ТО ЕСТЬ ВСЕМ, И В ЛИЧНОЙ ПЕРЕПИСКЕ ТОЖЕ.
+ *
+ * Раньше личное сообщение уходило событием ТОЛЬКО собеседнику. Из-за этого
+ * второе устройство самого отправителя о нём не узнавало: сидишь в одном чате
+ * с телефона и с компьютера, пишешь с телефона — на компьютере ничего не
+ * появляется до следующего опроса. С ПК то же сообщение доходило, потому что
+ * он всегда рассылал всем.
+ *
+ * Группы и каналы и так рассылали всем — потому и жалоба была только на личные.
+ */
 private fun notifyPeers(isGroup: Boolean, target: Int) {
     if (isGroup) SignalingClient.send("new_message", 0, target, "group")
-    else SignalingClient.send("new_message", target, 0, "direct")
+    else SignalingClient.send("new_message", 0, target, "direct")
 }
 
 private fun startCall(
