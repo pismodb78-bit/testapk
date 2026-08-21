@@ -24,7 +24,7 @@ object Prefs {
     // Значения по умолчанию взяты из ip.txt ПК-версии:
     // server=85.174.248.59;port=3307;uid=user1;password=scent01;database=bdauth
     var dbHost: String
-        get() = sp.getString("db_host", "85.174.248.59")!!
+        get() = sp.getString("db_host", "5.181.23.167")!!
         set(v) = sp.edit().putString("db_host", v).apply()
 
     var dbPort: Int
