@@ -766,9 +766,15 @@ object ChatRepository {
      * PrefetchPageMedia). Видео и файлы намеренно не трогаем: они большие.
      */
     suspend fun prefetchPageMedia(messages: List<ChatMessage>, scope: Scope) {
+        // Видеокружки сюда тоже входят. Раньше их не было, и каждый кружок
+        // тянулся отдельным запросом из своего пузыря — по одному походу в базу
+        // на сообщение. Кружки короткие, брать их пачкой со страницей дешевле,
+        // чем платить круг до сервера за каждый. Файлы намеренно НЕ берём: они
+        // бывают в сотни мегабайт и читаются по нажатию.
         val ids = messages.filter { m ->
             (m.hasImage && !MediaCache.has(m.id, "img", m.fileName)) ||
-                    (m.hasAudio && !MediaCache.has(m.id, "audio"))
+                    (m.hasAudio && !MediaCache.has(m.id, "audio")) ||
+                    (m.hasVideo && !MediaCache.has(m.id, "video"))
         }.map { it.id }
         if (ids.isEmpty()) return
 
@@ -777,13 +783,15 @@ object ChatRepository {
             Db.use { conn ->
                 conn.createStatement().use { st ->
                     st.executeQuery(
-                        "SELECT id, image_data, audio_data, file_name FROM ${scope.table} WHERE id IN ($list)"
+                        "SELECT id, image_data, audio_data, video_data, file_name " +
+                                "FROM ${scope.table} WHERE id IN ($list)"
                     ).use { rs ->
                         while (rs.next()) {
                             val id = rs.getInt("id")
                             val fn = rs.getString("file_name")
                             rs.getBytes("image_data")?.let { MediaCache.put(id, "img", it, fn) }
                             rs.getBytes("audio_data")?.let { MediaCache.put(id, "audio", it) }
+                            rs.getBytes("video_data")?.let { MediaCache.put(id, "video", it) }
                         }
                     }
                 }

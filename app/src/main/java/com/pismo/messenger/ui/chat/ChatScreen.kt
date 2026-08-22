@@ -425,43 +425,68 @@ fun ChatScreen(
     // не всю историю разом: тянуть тысячу расшифровок ради одного взгляда
     // назад незачем.
     LaunchedEffect(targetId) {
-        // Отсчёт ведём от текущего положения, а не от «бесконечности»: с ней
-        // самая первая выдача потока считалась бы движением вверх.
-        var lastFirst = listState.firstVisibleItemIndex
         var lastLoadAt = 0L
 
-        snapshotFlow { listState.firstVisibleItemIndex }.collect { first ->
-            // Поток выдаёт номер и при перекладке списка, и при смене фокуса —
-            // не только когда ленту ведут пальцем. Требуем настоящего движения
-            // ВВЕРХ, к старым сообщениям: иначе обычный тап по сообщению
-            // дотягивался до подгрузки, страница росла на сорок, лента
-            // перезагружалась целиком, и так по кругу.
-            val movedUp = first < lastFirst
-            lastFirst = first
-            if (!movedUp) return@collect
+        // Признак «ленту ведут пальцем» вместо сравнения номеров.
+        //
+        // Раньше подгрузка требовала, чтобы номер первого видимого стал МЕНЬШЕ
+        // предыдущего — то есть настоящего движения вверх. Это отсеивало ложные
+        // выдачи потока (он срабатывает и на перекладке списка, и на тапе), но
+        // ломалось сразу после подгрузки: если лента стояла у самого верха,
+        // номер оставался нулём, уменьшаться ему было некуда, и следующая порция
+        // не приходила, пока не проскроллишь вниз и обратно вверх.
+        //
+        // isScrollInProgress отвечает ровно на нужный вопрос — тянут ленту прямо
+        // сейчас или нет. Тап её не поднимает, перекладка списка тоже.
+        snapshotFlow { listState.firstVisibleItemIndex to listState.isScrollInProgress }
+            .collect { (first, scrolling) ->
+                if (!scrolling) return@collect
+                if (first > 2 || loading || loadingOlder || noMoreOlder) return@collect
+                if (messages.isEmpty()) return@collect
 
-            if (first > 2 || loading || loadingOlder || noMoreOlder) return@collect
-            if (messages.isEmpty()) return@collect
+                // Пауза между подгрузками: пока предыдущая порция укладывается,
+                // номер первого видимого успевает дёрнуться ещё несколько раз.
+                val now = System.currentTimeMillis()
+                if (now - lastLoadAt < PAGE_COOLDOWN_MS) return@collect
+                lastLoadAt = now
 
-            // И пауза между подгрузками: пока предыдущая порция укладывается,
-            // номер первого видимого успевает дёрнуться ещё несколько раз.
-            val now = System.currentTimeMillis()
-            if (now - lastLoadAt < PAGE_COOLDOWN_MS) return@collect
-            lastLoadAt = now
+                loadingOlder = true
+                // Берём ТОЛЬКО следующую порцию старых, а не всю страницу заново.
+                //
+                // Раньше здесь рос pageLimit и звался reload(), то есть на третьем
+                // шаге с сервера снова ехали все восемьдесят сообщений, снова
+                // расшифровывались все восемьдесят текстов и заново собирался весь
+                // список — отсюда и ощущение, что каждая следующая порция идёт
+                // тяжелее предыдущей. Теперь запрос идёт по курсору id < самого
+                // старого показанного и возвращает ровно новую двадцатку.
+                val oldestId = messages.firstOrNull()?.id ?: 0
+                val older = runCatching {
+                    if (isGroup) ChatRepository.loadGroupMessages(targetId, PAGE_STEP, oldestId)
+                    else ChatRepository.loadDirectMessages(targetId, PAGE_STEP, oldestId)
+                }.getOrDefault(emptyList())
 
-            loadingOlder = true
-            val before = messages.size
-            pageLimit = (if (pageLimit > 0) pageLimit else before) + PAGE_STEP
-            reload()
-            // Ничего не добавилось — история кончилась, больше не дёргаем.
-            if (messages.size <= before) noMoreOlder = true
-            // Поправлять позицию руками НЕ НУЖНО и вредно: LazyColumn держит
-            // якорь на первом видимом элементе по его ключу, поэтому порция,
-            // легшая сверху, сама сдвигает содержимое, не трогая взгляд. А
-            // ручной scrollToItem поверх этого обрывал бы инерцию — палец в
-            // этот момент как раз ведёт ленту вверх.
-            loadingOlder = false
-        }
+                if (older.isEmpty()) {
+                    // История кончилась — больше не дёргаем.
+                    noMoreOlder = true
+                } else {
+                    // pageLimit держим в актуальном размере: полная перезагрузка
+                    // (её делает опрос, когда лента и правда изменилась) должна
+                    // вернуть всё показанное, а не схлопнуть ленту до сорока.
+                    pageLimit = (if (pageLimit > 0) pageLimit else messages.size) + older.size
+                    messages = older + messages
+                    reactions = reactions + ReactionsRepository.forMessages(
+                        older.map { it.id }, scopeKind
+                    )
+                    MessageMemory.put(scopeKind, targetId, messages, reactions)
+                    ChatRepository.prefetchPageMedia(older, scopeKind)
+                }
+                // Поправлять позицию руками НЕ НУЖНО и вредно: LazyColumn держит
+                // якорь на первом видимом элементе по его ключу, поэтому порция,
+                // легшая сверху, сама сдвигает содержимое, не трогая взгляд. А
+                // ручной scrollToItem поверх этого обрывал бы инерцию — палец в
+                // этот момент как раз ведёт ленту вверх.
+                loadingOlder = false
+            }
     }
 
     // Индикатор набора гаснет сам: сигнал «перестал печатать» протокол не
