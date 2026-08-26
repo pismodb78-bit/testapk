@@ -65,9 +65,21 @@ object IncomingCallMonitor {
                 CallRepository.incomingCalls().forEach { shownCallIds.add(it.id) }
             }
 
-            SignalingClient.addListener { type, _, _, _ ->
+            SignalingClient.addListener { type, _, session, payload ->
                 if (type == "incoming_call") pushed = true
-                if (type == "call_status") pushed = true
+                if (type == "call_status") {
+                    pushed = true
+                    // Гасим показанный звонок СРАЗУ, а не ждём опроса. Опрос при
+                    // живом сокете разрежен до ~6 секунд, и всё это время телефон
+                    // продолжал звонить после того, как трубку взяли на ПК.
+                    // Любой статус, кроме «звонит», означает, что вызов уже не наш:
+                    // отменили, отклонили — или ответили с другого своего устройства.
+                    val cur = _incoming.value
+                    if (cur != null && cur.id == session && payload != "ringing") {
+                        _incoming.value = null
+                        CallNotifier.cancelIncoming(appContext)
+                    }
+                }
             }
 
             while (isActive) {
@@ -124,6 +136,9 @@ object IncomingCallMonitor {
         CoroutineScope(Dispatchers.IO).launch {
             runCatching { CallRepository.accept(call.id) }
             SignalingClient.send("call_status", call.callerId, call.id, "active")
+            // И СВОИМ остальным устройствам: там сейчас звонит такой же входящий,
+            // и без этого он продолжал бы звонить после ответа здесь.
+            SignalingClient.send("call_status", UserSession.effectiveId, call.id, "active")
         }
     }
 
@@ -134,6 +149,7 @@ object IncomingCallMonitor {
         CoroutineScope(Dispatchers.IO).launch {
             runCatching { CallRepository.reject(call.id) }
             SignalingClient.send("call_status", call.callerId, call.id, "rejected")
+            SignalingClient.send("call_status", UserSession.effectiveId, call.id, "rejected")
         }
     }
 
