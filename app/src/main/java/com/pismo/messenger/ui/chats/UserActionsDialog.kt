@@ -41,6 +41,9 @@ fun UserActionsDialog(
     var ignored by remember(conversation.userId) {
         mutableStateOf(Prefs.isUserIgnored(conversation.userId))
     }
+    var noCalls by remember(conversation.userId) {
+        mutableStateOf(Prefs.isCallBlocked(conversation.userId))
+    }
 
     LaunchedEffect(conversation.userId) {
         runCatching {
@@ -120,6 +123,15 @@ fun UserActionsDialog(
                 ) {
                     ignored = Prefs.toggleUserIgnored(conversation.userId)
                     onChanged()
+                }
+
+                // Отдельно от игнора: сообщения продолжают приходить как обычно,
+                // молчит только вызов — входящий не показывается и не звенит.
+                Action(
+                    if (noCalls) "📞  Принимать звонки" else "🚫  Не принимать звонки",
+                    color = if (noCalls) PismoColors.Green else PismoColors.TextSecondary,
+                ) {
+                    noCalls = Prefs.toggleCallBlocked(conversation.userId)
                 }
 
                 Action(

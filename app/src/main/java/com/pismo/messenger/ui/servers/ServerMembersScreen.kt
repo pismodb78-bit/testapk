@@ -166,8 +166,14 @@ fun ServerMembersScreen(serverId: Int, onBack: () -> Unit) {
                             // по аватарке, меню на телефоне и так занято.
                             profileOf = m.userId to m.name
                         }) { action ->
+                            // Профиль открываем сразу, без похода в базу.
+                            if (action is MemberAction.Profile) {
+                                profileOf = m.userId to m.name
+                                return@MemberRow
+                            }
                             scope.launch {
                                 when (action) {
+                                    MemberAction.Profile -> Unit   // обработано выше
                                     is MemberAction.SetRole ->
                                         ServerRepository.assignRole(serverId, m.userId, action.roleId)
                                     MemberAction.Kick ->
@@ -281,6 +287,9 @@ fun ServerMembersScreen(serverId: Int, onBack: () -> Unit) {
 }
 
 private sealed interface MemberAction {
+    /** Открыть профиль. Тап по аватарке делает то же самое, но угадать это
+     *  нельзя — в меню участника пункт нужен явно. */
+    data object Profile : MemberAction
     data class SetRole(val roleId: Int?) : MemberAction
     data object Kick : MemberAction
     data object Ban : MemberAction
@@ -322,6 +331,10 @@ private fun MemberRow(
         }
 
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(
+                text = { Text("Профиль") },
+                onClick = { onAction(MemberAction.Profile); menu = false },
+            )
             if (perms.isAdminLike) {
                 DropdownMenuItem(
                     text = { Text("Снять роль") },

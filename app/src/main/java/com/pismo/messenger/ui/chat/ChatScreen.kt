@@ -88,6 +88,7 @@ import com.pismo.messenger.data.MediaCache
 import com.pismo.messenger.data.MessageMemory
 import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.data.model.ChatMessage
+import com.pismo.messenger.data.model.Conversation
 import com.pismo.messenger.data.model.Presence
 import com.pismo.messenger.data.model.ReactionSummary
 import com.pismo.messenger.data.model.Scope
@@ -101,6 +102,7 @@ import com.pismo.messenger.media.WavRecorder
 import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.components.DateSeparator
 import com.pismo.messenger.ui.components.FileBadge
+import com.pismo.messenger.ui.chats.UserActionsDialog
 import com.pismo.messenger.ui.components.GroupAvatar
 import com.pismo.messenger.ui.components.LetterAvatar
 import com.pismo.messenger.ui.components.UserAvatar
@@ -223,6 +225,10 @@ fun ChatScreen(
      * его набрали.
      */
     var pendingVoice by remember(targetId) { mutableStateOf<ByteArray?>(null) }
+    // Меню действий с собеседником — по нажатию на аватар/имя в шапке. Ровно то
+    // же меню, что по долгому нажатию на чат в списке: раньше из самого чата к
+    // нему было не добраться.
+    var showUserActions by remember(targetId) { mutableStateOf(false) }
     var recordSeconds by remember { mutableStateOf(0) }
     var showCircleRecorder by remember { mutableStateOf(false) }
     var showGifPicker by remember { mutableStateOf(false) }
@@ -703,7 +709,11 @@ fun ChatScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = if (isGroup) Modifier
+                                   else Modifier.clickable { showUserActions = true },
+                    ) {
                         if (isGroup) GroupAvatar(targetId, title, "#5865F2", 32.dp)
                         else UserAvatar(targetId, title, 32.dp, presence = peerPresence)
                         Spacer(Modifier.width(10.dp))
@@ -1147,6 +1157,19 @@ fun ChatScreen(
                 }
             }
         }
+    }
+
+    if (showUserActions && !isGroup) {
+        UserActionsDialog(
+            conversation = Conversation(
+                userId = targetId, name = title, lastMessage = "",
+                lastTimeMs = null, unread = 0,
+            ),
+            onDismiss = { showUserActions = false },
+            onChanged = { showUserActions = false },
+            // Чат уже открыт — «Открыть чат» здесь просто закрывает меню.
+            onOpenChat = { showUserActions = false },
+        )
     }
 
     if (showSearch) {

@@ -122,6 +122,13 @@ object IncomingCallMonitor {
             // будто трубку просто не берут. Порт того же поведения с ПК.
             if (Prefs.isUserIgnored(fresh.callerId)) return
 
+            // Отдельный запрет «не принимать звонки»: сообщения от человека
+            // приходят как обычно, а вызов не показываем и не звеним. Для
+            // группового звонка запрет ставится на саму группу.
+            if (Prefs.isCallBlocked(fresh.callerId)) return
+            val gid = fresh.groupId ?: 0
+            if (gid > 0 && Prefs.isCallBlocked(Prefs.callGroupKey(gid))) return
+
             _incoming.value = fresh
             CallNotifier.showIncoming(context, fresh)
         } finally {

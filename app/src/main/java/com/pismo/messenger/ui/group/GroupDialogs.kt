@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.model.GroupMember
 import com.pismo.messenger.data.model.UserBrief
@@ -167,6 +168,20 @@ fun GroupMembersDialog(
                 }
             } else {
                 LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                    // Не принимать звонки этой группы. Отдельно от игнора:
+                    // сообщения приходят как обычно, молчит только вызов.
+                    item {
+                        val key = Prefs.callGroupKey(groupId)
+                        var noCalls by remember(groupId) { mutableStateOf(Prefs.isCallBlocked(key)) }
+                        TextButton(onClick = { noCalls = Prefs.toggleCallBlocked(key) }) {
+                            Text(
+                                if (noCalls) "📞  Принимать звонки группы"
+                                else "🚫  Не принимать звонки группы",
+                                color = if (noCalls) PismoColors.Green else PismoColors.TextSecondary,
+                                fontSize = 13.sp,
+                            )
+                        }
+                    }
                     items(members, key = { it.userId }) { m ->
                         Row(
                             Modifier.fillMaxWidth().padding(vertical = 6.dp),

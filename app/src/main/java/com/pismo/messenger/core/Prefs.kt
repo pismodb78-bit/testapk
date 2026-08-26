@@ -168,6 +168,37 @@ object Prefs {
             .mapNotNull { it.trim().toIntOrNull() }
             .toSet()
 
+    /**
+     * От кого не принимаем ЗВОНКИ. В отличие от игнора, сообщения и уведомления
+     * о них приходят как обычно — молчит только вызов: входящий не показывается
+     * и не звенит, а у звонящего идут гудки, будто трубку не взяли.
+     *
+     * Группы лежат здесь же, отрицательными ключами: нумерация у групп и людей
+     * своя, и без разделения запрет для группы №5 задел бы пользователя №5.
+     */
+    private fun callBlockKey() = "call_blocked_${UserSession.effectiveId}"
+
+    /** Ключ группы — отрицательный, чтобы не пересечься с id людей. */
+    fun callGroupKey(groupId: Int) = -groupId
+
+    fun isCallBlocked(key: Int): Boolean = key != 0 && callBlocked().contains(key)
+
+    fun callBlocked(): Set<Int> =
+        sp.getString(callBlockKey(), "").orEmpty()
+            .split(',')
+            .mapNotNull { it.trim().toIntOrNull() }
+            .toSet()
+
+    /** Включить/выключить запрет звонков. Возвращает НОВОЕ состояние. */
+    fun toggleCallBlocked(key: Int): Boolean {
+        if (key == 0) return false
+        val set = callBlocked().toMutableSet()
+        val now = set.add(key)
+        if (!now) set.remove(key)
+        sp.edit().putString(callBlockKey(), set.joinToString(",")).apply()
+        return now
+    }
+
     /** Включить/выключить игнор. Возвращает НОВОЕ состояние. */
     fun toggleUserIgnored(userId: Int): Boolean {
         if (userId <= 0) return false
