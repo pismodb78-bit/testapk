@@ -1,6 +1,7 @@
 package com.pismo.messenger.ui.profile
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,6 +29,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -59,6 +61,7 @@ fun UserProfileDialog(
     var banner by remember(userId) { mutableStateOf<ByteArray?>(null) }
     var presence by remember(userId) { mutableStateOf(PresenceRepository.cached(userId)) }
     var loading by remember(userId) { mutableStateOf(profile == null) }
+    val uriHandler = LocalUriHandler.current
 
     LaunchedEffect(userId) {
         // Даже если что-то показали из кэша, обновляем в фоне: профиль мог
@@ -130,16 +133,38 @@ fun UserProfileDialog(
                     )
                 }
 
-                profile?.about?.takeIf { it.isNotBlank() }?.let {
-                    Spacer(Modifier.height(12.dp))
-                    Text("О себе", color = PismoColors.TextMuted, fontSize = 11.sp)
-                    Text(it, color = PismoColors.TextPrimary, fontSize = 14.sp)
-                }
+                // Поля показываем ВСЕГДА, даже пустыми, — как на ПК, где это
+                // поля формы, а не появляющиеся строки. Иначе у человека без
+                // «о себе» профиль выглядит обрезанным, и непонятно, то ли не
+                // заполнено, то ли не загрузилось.
+                Spacer(Modifier.height(12.dp))
+                Text("О себе", color = PismoColors.TextMuted, fontSize = 11.sp)
+                val about = profile?.about.orEmpty()
+                Text(
+                    about.ifBlank { "не указано" },
+                    color = if (about.isBlank()) PismoColors.TextMuted else PismoColors.TextPrimary,
+                    fontSize = 14.sp,
+                )
 
-                profile?.socialLinks?.takeIf { it.isNotBlank() }?.let {
-                    Spacer(Modifier.height(12.dp))
-                    Text("Ссылки", color = PismoColors.TextMuted, fontSize = 11.sp)
-                    Text(it, color = PismoColors.Cyan, fontSize = 14.sp)
+                Spacer(Modifier.height(12.dp))
+                Text("Ссылки", color = PismoColors.TextMuted, fontSize = 11.sp)
+                val links = parseLinks(profile?.socialLinks.orEmpty())
+                if (links.isEmpty()) {
+                    Text("не указано", color = PismoColors.TextMuted, fontSize = 14.sp)
+                } else {
+                    // На ПК ссылки хранятся строками «Название|адрес». Показывать их
+                    // сырым текстом, как было, — значит заставить переписывать адрес
+                    // руками. Разбираем и открываем нажатием.
+                    links.forEach { (label, url) ->
+                        Text(
+                            if (label.isBlank()) url else "$label — $url",
+                            color = PismoColors.Cyan,
+                            fontSize = 14.sp,
+                            modifier = Modifier
+                                .padding(vertical = 3.dp)
+                                .clickable { runCatching { uriHandler.openUri(url) } },
+                        )
+                    }
                 }
             }
         },
@@ -155,6 +180,24 @@ fun UserProfileDialog(
         },
     )
 }
+
+/**
+ * Разбирает поле ссылок профиля. Формат тот же, что на ПК: по строке на
+ * ссылку, «Название|адрес»; название необязательно. Адрес без схемы получает
+ * https:// — иначе браузер откажется его открывать.
+ */
+private fun parseLinks(raw: String): List<Pair<String, String>> =
+    raw.split('\n')
+        .mapNotNull { line ->
+            val t = line.trim()
+            if (t.isEmpty()) return@mapNotNull null
+            val i = t.indexOf('|')
+            val label = if (i >= 0) t.substring(0, i).trim() else ""
+            var url = if (i >= 0) t.substring(i + 1).trim() else t
+            if (url.isEmpty()) return@mapNotNull null
+            if (!url.startsWith("http://") && !url.startsWith("https://")) url = "https://" + url
+            label to url
+        }
 
 private fun fullName(p: UserProfile): String =
     "${p.name} ${p.surname}".trim().ifBlank { p.login }
