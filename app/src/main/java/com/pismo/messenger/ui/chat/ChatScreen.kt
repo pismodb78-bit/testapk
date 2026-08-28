@@ -1167,8 +1167,9 @@ fun ChatScreen(
             ),
             onDismiss = { showUserActions = false },
             onChanged = { showUserActions = false },
-            // Чат уже открыт — «Открыть чат» здесь просто закрывает меню.
             onOpenChat = { showUserActions = false },
+            // Чат уже открыт — «Написать» здесь ни к чему.
+            showOpenChat = false,
         )
     }
 

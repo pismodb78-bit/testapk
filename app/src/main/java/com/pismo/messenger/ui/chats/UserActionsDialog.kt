@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.sp
 import com.pismo.messenger.core.Prefs
+import com.pismo.messenger.ui.profile.UserProfileDialog
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.model.Conversation
 import com.pismo.messenger.data.repo.ChatRepository
@@ -33,6 +34,8 @@ fun UserActionsDialog(
     onDismiss: () -> Unit,
     onChanged: () -> Unit,
     onOpenChat: () -> Unit,
+    /** Показывать ли «Написать». Из уже открытого чата пункт бессмыслен. */
+    showOpenChat: Boolean = true,
 ) {
     val scope = rememberCoroutineScope()
     var blocked by remember { mutableStateOf(false) }
@@ -43,6 +46,15 @@ fun UserActionsDialog(
     }
     var noCalls by remember(conversation.userId) {
         mutableStateOf(Prefs.isCallBlocked(conversation.userId))
+    }
+    var showProfile by remember(conversation.userId) { mutableStateOf(false) }
+
+    if (showProfile) {
+        UserProfileDialog(
+            userId = conversation.userId,
+            fallbackName = conversation.name,
+            onDismiss = { showProfile = false },
+        )
     }
 
     LaunchedEffect(conversation.userId) {
@@ -88,7 +100,10 @@ fun UserActionsDialog(
         title = { Text(conversation.name, color = PismoColors.TextPrimary) },
         text = {
             Column {
-                Action("💬  Написать", onClick = onOpenChat)
+                // Профиль — как на ПК, где это первый пункт меню собеседника.
+                Action("👤  Профиль") { showProfile = true }
+
+                if (showOpenChat) Action("💬  Написать", onClick = onOpenChat)
 
                 when (relation) {
                     FriendsRepository.Relation.NONE -> Action("➕  Добавить в друзья") {
