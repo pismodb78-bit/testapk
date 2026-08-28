@@ -30,16 +30,19 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -89,6 +92,10 @@ fun SettingsScreen(onBack: () -> Unit) {
     var checkUpdates by remember { mutableStateOf(Prefs.checkUpdatesOnStart) }
     var frontCamera by remember { mutableStateOf(Prefs.frontCamera) }
     var bgPolling by remember { mutableStateOf(Prefs.backgroundPolling) }
+    // Счётчик пересчёта: вернувшись из системного диалога, состояние надо
+    // перечитать — само по себе оно не обновится.
+    var batteryTick by remember { mutableIntStateOf(0) }
+    val ctx = LocalContext.current
     var noiseSuppression by remember { mutableStateOf(Prefs.noiseSuppression) }
     var echoCancellation by remember { mutableStateOf(Prefs.echoCancellation) }
     var autoGain by remember { mutableStateOf(Prefs.autoGainControl) }
@@ -316,6 +323,28 @@ fun SettingsScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             SwitchRow("Фронтальная камера по умолчанию", frontCamera) { frontCamera = it }
             SwitchRow("Фоновая проверка сообщений", bgPolling) { bgPolling = it }
+
+            // Экономия батареи прибивает фоновую службу, и уведомления просто
+            // перестают приходить — при включённом переключателе выше. Кнопка
+            // ведёт в системный запрос исключения; если производитель телефона
+            // его не показывает, открываем сам список настроек батареи.
+            Spacer(Modifier.height(8.dp))
+            val batteryFree = remember(batteryTick) { isBatteryUnrestricted(ctx) }
+            Text(
+                if (batteryFree)
+                    "Экономия батареи для PISMO отключена — фоновая служба не будет остановлена системой."
+                else
+                    "Телефон экономит батарею и может остановить фоновую службу PISMO: " +
+                        "тогда сообщения перестанут приходить, пока приложение не открыть.",
+                color = if (batteryFree) PismoColors.Green else PismoColors.Yellow,
+                fontSize = 12.sp,
+            )
+            if (!batteryFree) {
+                Spacer(Modifier.height(6.dp))
+                TextButton(onClick = { requestIgnoreBatteryOptimizations(ctx); batteryTick++ }) {
+                    Text("Разрешить работу в фоне", color = PismoColors.Blurple)
+                }
+            }
 
             Spacer(Modifier.height(20.dp))
             Section("Оформление")
@@ -777,6 +806,35 @@ private fun MicLevelBar(thresholdDb: Float) {
             },
             color = if (inCall) PismoColors.Green else PismoColors.TextMuted,
             fontSize = 10.sp,
+        )
+    }
+}
+
+/** Отключена ли экономия батареи для нас. */
+private fun isBatteryUnrestricted(ctx: android.content.Context): Boolean = runCatching {
+    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M) return@runCatching true
+    val pm = ctx.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+    pm.isIgnoringBatteryOptimizations(ctx.packageName)
+}.getOrDefault(true)
+
+/**
+ * Просит исключение из экономии батареи. Прямой запрос здесь уместен:
+ * приложение ставится APK-файлом, не из Play, а без исключения телефон
+ * останавливает фоновую службу и уведомления замолкают. Если производитель
+ * прямой диалог не поддерживает — открываем общий список настроек батареи.
+ */
+private fun requestIgnoreBatteryOptimizations(ctx: android.content.Context) {
+    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M) return
+    val direct = android.content.Intent(
+        android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+        android.net.Uri.parse("package:" + ctx.packageName),
+    ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+    if (runCatching { ctx.startActivity(direct); true }.getOrDefault(false)) return
+    runCatching {
+        ctx.startActivity(
+            android.content.Intent(
+                android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
+            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
         )
     }
 }
