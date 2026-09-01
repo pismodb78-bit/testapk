@@ -213,14 +213,16 @@ fun ForwardDialog(
     // Каналы серверов как цель пересылки. Репозиторий умел это с самого
     // начала (Scope.SERVER), а в списке выбора их просто не было — переслать
     // из лички на сервер и обратно было нельзя.
-    var channels by remember { mutableStateOf<List<Pair<Int, String>>>(emptyList()) }
+    var channels by remember {
+        mutableStateOf<List<ServerRepository.ForwardChannel>>(emptyList())
+    }
     var busy by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         runCatching {
             conversations = ChatRepository.loadConversations()
             groups = ChatRepository.loadGroups()
-            channels = ServerRepository.channelNames().toList().sortedBy { it.second }
+            channels = ServerRepository.channelsForForward()
         }
     }
 
@@ -278,14 +280,20 @@ fun ForwardDialog(
                     }
                 }
 
-                if (channels.isNotEmpty()) {
+                // Каналы — по серверам, с заголовком на каждый. Плоским списком
+                // из «# основной», «# основной», «# основной» выбрать нужный было
+                // нельзя: такой канал есть почти на каждом сервере.
+                channels.groupBy { it.serverId }.forEach { (_, chans) ->
                     item {
-                        Text("КАНАЛЫ СЕРВЕРОВ", color = PismoColors.TextMuted, fontSize = 11.sp,
-                            modifier = Modifier.padding(vertical = 4.dp))
+                        Text(
+                            chans.first().serverName.uppercase(),
+                            color = PismoColors.TextMuted, fontSize = 11.sp,
+                            modifier = Modifier.padding(top = 10.dp, bottom = 4.dp),
+                        )
                     }
-                    items(channels, key = { "c${it.first}" }) { (id, name) ->
-                        TargetRow(id, "# $name", TargetKind.CHANNEL, enabled = !busy) {
-                            forward(id, Scope.SERVER)
+                    items(chans, key = { "c${it.id}" }) { ch ->
+                        TargetRow(ch.id, "# ${ch.name}", TargetKind.CHANNEL, enabled = !busy) {
+                            forward(ch.id, Scope.SERVER)
                         }
                     }
                 }

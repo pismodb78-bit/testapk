@@ -661,6 +661,42 @@ object ServerRepository {
         ) { rs -> rs.getInt("id") }.toSet()
     }.getOrDefault(emptySet())
 
+    /** Канал вместе с сервером, которому он принадлежит. */
+    data class ForwardChannel(
+        val id: Int,
+        val name: String,
+        val serverId: Int,
+        val serverName: String,
+    )
+
+    /**
+     * Каналы всех моих серверов, сгруппированные по серверу.
+     *
+     * Окно пересылки показывало их одним плоским списком: только «# название»,
+     * без указания, чей это канал. При одинаковых названиях на разных серверах
+     * (а «основной» есть почти везде) выбрать нужный было нельзя.
+     *
+     * Порядок — по имени сервера, внутри сервера по позиции канала, то есть тот
+     * же, в котором каналы стоят на самом сервере.
+     */
+    suspend fun channelsForForward(): List<ForwardChannel> = runCatching {
+        Db.query(
+            "SELECT ch.id, ch.name, ch.server_id, s.name AS server_name " +
+                    "FROM server_channels ch " +
+                    "JOIN server_members m ON m.server_id = ch.server_id AND m.user_id = ? " +
+                    "JOIN servers s ON s.id = ch.server_id " +
+                    "ORDER BY s.name, ch.position, ch.id",
+            UserSession.effectiveId
+        ) { rs ->
+            ForwardChannel(
+                id = rs.getInt("id"),
+                name = rs.str("name"),
+                serverId = rs.getInt("server_id"),
+                serverName = rs.str("server_name"),
+            )
+        }
+    }.getOrDefault(emptyList())
+
     suspend fun channelNames(): Map<Int, String> = runCatching {
         Db.query(
             "SELECT ch.id, ch.name FROM server_channels ch " +
