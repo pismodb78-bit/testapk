@@ -231,8 +231,16 @@ fun ForwardDialog(
         scope.launch {
             items.sortedBy { it.messageId }.forEach { item ->
                 // Текст с указанием исходного отправителя — формат ПК-версии.
-                val caption = if (item.sender.isBlank()) "↪ Переслано:\n${item.text}"
-                else "↪ Переслано от ${item.sender}:\n${item.text}"
+                //
+                // Уже пересланное второй пометкой не обклеиваем: иначе они копятся
+                // цепочкой («↪ Переслано от Пети: ↪ Переслано от Васи: …»), и в
+                // превью списка это выглядит как два значка подряд. Оставляем
+                // первую — она называет настоящего автора.
+                val caption = when {
+                    item.text.startsWith("↪ Переслано") -> item.text
+                    item.sender.isBlank() -> "↪ Переслано:\n${item.text}"
+                    else -> "↪ Переслано от ${item.sender}:\n${item.text}"
+                }
                 runCatching {
                     ChatRepository.forwardMessage(
                         srcScope = srcScope,
