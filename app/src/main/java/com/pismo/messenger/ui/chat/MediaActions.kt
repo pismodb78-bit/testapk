@@ -52,7 +52,9 @@ import com.pismo.messenger.data.model.Scope
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.media.MediaSaver
+import com.pismo.messenger.ui.components.GroupAvatar
 import com.pismo.messenger.ui.components.LetterAvatar
+import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -261,7 +263,9 @@ fun ForwardDialog(
                             modifier = Modifier.padding(vertical = 4.dp))
                     }
                     items(groups, key = { "g${it.id}" }) { g ->
-                        TargetRow(g.id, g.name, enabled = !busy) { forward(g.id, Scope.GROUP) }
+                        TargetRow(g.id, g.name, TargetKind.GROUP, enabled = !busy) {
+                            forward(g.id, Scope.GROUP)
+                        }
                     }
                 }
                 item {
@@ -269,7 +273,9 @@ fun ForwardDialog(
                         modifier = Modifier.padding(vertical = 4.dp))
                 }
                 items(conversations, key = { "u${it.userId}" }) { c ->
-                    TargetRow(c.userId, c.name, enabled = !busy) { forward(c.userId, Scope.DM) }
+                    TargetRow(c.userId, c.name, TargetKind.USER, enabled = !busy) {
+                        forward(c.userId, Scope.DM)
+                    }
                 }
 
                 if (channels.isNotEmpty()) {
@@ -278,7 +284,9 @@ fun ForwardDialog(
                             modifier = Modifier.padding(vertical = 4.dp))
                     }
                     items(channels, key = { "c${it.first}" }) { (id, name) ->
-                        TargetRow(id, "# $name", enabled = !busy) { forward(id, Scope.SERVER) }
+                        TargetRow(id, "# $name", TargetKind.CHANNEL, enabled = !busy) {
+                            forward(id, Scope.SERVER)
+                        }
                     }
                 }
             }
@@ -290,8 +298,17 @@ fun ForwardDialog(
     )
 }
 
+/** Чей это ряд — от этого зависит, что рисовать вместо кружка. */
+private enum class TargetKind { USER, GROUP, CHANNEL }
+
 @Composable
-private fun TargetRow(id: Int, name: String, enabled: Boolean, onClick: () -> Unit) {
+private fun TargetRow(
+    id: Int,
+    name: String,
+    kind: TargetKind,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -300,7 +317,14 @@ private fun TargetRow(id: Int, name: String, enabled: Boolean, onClick: () -> Un
             ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        LetterAvatar(id, name, 32.dp)
+        // У людей — настоящая аватарка. Здесь всегда рисовалась буква, хотя
+        // фото у человека есть и видно его во всех остальных списках. У групп
+        // свой кружок, у каналов фотографии нет вовсе — там буква и остаётся.
+        when (kind) {
+            TargetKind.USER -> UserAvatar(id, name, 32.dp)
+            TargetKind.GROUP -> GroupAvatar(id, name, "#5865F2", 32.dp)
+            TargetKind.CHANNEL -> LetterAvatar(id, name, 32.dp)
+        }
         Spacer(Modifier.width(10.dp))
         Text(name, color = PismoColors.TextPrimary, fontSize = 14.sp, modifier = Modifier.weight(1f))
         TextButton(onClick = onClick, enabled = enabled) {
