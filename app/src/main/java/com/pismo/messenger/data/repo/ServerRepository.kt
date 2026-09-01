@@ -218,12 +218,53 @@ object ServerRepository {
                 serverId
             ) { rs -> mapChannel(rs, serverId, true) }
         }
-        if (withLimit.isSuccess) return withLimit.getOrDefault(emptyList())
-
-        return Db.query(
+        val list = if (withLimit.isSuccess) withLimit.getOrDefault(emptyList())
+        else Db.query(
             "SELECT id,name,type FROM server_channels WHERE server_id=? ORDER BY position,id",
             serverId
         ) { rs -> mapChannel(rs, serverId, false) }
+
+        // Последние сообщения — одним запросом на весь список, как в чатах.
+        val last = runCatching { lastMessageByChannel(list.map { it.id }) }
+            .getOrDefault(emptyMap())
+        return list.map { it.copy(lastMessage = last[it.id].orEmpty()) }
+    }
+
+    /**
+     * Последнее сообщение каждого канала — ОДНИМ запросом.
+     *
+     * Подзапрос берёт максимальный id по каналу, внешний читает эти строки по
+     * первичному ключу. Сами вложения не выбираем — только признаки наличия:
+     * иначе запрос поднимал бы файлы с диска ради строчки превью.
+     */
+    private suspend fun lastMessageByChannel(ids: List<Int>): Map<Int, String> {
+        if (ids.isEmpty()) return emptyMap()
+        val inList = ids.joinToString(",")
+        val sql = """
+            SELECT sm.channel_id, sm.text, sm.file_name,
+                   (sm.image_data IS NOT NULL) AS has_img,
+                   (sm.audio_data IS NOT NULL) AS has_audio,
+                   (sm.video_data IS NOT NULL) AS has_video
+            FROM server_messages sm
+            JOIN (SELECT channel_id, MAX(id) AS id FROM server_messages
+                  WHERE channel_id IN ($inList) GROUP BY channel_id) t ON t.id = sm.id
+        """.trimIndent()
+
+        val out = HashMap<Int, String>()
+        Db.query(sql) { rs ->
+            val cid = rs.getInt("channel_id")
+            val txt = runCatching { Crypto.dec(rs.str("text")) }.getOrDefault("")
+            out[cid] = when {
+                txt.isNotBlank() -> txt
+                rs.bool("has_img") -> "📷 Фото"
+                rs.bool("has_audio") -> "🎤 Голосовое сообщение"
+                rs.bool("has_video") -> "🎥 Видео"
+                rs.str("file_name").isNotBlank() -> "📎 " + rs.str("file_name")
+                else -> ""
+            }
+            cid
+        }
+        return out
     }
 
     private fun mapChannel(rs: java.sql.ResultSet, serverId: Int, withLimit: Boolean) = ServerChannel(

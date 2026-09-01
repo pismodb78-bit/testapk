@@ -131,6 +131,9 @@ object ChatRepository {
         // и так зовёт его каждые 2,5 секунды и перезагружает список при
         // изменении — значит, цифры будут обновляться сами.
         val unread = runCatching { unreadBySender() }.getOrDefault(emptyMap())
+        // И последнее сообщение — как в обычном списке чатов. Здесь показывалась
+        // роль, то есть по списку нельзя было понять, где что-то новое.
+        val last = runCatching { lastMessageByPartner() }.getOrDefault(emptyMap())
         return Db.query(
             "SELECT id, Name, Surname, login, role FROM users WHERE id <> ? ORDER BY Name",
             UserSession.effectiveId
@@ -139,12 +142,58 @@ object ChatRepository {
             Conversation(
                 userId = id,
                 name = buildName(rs.str("Name"), rs.str("Surname"), rs.str("login")),
-                lastMessage = rs.str("role"),
+                // Роль остаётся, только когда переписки ещё нет: иначе строка
+                // была бы пустой и карточка выглядела бы недогруженной.
+                lastMessage = last[id]?.takeIf { it.isNotBlank() } ?: rs.str("role"),
                 lastTimeMs = null,
                 unread = unread[id] ?: 0,
                 login = rs.str("login"),
             )
         }
+    }
+
+    /**
+     * Последнее сообщение по каждому собеседнику — ОДНИМ запросом.
+     *
+     * Подзапрос находит максимальный id по каждой стороне переписки, внешний
+     * читает эти строки по первичному ключу. Вложения не выбираем — только
+     * признаки их наличия: иначе запрос поднимал бы с диска сами файлы ради
+     * одной строчки превью.
+     */
+    private suspend fun lastMessageByPartner(): Map<Int, String> {
+        val me = UserSession.effectiveId
+        val sql = """
+            SELECT c.partner_id, lm.text, lm.file_name,
+                   (lm.image_data IS NOT NULL) AS has_img,
+                   (lm.audio_data IS NOT NULL) AS has_audio,
+                   (lm.video_data IS NOT NULL) AS has_video
+            FROM (
+                SELECT partner_id, MAX(id) AS last_id FROM (
+                    SELECT receiver_id AS partner_id, MAX(id) AS id
+                    FROM messages WHERE sender_id = ? GROUP BY receiver_id
+                    UNION ALL
+                    SELECT sender_id AS partner_id, MAX(id) AS id
+                    FROM messages WHERE receiver_id = ? GROUP BY sender_id
+                ) t GROUP BY partner_id
+            ) c
+            JOIN messages lm ON lm.id = c.last_id
+        """.trimIndent()
+
+        val out = HashMap<Int, String>()
+        Db.query(sql, me, me) { rs ->
+            val pid = rs.getInt("partner_id")
+            val txt = runCatching { Crypto.dec(rs.str("text")) }.getOrDefault("")
+            out[pid] = when {
+                txt.isNotBlank() -> txt
+                rs.bool("has_img") -> "📷 Фото"
+                rs.bool("has_audio") -> "🎤 Голосовое сообщение"
+                rs.bool("has_video") -> "🎥 Видео"
+                rs.str("file_name").isNotBlank() -> "📎 " + rs.str("file_name")
+                else -> ""
+            }
+            pid
+        }
+        return out
     }
 
     /**

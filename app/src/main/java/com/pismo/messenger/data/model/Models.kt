@@ -123,6 +123,8 @@ data class ServerChannel(
     val userLimit: Int = 0,
     val unread: Int = 0,
     val mentions: Int = 0,
+    /** Последнее сообщение канала — приписка под названием, как в списке чатов. */
+    val lastMessage: String = "",
 )
 
 data class ServerRole(

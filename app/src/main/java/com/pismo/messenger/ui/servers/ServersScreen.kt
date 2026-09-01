@@ -524,15 +524,28 @@ private fun ChannelRow(
             modifier = Modifier.size(18.dp),
         )
         Spacer(Modifier.width(8.dp))
-        Text(
-            channel.name,
-            color = if (unread > 0 && !muted) Color.White else PismoColors.TextSecondary,
-            fontSize = 15.sp,
-            fontWeight = if (unread > 0 && !muted) FontWeight.Bold else FontWeight.Normal,
-            modifier = Modifier.weight(1f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        // Название и, если есть, последнее сообщение под ним — как в списке
+        // чатов. Без приписки понять, где что-то новое, можно было только
+        // зайдя в каждый канал.
+        Column(Modifier.weight(1f)) {
+            Text(
+                channel.name,
+                color = if (unread > 0 && !muted) Color.White else PismoColors.TextSecondary,
+                fontSize = 15.sp,
+                fontWeight = if (unread > 0 && !muted) FontWeight.Bold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (channel.lastMessage.isNotBlank()) {
+                Text(
+                    channel.lastMessage,
+                    color = PismoColors.TextMuted,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
         // Красная цифра — упоминания, серая — просто непрочитанные.
         // Раньше на месте второй была безликая точка: было видно, что
         // «что-то есть», но не сколько и где именно.
