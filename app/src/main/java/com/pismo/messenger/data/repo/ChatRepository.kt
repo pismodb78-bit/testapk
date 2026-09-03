@@ -723,8 +723,11 @@ object ChatRepository {
     }
 
     /** Удаление строки — откат после отмены отправки файла. */
-    suspend fun deleteMessageRow(scope: Scope, msgId: Int) {
-        runCatching { Db.exec("DELETE FROM ${scope.table} WHERE id=?", msgId) }
+    suspend fun deleteMessageRow(scope: Scope, msgId: Int) = deleteRowIn(scope.table, msgId)
+
+    /** То же самое по имени таблицы: каналы серверов живут в своей. */
+    internal suspend fun deleteRowIn(table: String, msgId: Int) {
+        runCatching { Db.exec("DELETE FROM $table WHERE id=?", msgId) }
     }
 
     // ════════════════════════════════════════════════════════════════
