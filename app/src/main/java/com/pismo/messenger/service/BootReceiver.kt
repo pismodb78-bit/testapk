@@ -20,6 +20,10 @@ import kotlinx.coroutines.launch
  * при этом уверен, что мессенджер работает — он ведь установлен и был
  * включён.
  *
+ * Ждём именно BOOT_COMPLETED, который приходит после разблокировки. До неё
+ * хранилище настроек ещё зашифровано, а нам нужны и сохранённый вход, и база,
+ * и сеть — то есть делать всё равно нечего.
+ *
  * Чего это НЕ чинит: «Остановить принудительно» в настройках. Оттуда Android
  * переводит приложение в остановленное состояние, и широковещательные события
  * ему не доставляются вовсе — этот приёмник тоже не сработает. Лечится только
@@ -30,7 +34,6 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
         if (action != Intent.ACTION_BOOT_COMPLETED &&
-            action != Intent.ACTION_LOCKED_BOOT_COMPLETED &&
             action != Intent.ACTION_MY_PACKAGE_REPLACED
         ) return
 

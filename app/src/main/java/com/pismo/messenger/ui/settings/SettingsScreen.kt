@@ -50,6 +50,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pismo.messenger.core.CrashLog
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.Updater
 import com.pismo.messenger.data.ChatDiskCache
@@ -656,6 +657,28 @@ fun SettingsScreen(onBack: () -> Unit) {
                 shape = RoundedCornerShape(8.dp),
             ) { Text("Очистить кеш", color = PismoColors.TextPrimary) }
 
+            // След последнего падения. PISMO ставится APK-файлом, отчётов о
+            // падениях не приходит ниоткуда, и без этой строки о поломке
+            // известно ровно одно: системное «Ошибка приложения». Наружу само
+            // ничего не уходит — отправить решает человек.
+            var crash by remember { mutableStateOf(CrashLog.last()) }
+            if (crash != null) {
+                Spacer(Modifier.height(20.dp))
+                Section("Последнее падение")
+                Text(
+                    crash!!.lineSequence().take(6).joinToString("\n"),
+                    color = PismoColors.TextSecondary, fontSize = 12.sp,
+                )
+                Row(Modifier.fillMaxWidth()) {
+                    TextButton(onClick = { shareCrash(ctx, crash!!) }) {
+                        Text("Отправить разработчику", color = PismoColors.Blurple)
+                    }
+                    TextButton(onClick = { CrashLog.clear(); crash = null }) {
+                        Text("Убрать", color = PismoColors.TextMuted)
+                    }
+                }
+            }
+
             Spacer(Modifier.height(24.dp))
             Button(
                 onClick = { save() },
@@ -836,5 +859,21 @@ private fun requestIgnoreBatteryOptimizations(ctx: android.content.Context) {
                 android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
             ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
         )
+    }
+}
+
+/**
+ * Отдаёт след падения любому приложению, которым человек захочет его
+ * переслать. Файл наружу не отдаём — только текст: так не нужен ни
+ * FileProvider, ни разрешения.
+ */
+private fun shareCrash(ctx: android.content.Context, text: String) {
+    runCatching {
+        val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(android.content.Intent.EXTRA_SUBJECT, "PISMO — след падения")
+            putExtra(android.content.Intent.EXTRA_TEXT, text)
+        }
+        ctx.startActivity(android.content.Intent.createChooser(send, "Отправить след падения"))
     }
 }

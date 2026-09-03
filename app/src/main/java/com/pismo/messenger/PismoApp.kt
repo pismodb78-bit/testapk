@@ -3,6 +3,7 @@ package com.pismo.messenger
 import android.app.Application
 import android.content.Context
 import com.pismo.messenger.call.IncomingCallMonitor
+import com.pismo.messenger.core.CrashLog
 import com.pismo.messenger.core.EmojiCatalog
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.PresenceReporter
@@ -18,6 +19,9 @@ class PismoApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        // Первым делом — иначе падение самой подготовки приложения записать
+        // будет некому, а именно оно и оставляет человека с пустым экраном.
+        CrashLog.install(this)
         Prefs.init(this)
         MediaCache.init(this)
         // Кеш переписок и раскладки серверов теперь переживает закрытие

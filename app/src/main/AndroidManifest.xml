@@ -94,13 +94,17 @@
             android:exported="false"
             android:foregroundServiceType="microphone|camera" />
 
+        <!-- Только BOOT_COMPLETED: он приходит ПОСЛЕ разблокировки телефона.
+             LOCKED_BOOT_COMPLETED и directBootAware отсюда убраны — они
+             поднимали процесс до разблокировки, где хранилище настроек
+             недоступно, и приложение падало на старте, ещё не дойдя до кода
+             приёмника. Раньше разблокировки нам всё равно нечего делать:
+             нужны и сохранённый вход, и база, и сеть. -->
         <receiver
             android:name=".service.BootReceiver"
-            android:exported="true"
-            android:directBootAware="true">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
