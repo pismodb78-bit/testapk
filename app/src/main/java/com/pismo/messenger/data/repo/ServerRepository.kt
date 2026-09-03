@@ -360,6 +360,8 @@ object ServerRepository {
         video: ByteArray? = null,
         file: ByteArray? = null,
         fileName: String? = null,
+        onRowCreated: ((Int) -> Unit)? = null,
+        onProgress: ((Float) -> Unit)? = null,
     ): Int {
         val me = UserSession.effectiveId
         val enc = Crypto.enc(text)
@@ -378,10 +380,11 @@ object ServerRepository {
                     if (hasReplyCol == true) add(if (replyToId > 0) replyToId else null)
                 }.toTypedArray()
             )
+            onRowCreated?.invoke(id)
             if (file != null && file.isNotEmpty() && id > 0) {
                 // Тем же дозаписывающим путём, что и личные чаты: одним
                 // пакетом двести мегабайт сервер не примет.
-                runCatching { ChatRepository.uploadFileData("server_messages", id, file) }
+                ChatRepository.uploadFileData("server_messages", id, file, onProgress)
             }
             id
         } else if (hasReplyCol == true && replyToId > 0) {

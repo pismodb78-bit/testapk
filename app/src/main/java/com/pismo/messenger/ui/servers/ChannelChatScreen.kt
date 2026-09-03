@@ -41,6 +41,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -68,6 +69,7 @@ import com.pismo.messenger.core.ellipsize
 import com.pismo.messenger.core.formatDateSeparator
 import com.pismo.messenger.core.formatDuration
 import com.pismo.messenger.data.MessageMemory
+import com.pismo.messenger.data.Uploads
 import com.pismo.messenger.data.model.ChatMessage
 import com.pismo.messenger.data.model.ReactionSummary
 import com.pismo.messenger.data.model.Scope
@@ -75,6 +77,7 @@ import com.pismo.messenger.media.WavPlayer
 import com.pismo.messenger.media.WavRecorder
 import com.pismo.messenger.data.model.ServerPermissions
 import com.pismo.messenger.data.repo.ChatRepository
+import com.pismo.messenger.ui.chat.UploadBar
 import com.pismo.messenger.data.repo.ReactionsRepository
 import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.media.Sounds
@@ -350,6 +353,22 @@ fun ChannelChatScreen(
         val attach = pending
         // С вложением подпись необязательна — как в личных чатах.
         if (text.isEmpty() && attach == null) return
+
+        // Файл — вне области экрана: уход из канала обрывал дозапись и
+        // оставлял в канале пустое сообщение с одним именем файла.
+        if (attach != null && !attach.isImage) {
+            Uploads.sendChannel(
+                channelId = channelId,
+                text = text,
+                replyToId = replyTo?.id ?: 0,
+                image = null,
+                file = attach.bytes,
+                fileName = attach.fileName,
+            )
+            input = TextFieldValue(""); replyTo = null; pending = null
+            return
+        }
+
         sending = true
         scope.launch {
             runCatching {
@@ -369,6 +388,13 @@ fun ChannelChatScreen(
             sending = false
             reload(scrollToEnd = true)
         }
+    }
+
+    // Отправка файла закончилась или отменена — перечитываем канал.
+    val chanUploadCount = Uploads.active.collectAsState().value
+        .count { it.where == Uploads.channelKey(channelId) }
+    LaunchedEffect(chanUploadCount) {
+        if (chanUploadCount == 0) reload(scrollToEnd = true)
     }
 
     val filePicker = rememberLauncherForActivityResult(
@@ -631,6 +657,10 @@ fun ChannelChatScreen(
 
             // Прикреплённое показываем строкой над полем: файл уходит вместе
             // с подписью одним сообщением, а не двумя, — как в личных чатах.
+            // Полоса идущей отправки файла — та же, что в личных чатах.
+            val chanUploads by Uploads.active.collectAsState()
+            UploadBar(chanUploads.firstOrNull { it.where == Uploads.channelKey(channelId) })
+
             pending?.let { p ->
                 Row(
                     Modifier

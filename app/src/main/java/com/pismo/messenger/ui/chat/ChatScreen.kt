@@ -44,6 +44,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -93,6 +94,7 @@ import com.pismo.messenger.data.model.Presence
 import com.pismo.messenger.data.model.ReactionSummary
 import com.pismo.messenger.data.model.Scope
 import com.pismo.messenger.data.model.headerText
+import com.pismo.messenger.data.Uploads
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.data.repo.ReactionsRepository
@@ -675,6 +677,27 @@ fun ChatScreen(
         // наоборот, подпись необязательна.
         if ((text.isEmpty() && attach == null) || sending) return
 
+        // Файл отправляем НЕ в области экрана: выход из чата закрывал её и
+        // обрывал дозапись, оставляя собеседнику пустое сообщение с одним
+        // именем файла. Заодно за такой отправкой видно, сколько осталось,
+        // и её можно отменить.
+        if (attach != null && !attach.isImage) {
+            Uploads.sendChat(
+                scopeKind = scopeKind,
+                target = targetId,
+                isGroup = isGroup,
+                text = text,
+                image = null,
+                file = attach.bytes,
+                fileName = attach.fileName,
+                replyToId = replyTo?.id ?: 0,
+            )
+            input = ""
+            replyTo = null
+            pending = null
+            return
+        }
+
         sending = true
         scope.launch {
             runCatching {
@@ -700,6 +723,14 @@ fun ChatScreen(
             sending = false
             reload(scrollToEnd = true, force = true)
         }
+    }
+
+    // Отправка закончилась (или отменена) — перечитываем: сообщение с файлом
+    // появилось целиком, отменённое исчезло.
+    val uploadCount = Uploads.active.collectAsState().value
+        .count { it.where == Uploads.chatKey(isGroup, targetId) }
+    LaunchedEffect(uploadCount) {
+        if (uploadCount == 0) reload(scrollToEnd = true, force = true)
     }
 
     val readOnly = !isGroup && (iBlocked || theyBlocked)
@@ -931,6 +962,12 @@ fun ChatScreen(
                     }
                 }
             }
+
+            // Полоса идущей отправки файла. Живёт вне экрана, поэтому видна
+            // и после возвращения в чат, и отменить её можно оттуда же.
+            val uploads by Uploads.active.collectAsState()
+            val myUpload = uploads.firstOrNull { it.where == Uploads.chatKey(isGroup, targetId) }
+            UploadBar(myUpload)
 
             // Панель прикреплённого файла: он ждёт отправки вместе с текстом.
             pending?.let { att ->
@@ -1409,4 +1446,55 @@ internal fun formatBytesShort(bytes: Long): String = when {
     bytes < 1024L -> "$bytes Б"
     bytes < 1024L * 1024L -> "${bytes / 1024L} КБ"
     else -> String.format(java.util.Locale.getDefault(), "%.1f МБ", bytes / 1024.0 / 1024.0)
+}
+
+/**
+ * Полоса идущей отправки файла — имя, доля и крестик отмены.
+ *
+ * На ПК такой показ был с самого начала (круговой индикатор с кнопкой),
+ * на телефоне отправка шла вслепую: большой файл уходил минутами, и понять,
+ * идёт он или уже сорвался, было нельзя.
+ */
+@Composable
+internal fun UploadBar(task: com.pismo.messenger.data.Uploads.Task?) {
+    if (task == null) return
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(PismoColors.BgElevated)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .width(3.dp)
+                .height(32.dp)
+                .background(PismoColors.Blurple)
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "Отправка · ${(task.progress * 100).toInt()}%",
+                color = PismoColors.Blurple,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                task.fileName + " · " + formatBytesShort(task.totalBytes),
+                color = PismoColors.TextMuted,
+                fontSize = 12.sp,
+                maxLines = 1,
+            )
+            Spacer(Modifier.height(4.dp))
+            LinearProgressIndicator(
+                progress = { task.progress },
+                modifier = Modifier.fillMaxWidth().height(3.dp),
+                color = PismoColors.Blurple,
+                trackColor = PismoColors.BgMain,
+            )
+        }
+        IconButton(onClick = { com.pismo.messenger.data.Uploads.cancel(task.id) }) {
+            Icon(Icons.Default.Close, "Отменить отправку", tint = PismoColors.TextMuted)
+        }
+    }
 }

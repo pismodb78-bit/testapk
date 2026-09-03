@@ -615,6 +615,12 @@ object ChatRepository {
         file: ByteArray? = null,
         fileName: String? = null,
         replyToId: Int = 0,
+        /**
+         * Номер вставленной строки — сразу после вставки, ДО заливки файла.
+         * Нужен отмене: тело файла дописывается порциями, и оборванную
+         * дозапись надо чем-то откатывать.
+         */
+        onRowCreated: ((Int) -> Unit)? = null,
         onProgress: ((Float) -> Unit)? = null,
     ): Int = withContext(Dispatchers.IO) {
         val me = UserSession.effectiveId
@@ -635,6 +641,8 @@ object ChatRepository {
                 me, target, encText, image, audio, video, fileName, reply
             )
         }
+
+        onRowCreated?.invoke(newId)
 
         if (file != null && file.isNotEmpty() && newId > 0) {
             uploadFileData(table, newId, file, onProgress)
@@ -689,6 +697,10 @@ object ChatRepository {
         val single = runCatching {
             Db.exec("UPDATE $table SET file_data=? WHERE id=?", data, msgId)
         }
+        // runCatching ловит и отмену. Без этой строки прерванная отправка
+        // выглядела бы как «пакет великоват» и уходила бы на второй круг —
+        // дозапись порциями, которая тут же оборвалась бы снова.
+        (single.exceptionOrNull() as? kotlinx.coroutines.CancellationException)?.let { throw it }
         if (single.isSuccess) {
             onProgress?.invoke(1f)
             return
