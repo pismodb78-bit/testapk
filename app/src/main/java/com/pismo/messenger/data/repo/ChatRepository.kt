@@ -694,21 +694,22 @@ object ChatRepository {
             Db.exec("SET SESSION net_read_timeout=600, net_write_timeout=600, wait_timeout=600")
         }
 
-        val single = runCatching {
+        // Сколько сервер готов принять за раз — спрашиваем его самого, а не
+        // гадаем. Раньше здесь сначала шла попытка залить файл ОДНИМ пакетом,
+        // и только после отказа начиналась дозапись порциями. На телефоне это
+        // означало: весь файл уходит по мобильной сети впустую, без единого
+        // процента, сервер его отвергает — и только потом начинается настоящая
+        // отправка. Со стороны выглядело как «ничего не происходит».
+        val chunk = chunkSize()
+
+        if (data.size <= chunk) {
             Db.exec("UPDATE $table SET file_data=? WHERE id=?", data, msgId)
-        }
-        // runCatching ловит и отмену. Без этой строки прерванная отправка
-        // выглядела бы как «пакет великоват» и уходила бы на второй круг —
-        // дозапись порциями, которая тут же оборвалась бы снова.
-        (single.exceptionOrNull() as? kotlinx.coroutines.CancellationException)?.let { throw it }
-        if (single.isSuccess) {
             onProgress?.invoke(1f)
             return
         }
 
-        // Пакет великоват — дозапись порциями.
+        // Не влезает — сразу порциями, не тратя попытку на заведомо большой пакет.
         Db.exec("UPDATE $table SET file_data=NULL WHERE id=?", msgId)
-        val chunk = 4 * 1024 * 1024
         var off = 0
         while (off < data.size) {
             val len = minOf(chunk, data.size - off)
@@ -720,6 +721,24 @@ object ChatRepository {
             off += len
             onProgress?.invoke(off.toFloat() / data.size)
         }
+    }
+
+    /** Предел пакета сервера: спрашиваем один раз за запуск. */
+    private var maxPacket: Long = -1
+
+    /**
+     * Размер порции. Берём половину от предела сервера: кроме самих байтов в
+     * пакет уходит текст запроса и служебные поля, и впритык слать нельзя.
+     * Границы — чтобы не скатиться ни в мизерные порции, ни в кусок, который
+     * на мобильной сети идёт минутами без признаков жизни.
+     */
+    private suspend fun chunkSize(): Int {
+        if (maxPacket < 0) {
+            maxPacket = runCatching { Db.scalarLong("SELECT @@max_allowed_packet") }
+                .getOrDefault(0L)
+        }
+        val half = if (maxPacket > 0) maxPacket / 2 else 1L * 1024 * 1024
+        return half.coerceIn(256L * 1024, 4L * 1024 * 1024).toInt()
     }
 
     /** Удаление строки — откат после отмены отправки файла. */

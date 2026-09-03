@@ -1469,24 +1469,25 @@ internal fun UploadBar(task: com.pismo.messenger.data.Uploads.Task?) {
             Modifier
                 .width(3.dp)
                 .height(32.dp)
-                .background(PismoColors.Blurple)
+                .background(if (task.error != null) PismoColors.Red else PismoColors.Blurple)
         )
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                "Отправка · ${(task.progress * 100).toInt()}%",
-                color = PismoColors.Blurple,
+                if (task.error != null) "Не отправлено"
+                else "Отправка · ${(task.progress * 100).toInt()}%",
+                color = if (task.error != null) PismoColors.Red else PismoColors.Blurple,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                task.fileName + " · " + formatBytesShort(task.totalBytes),
+                task.error ?: (task.fileName + " · " + formatBytesShort(task.totalBytes)),
                 color = PismoColors.TextMuted,
                 fontSize = 12.sp,
-                maxLines = 1,
+                maxLines = 2,
             )
             Spacer(Modifier.height(4.dp))
-            LinearProgressIndicator(
+            if (task.error == null) LinearProgressIndicator(
                 progress = { task.progress },
                 modifier = Modifier.fillMaxWidth().height(3.dp),
                 color = PismoColors.Blurple,

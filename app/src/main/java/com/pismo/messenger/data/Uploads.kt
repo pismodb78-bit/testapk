@@ -4,6 +4,8 @@ import com.pismo.messenger.data.model.Scope
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.net.SignalingClient
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -40,6 +42,8 @@ object Uploads {
         val fileName: String,
         val totalBytes: Long,
         val sentBytes: Long = 0L,
+        /** Заполнено — отправка сорвалась, и полоса показывает причину. */
+        val error: String? = null,
     ) {
         val progress: Float
             get() = if (totalBytes <= 0L) 0f
@@ -136,36 +140,47 @@ object Uploads {
             _active.value = _active.value + Task(id, where, fileName ?: "Файл", total)
         }
 
-        val job = scope.launch {
+        // Ленивый запуск: сначала кладём задачу в список, потом стартуем.
+        // Иначе быстрая отправка успевала бы завершиться и вычеркнуть себя
+        // раньше, чем мы её вообще записали, — и запись осталась бы навсегда.
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 body(
                     { rowId -> if (rowId > 0) synchronized(this@Uploads) { rows[id] = table to rowId } },
                     { done -> if (tracked) update(id) { it.copy(sentBytes = (done * total).toLong()) } },
                 )
-            } catch (_: Throwable) {
-                // Отмена приходит сюда же. Строку убирает cancel(); при других
-                // сбоях она останется — как и на ПК, где неудачная отправка
-                // тоже видна в переписке.
-            } finally {
                 finish(id)
+            } catch (e: CancellationException) {
+                throw e                     // отмену доводит до конца cancel()
+            } catch (e: Throwable) {
+                // Молча гасить сбой нельзя: со стороны это выглядит как
+                // «нажал отправить, и ничего не произошло». Полоса остаётся и
+                // показывает причину, а недописанную строку убираем — иначе
+                // в переписке останется сообщение с именем файла и без файла.
+                dropRow(id)
+                if (tracked) update(id) { it.copy(error = e.message ?: "не удалось отправить") }
+                else finish(id)
+                synchronized(this@Uploads) { jobs.remove(id) }
             }
         }
         synchronized(this) { jobs[id] = job }
+        job.start()
     }
 
     /** Отмена: обрываем дозапись и убираем наполовину написанную строку. */
     fun cancel(id: Long) {
         val job = synchronized(this) { jobs.remove(id) }
-        val row = synchronized(this) { rows.remove(id) }
         job?.cancel()
-        if (row != null) {
-            scope.launch {
-                withContext(NonCancellable) {
-                    ChatRepository.deleteRowIn(row.first, row.second)
-                }
-            }
-        }
+        dropRow(id)
         finish(id)
+    }
+
+    /** Убирает строку сообщения, если она уже вставлена. */
+    private fun dropRow(id: Long) {
+        val row = synchronized(this) { rows.remove(id) } ?: return
+        scope.launch {
+            withContext(NonCancellable) { ChatRepository.deleteRowIn(row.first, row.second) }
+        }
     }
 
     private fun finish(id: Long) {
