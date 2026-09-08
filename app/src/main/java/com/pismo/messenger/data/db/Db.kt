@@ -69,12 +69,16 @@ object Db {
         "${Prefs.dbHost}:${Prefs.dbPort}/${Prefs.dbName}/${Prefs.dbUser}"
 
     private val jdbcUrl: String
-        get() = "jdbc:mysql://${Prefs.dbHost}:${Prefs.dbPort}/${Prefs.dbName}" +
+        get() = url(socketTimeoutMs = 30_000, compress = false)
+
+    private fun url(socketTimeoutMs: Int, compress: Boolean): String =
+        "jdbc:mysql://${Prefs.dbHost}:${Prefs.dbPort}/${Prefs.dbName}" +
                 "?useUnicode=true&characterEncoding=UTF-8&characterSetResults=UTF-8" +
                 "&connectionCollation=utf8mb4_unicode_ci" +
                 "&useSSL=false&allowPublicKeyRetrieval=true" +
-                "&connectTimeout=10000&socketTimeout=30000" +
-                "&autoReconnect=true&serverTimezone=UTC"
+                "&connectTimeout=10000&socketTimeout=$socketTimeoutMs" +
+                "&autoReconnect=true&serverTimezone=UTC" +
+                (if (compress) "&useCompression=true" else "")
 
     private fun ensureDriver() {
         if (driverLoaded) return
@@ -86,6 +90,35 @@ object Db {
             Class.forName("org.mariadb.jdbc.Driver")
         }
         driverLoaded = true
+    }
+
+    /**
+     * Отдельное соединение под передачу файла.
+     *
+     * Из пула его брать нельзя по двум причинам. Первая: обычные соединения
+     * открыты с socketTimeout в 30 секунд, и порция, которая по мобильной
+     * сети идёт дольше, обрывалась КЛИЕНТОМ — серверные net_read_timeout тут
+     * ни при чём, их я поднимал раньше, а этот таймаут остался. Вторая:
+     * передача держит соединение минутами, а в пуле их всего четыре — всё
+     * остальное приложение вставало бы в очередь за ней.
+     *
+     * [compress] — сжатие протокола. Для документов и текста это заметно
+     * меньше байт по сети; уже сжатое (jpg, zip, mp4) шлём без него, иначе
+     * процессор телефона потратит время впустую. Ровно как на ПК.
+     */
+    internal fun openTransfer(compress: Boolean): Connection {
+        ensureDriver()
+        val conn = DriverManager.getConnection(
+            url(socketTimeoutMs = 600_000, compress = compress),
+            Prefs.dbUser, Prefs.dbPassword,
+        )
+        runCatching {
+            conn.createStatement().use { st ->
+                st.execute("SET NAMES utf8mb4")
+                st.execute("SET SESSION net_read_timeout=600, net_write_timeout=600, wait_timeout=600")
+            }
+        }
+        return conn
     }
 
     private fun openNew(): Connection {

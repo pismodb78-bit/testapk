@@ -384,7 +384,8 @@ object ServerRepository {
             if (file != null && file.isNotEmpty() && id > 0) {
                 // Тем же дозаписывающим путём, что и личные чаты: одним
                 // пакетом двести мегабайт сервер не примет.
-                ChatRepository.uploadFileData("server_messages", id, file, onProgress)
+                ChatRepository.uploadFileData("server_messages", id, file, onProgress,
+                                              fileName = fileName)
             }
             id
         } else if (hasReplyCol == true && replyToId > 0) {

@@ -656,7 +656,7 @@ object ChatRepository {
         }
 
         if (file != null && file.isNotEmpty() && newId > 0) {
-            uploadFileData(table, newId, file, onProgress)
+            uploadFileData(table, newId, file, onProgress, fileName = fileName)
         }
 
         // Своё вложение кладём в кеш прямо здесь. Байты уже на руках, а без
@@ -700,6 +700,8 @@ object ChatRepository {
         onProgress: ((Float) -> Unit)? = null,
         /** Столбец: file_data для документов, image_data для крупных фото. */
         column: String = "file_data",
+        /** Имя — только чтобы решить, сжимать ли поток. */
+        fileName: String? = null,
     ) {
         // Сколько сервер готов принять за раз — спрашиваем его самого, а не
         // гадаем. Раньше здесь сначала шла попытка залить файл ОДНИМ пакетом,
@@ -723,7 +725,8 @@ object ChatRepository {
         var attempt = 0
         while (true) {
             try {
-                uploadOnce(table, msgId, column, data, chunk, job, onProgress)
+                uploadOnce(table, msgId, column, data, chunk, job, onProgress,
+                           compress = compressible(fileName, column))
                 return
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -744,7 +747,8 @@ object ChatRepository {
         chunk: Int,
         job: kotlinx.coroutines.Job?,
         onProgress: ((Float) -> Unit)?,
-    ) {
+        compress: Boolean,
+    ) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         // ВСЁ на ОДНОМ соединении — и настройка таймаутов, и сами порции.
         //
         // Здесь была причина «Communications link failure». Таймауты ставились
@@ -756,15 +760,8 @@ object ChatRepository {
         //
         // На ПК этого не было: там всё выполняется на одном явно открытом
         // соединении, и таймауты применяются к нему же.
-        Db.use(idempotent = false) { conn ->
-            runCatching {
-                conn.createStatement().use { st ->
-                    st.execute(
-                        "SET SESSION net_read_timeout=600, net_write_timeout=600, wait_timeout=600"
-                    )
-                }
-            }
-
+        val conn = Db.openTransfer(compress)
+        try {
             if (data.size <= chunk) {
                 // Одним запросом. Повторять его безопасно: та же строка с тем
                 // же содержимым, сколько бы раз ни записалась.
@@ -774,7 +771,7 @@ object ChatRepository {
                     ps.executeUpdate()
                 }
                 onProgress?.invoke(1f)
-                return@use
+                return@withContext
             }
 
             // Сколько уже лежит в строке. На первой попытке — ноль (столбец
@@ -804,14 +801,35 @@ object ChatRepository {
                 if (job != null && !job.isActive) throw kotlinx.coroutines.CancellationException()
                 val len = minOf(chunk, data.size - off)
                 conn.prepareStatement(sql).use { ps ->
-                    ps.setBytes(1, data.copyOfRange(off, off + len))
+                    // Поток по куску массива вместо copyOfRange: копия каждой
+                    // порции — это ещё столько же памяти и работы сборщику,
+                    // а при шестнадцати мегабайтах на порцию уже заметно.
+                    ps.setBinaryStream(
+                        1, java.io.ByteArrayInputStream(data, off, len), len
+                    )
                     ps.setInt(2, msgId)
                     ps.executeUpdate()
                 }
                 off += len
                 onProgress?.invoke(off.toFloat() / data.size)
             }
+        } finally {
+            runCatching { conn.close() }
         }
+    }
+
+    /**
+     * Стоит ли сжимать поток. Уже сжатое (снимки, видео, архивы) от этого
+     * только медленнее: процессор телефона работает, а байт меньше не
+     * становится. Ровно тот же список, что и на ПК.
+     */
+    private fun compressible(fileName: String?, column: String): Boolean {
+        if (column == "image_data") return false
+        val ext = fileName?.substringAfterLast('.', "")?.lowercase() ?: return true
+        return ext !in setOf(
+            "zip", "rar", "7z", "gz", "tar", "jpg", "jpeg", "png", "gif", "webp",
+            "mp4", "webm", "mov", "mkv", "mp3", "aac", "m4a", "ogg", "opus", "flac", "pdf",
+        )
     }
 
     /**
@@ -828,8 +846,9 @@ object ChatRepository {
         msgId: Int,
         column: String,
         onProgress: ((Float) -> Unit)? = null,
+        /** Имя — только чтобы решить, сжимать ли поток. */
+        fileName: String? = null,
     ): ByteArray? {
-        val chunk = chunkSize()
         val job = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
         // Уже полученное храним снаружи попытки: обрыв на девяностом проценте
         // не должен отправлять всё скачанное в мусор.
@@ -838,7 +857,8 @@ object ChatRepository {
         var attempt = 0
         while (true) {
             try {
-                return downloadOnce(table, msgId, column, chunk, job, out, onProgress)
+                return downloadOnce(table, msgId, column, job, out, onProgress,
+                                    compress = compressible(fileName, column))
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -853,46 +873,54 @@ object ChatRepository {
         table: String,
         msgId: Int,
         column: String,
-        chunk: Int,
         job: kotlinx.coroutines.Job?,
         out: java.io.ByteArrayOutputStream,
         onProgress: ((Float) -> Unit)?,
-    ): ByteArray? {
-        return Db.use(idempotent = true) { conn ->
-            runCatching {
-                conn.createStatement().use { st ->
-                    st.execute(
-                        "SET SESSION net_read_timeout=600, net_write_timeout=600, wait_timeout=600"
-                    )
-                }
-            }
-
+        compress: Boolean,
+    ): ByteArray? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val conn = Db.openTransfer(compress)
+        try {
             val total = conn.prepareStatement(
                 "SELECT OCTET_LENGTH($column) FROM $table WHERE id=?"
             ).use { ps ->
                 ps.setInt(1, msgId)
                 ps.executeQuery().use { rs -> if (rs.next()) rs.getInt(1) else 0 }
             }
-            if (total <= 0) return@use null
+            if (total <= 0) return@withContext null
 
-            val sql = "SELECT SUBSTRING($column, ?, ?) FROM $table WHERE id=?"
-            var off = out.size()          // продолжаем с уже полученного
-            onProgress?.invoke(off.toFloat() / total)
-            while (off < total) {
-                if (job != null && !job.isActive) throw kotlinx.coroutines.CancellationException()
-                val len = minOf(chunk, total - off)
-                val part = conn.prepareStatement(sql).use { ps ->
-                    ps.setInt(1, off + 1)          // SUBSTRING считает с единицы
-                    ps.setInt(2, len)
-                    ps.setInt(3, msgId)
-                    ps.executeQuery().use { rs -> if (rs.next()) rs.getBytes(1) else null }
-                } ?: break
-                out.write(part)
-                off += part.size
-                onProgress?.invoke(off.toFloat() / total)
-                if (part.size < len) break         // строка короче, чем обещала
+            // ОДИН запрос вместо запроса на каждую порцию.
+            //
+            // Раньше здесь шёл SUBSTRING по кускам, и это дорого не по сети, а
+            // на сервере: чтобы отрезать кусок, ему приходится прочитать блоб
+            // целиком — то есть стомегабайтный файл читался с диска столько
+            // раз, сколько было кусков. Теперь один поток от нужного места до
+            // конца, а доля считается по мере чтения.
+            val from = out.size()                 // после обрыва — с этого места
+            onProgress?.invoke(from.toFloat() / total)
+
+            conn.prepareStatement("SELECT SUBSTRING($column, ?) FROM $table WHERE id=?").use { ps ->
+                runCatching { ps.fetchSize = Integer.MIN_VALUE }   // выдача потоком
+                ps.setInt(1, from + 1)            // SUBSTRING считает с единицы
+                ps.setInt(2, msgId)
+                ps.executeQuery().use { rs ->
+                    if (!rs.next()) return@withContext out.toByteArray()
+                    rs.getBinaryStream(1)?.use { input ->
+                        val buf = ByteArray(64 * 1024)
+                        while (true) {
+                            if (job != null && !job.isActive) {
+                                throw kotlinx.coroutines.CancellationException()
+                            }
+                            val n = input.read(buf)
+                            if (n <= 0) break
+                            out.write(buf, 0, n)
+                            onProgress?.invoke(out.size().toFloat() / total)
+                        }
+                    }
+                }
             }
             out.toByteArray()
+        } finally {
+            runCatching { conn.close() }
         }
     }
 
@@ -901,7 +929,7 @@ object ChatRepository {
         msgId: Int, scope: Scope, fileName: String?, onProgress: ((Float) -> Unit)? = null,
     ): ByteArray? {
         MediaCache.get(msgId, "file", fileName)?.let { return it }
-        val data = downloadBlob(scope.table, msgId, "file_data", onProgress)
+        val data = downloadBlob(scope.table, msgId, "file_data", onProgress, fileName)
         if (data != null && data.isNotEmpty()) MediaCache.put(msgId, "file", data, fileName)
         return data
     }
@@ -921,7 +949,13 @@ object ChatRepository {
                 .getOrDefault(0L)
         }
         val half = if (maxPacket > 0) maxPacket / 2 else 1L * 1024 * 1024
-        return half.coerceIn(256L * 1024, 4L * 1024 * 1024).toInt()
+        // Верхняя граница поднята с 4 до 16 МБ. Каждая порция дописывается
+        // через CONCAT, а это заставляет сервер прочитать и переписать ВЕСЬ
+        // накопленный блоб: чем меньше порция, тем больше таких переписываний.
+        // На стомегабайтном файле порциями по 4 МБ сервер перекладывал больше
+        // гигабайта; вчетверо крупнее — вчетверо меньше этой работы и ходов
+        // по сети.
+        return half.coerceIn(256L * 1024, 16L * 1024 * 1024).toInt()
     }
 
     /** Удаление строки — откат после отмены отправки файла. */
