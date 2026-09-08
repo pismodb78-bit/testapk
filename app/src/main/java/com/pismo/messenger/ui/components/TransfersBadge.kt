@@ -6,10 +6,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -40,18 +38,20 @@ import com.pismo.messenger.data.Transfers
 import com.pismo.messenger.ui.theme.PismoColors
 
 /**
- * Кружок с идущими передачами — общий на всё приложение.
+ * Кружок с идущими передачами — для ВЕРХНЕЙ панели экрана.
  *
- * Полосы над строкой ввода показывают только то, что грузится в ОТКРЫТУЮ
+ * Полосы над строкой ввода показывают только то, что грузится в открытую
  * переписку. А передачи живут в области процесса и продолжаются после
  * выхода из чата: без общего указателя человек, ушедший в список чатов,
- * не видел ни того, что отправка ещё идёт, ни того, что она сорвалась.
+ * не видел ни что отправка идёт, ни что она сорвалась.
  *
- * Кружок появляется, только когда есть что показывать, и по нажатию
- * раскрывает список: имя, направление, доля и отмена для каждой.
+ * Сначала кружок висел поверх экрана слева внизу — и закрывал собой то,
+ * ради чего его добавляли: в чате ложился на сами полосы передач, а в
+ * списке — на имена. Место в панели ничего не перекрывает и никуда не
+ * уезжает при прокрутке.
  *
- * Стоит слева: справа внизу на списке чатов живёт кнопка новой переписки,
- * а над ней — строка ввода в чате.
+ * Появляется, только когда есть что показывать; по нажатию раскрывает
+ * список: имя, направление, доля и отмена для каждой передачи.
  */
 @Composable
 fun TransfersBadge() {
@@ -62,32 +62,26 @@ fun TransfersBadge() {
     val failed = items.any { it.error != null }
     val overall = items.map { it.progress }.average().toFloat()
 
-    // Пустой Box поверх всего ничего не перехватывает: нажатия проходят
-    // насквозь, кликается только сам кружок.
-    Box(Modifier.fillMaxSize().navigationBarsPadding()) {
-        Box(
-            Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = 16.dp, bottom = 96.dp)
-                .size(52.dp)
-                .clip(CircleShape)
-                .background(PismoColors.BgElevated)
-                .clickable { open = true },
-            contentAlignment = Alignment.Center,
-        ) {
-            CircularProgressIndicator(
-                progress = { overall },
-                modifier = Modifier.size(44.dp),
-                color = if (failed) PismoColors.Red else PismoColors.Blurple,
-                trackColor = PismoColors.BgMain,
-            )
-            Text(
-                "${items.size}",
-                color = if (failed) PismoColors.Red else PismoColors.TextPrimary,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-            )
-        }
+    Box(
+        Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .clickable { open = true },
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator(
+            progress = { overall },
+            modifier = Modifier.size(30.dp),
+            strokeWidth = 2.5.dp,
+            color = if (failed) PismoColors.Red else PismoColors.Blurple,
+            trackColor = PismoColors.BgElevated,
+        )
+        Text(
+            "${items.size}",
+            color = if (failed) PismoColors.Red else PismoColors.TextPrimary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+        )
     }
 
     if (open) {

@@ -195,6 +195,10 @@ fun ChatListScreen(
                     }
                 },
                 actions = {
+                    // Кружок идущих передач — здесь он ничего не
+                    // перекрывает, в отличие от плавающего над экраном.
+                    com.pismo.messenger.ui.components.TransfersBadge()
+
                     IconButton(onClick = {
                         searchOpen = !searchOpen
                         if (!searchOpen) query = ""
