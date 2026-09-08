@@ -208,6 +208,8 @@ object Db {
      * Повторять имеет смысл только первое: повтор синтаксической ошибки
      * просто удвоит задержку.
      */
+    internal fun looksLikeConnectionLoss(e: Throwable): Boolean = isConnectionFailure(e)
+
     private fun isConnectionFailure(e: Throwable): Boolean {
         var cause: Throwable? = e
         while (cause != null) {

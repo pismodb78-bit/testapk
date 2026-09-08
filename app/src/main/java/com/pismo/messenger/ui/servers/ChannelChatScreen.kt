@@ -667,8 +667,8 @@ fun ChannelChatScreen(
 
             // Прикреплённое показываем строкой над полем: файл уходит вместе
             // с подписью одним сообщением, а не двумя, — как в личных чатах.
-            // Полоса идущей отправки файла — та же, что в личных чатах.
-            val chanUploads by Transfers.active.collectAsState()
+            // Полоса идущих передач — та же, что в личных чатах.
+            val chanTransfers by Transfers.active.collectAsState()
             chanTransfers.filter { it.where == Transfers.channelKey(channelId) }
                 .forEach { UploadBar(it) }
 

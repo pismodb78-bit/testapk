@@ -157,7 +157,7 @@ object Transfers {
         msgId: Int,
         scopeKind: Scope,
         fileName: String?,
-        onReady: (ByteArray) -> Unit,
+        onReady: suspend (ByteArray) -> Unit,
     ) = launch(
         where = where,
         fileName = fileName ?: "Файл",

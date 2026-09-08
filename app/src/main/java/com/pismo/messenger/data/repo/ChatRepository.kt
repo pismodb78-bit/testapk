@@ -710,15 +710,49 @@ object ChatRepository {
         val chunk = chunkSize()
         val job = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
 
+        // ВОЗОБНОВЛЕНИЕ ПОСЛЕ ОБРЫВА.
+        //
+        // Мобильная связь рвётся, и обрыв посреди многомегабайтной дозаписи —
+        // не исключение, а обычное дело. Слепо повторять запись нельзя: она
+        // могла дойти, и повтор дописал бы ту же порцию второй раз. Но здесь
+        // ничего угадывать и не нужно — сколько байт уже лежит в строке,
+        // сервер скажет сам (OCTET_LENGTH). Поэтому после обрыва берём новое
+        // соединение, спрашиваем длину и продолжаем ровно с неё.
+        //
+        // Раньше первый же обрыв убивал отправку целиком.
+        var attempt = 0
+        while (true) {
+            try {
+                uploadOnce(table, msgId, column, data, chunk, job, onProgress)
+                return
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                attempt++
+                if (attempt >= 4 || !Db.looksLikeConnectionLoss(e)) throw e
+                kotlinx.coroutines.delay(1500L * attempt)
+            }
+        }
+    }
+
+    /** Одна попытка заливки — целиком на одном соединении. */
+    private suspend fun uploadOnce(
+        table: String,
+        msgId: Int,
+        column: String,
+        data: ByteArray,
+        chunk: Int,
+        job: kotlinx.coroutines.Job?,
+        onProgress: ((Float) -> Unit)?,
+    ) {
         // ВСЁ на ОДНОМ соединении — и настройка таймаутов, и сами порции.
         //
         // Здесь была причина «Communications link failure». Таймауты ставились
         // отдельным запросом, а он брал соединение из пула (их четыре) — то
         // есть настройка почти всегда доставалась не тому соединению, по
         // которому потом шёл файл. На нём оставался серверный net_read_timeout
-        // в 30 секунд, и порция, которая по мобильной сети идёт дольше, обрывалась
-        // сервером посреди команды. Записи не повторяются (повтор вставил бы
-        // дубль), поэтому отправка просто падала.
+        // в 30 секунд, и порция, которая по мобильной сети идёт дольше,
+        // обрывалась сервером посреди команды.
         //
         // На ПК этого не было: там всё выполняется на одном явно открытом
         // соединении, и таймауты применяются к нему же.
@@ -732,6 +766,8 @@ object ChatRepository {
             }
 
             if (data.size <= chunk) {
+                // Одним запросом. Повторять его безопасно: та же строка с тем
+                // же содержимым, сколько бы раз ни записалась.
                 conn.prepareStatement("UPDATE $table SET $column=? WHERE id=?").use { ps ->
                     ps.setBytes(1, data)
                     ps.setInt(2, msgId)
@@ -741,14 +777,27 @@ object ChatRepository {
                 return@use
             }
 
-            // Не влезает — сразу порциями, не тратя попытку на заведомо большой пакет.
-            conn.prepareStatement("UPDATE $table SET $column=NULL WHERE id=?").use { ps ->
+            // Сколько уже лежит в строке. На первой попытке — ноль (столбец
+            // пуст после вставки), после обрыва — столько, сколько успело
+            // дойти; с этого места и продолжаем.
+            var off = conn.prepareStatement(
+                "SELECT IFNULL(OCTET_LENGTH($column), 0) FROM $table WHERE id=?"
+            ).use { ps ->
                 ps.setInt(1, msgId)
-                ps.executeUpdate()
+                ps.executeQuery().use { rs -> if (rs.next()) rs.getInt(1) else 0 }
             }
 
+            // Больше, чем сам файл, — значит там мусор от прошлой попытки.
+            if (off > data.size) {
+                conn.prepareStatement("UPDATE $table SET $column=NULL WHERE id=?").use { ps ->
+                    ps.setInt(1, msgId)
+                    ps.executeUpdate()
+                }
+                off = 0
+            }
+            onProgress?.invoke(off.toFloat() / data.size)
+
             val sql = "UPDATE $table SET $column = CONCAT(IFNULL($column, _binary''), ?) WHERE id=?"
-            var off = 0
             while (off < data.size) {
                 // Отмену проверяем сами: блок обычный, не приостанавливаемый,
                 // поэтому прерывать его посреди порции некому.
@@ -782,7 +831,33 @@ object ChatRepository {
     ): ByteArray? {
         val chunk = chunkSize()
         val job = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
+        // Уже полученное храним снаружи попытки: обрыв на девяностом проценте
+        // не должен отправлять всё скачанное в мусор.
+        val out = java.io.ByteArrayOutputStream()
 
+        var attempt = 0
+        while (true) {
+            try {
+                return downloadOnce(table, msgId, column, chunk, job, out, onProgress)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                attempt++
+                if (attempt >= 4 || !Db.looksLikeConnectionLoss(e)) throw e
+                kotlinx.coroutines.delay(1500L * attempt)
+            }
+        }
+    }
+
+    private suspend fun downloadOnce(
+        table: String,
+        msgId: Int,
+        column: String,
+        chunk: Int,
+        job: kotlinx.coroutines.Job?,
+        out: java.io.ByteArrayOutputStream,
+        onProgress: ((Float) -> Unit)?,
+    ): ByteArray? {
         return Db.use(idempotent = true) { conn ->
             runCatching {
                 conn.createStatement().use { st ->
@@ -800,9 +875,9 @@ object ChatRepository {
             }
             if (total <= 0) return@use null
 
-            val out = java.io.ByteArrayOutputStream(total)
             val sql = "SELECT SUBSTRING($column, ?, ?) FROM $table WHERE id=?"
-            var off = 0
+            var off = out.size()          // продолжаем с уже полученного
+            onProgress?.invoke(off.toFloat() / total)
             while (off < total) {
                 if (job != null && !job.isActive) throw kotlinx.coroutines.CancellationException()
                 val len = minOf(chunk, total - off)
