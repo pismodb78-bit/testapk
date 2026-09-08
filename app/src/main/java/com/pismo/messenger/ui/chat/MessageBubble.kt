@@ -104,6 +104,11 @@ fun MessageBubble(
      * вместе с ним закрывался бы просмотр.
      */
     onOpenVideo: (java.io.File, String, Int) -> Unit = { _, _, _ -> },
+    /**
+     * Ключ переписки для полосы передач. Скачивание идёт вне экрана, и по
+     * этому ключу полоса показывается там, откуда её запустили.
+     */
+    transferKey: String = "",
 ) {
     val scope = rememberCoroutineScope()
     val isMine = msg.isMine
@@ -311,14 +316,23 @@ fun MessageBubble(
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(Color(0x22000000))
                                     .clickable {
-                                        scope.launch {
-                                            fileStatus = "Загрузка с сервера…"
-                                            val data = runCatching {
-                                                ChatRepository.loadFile(msg.id, scopeKind, msg.fileName)
-                                            }.getOrNull()
-                                            fileStatus = if (data == null) "Не удалось загрузить"
-                                            else if (saveAndOpenFile(context, msg.fileName!!, data)) ""
-                                            else "Нет приложения для этого типа файла"
+                                        // Скачивание идёт вне экрана: выход из
+                                        // чата раньше обрывал его на середине.
+                                        // Байты кладутся в кеш, поэтому даже
+                                        // если уйти, вернувшись файл открывается
+                                        // сразу. Открываем сами только когда
+                                        // экран ещё жив — иначе документ
+                                        // выпрыгнул бы поверх чужой переписки.
+                                        fileStatus = "Загрузка с сервера…"
+                                        com.pismo.messenger.data.Transfers.download(
+                                            where = transferKey,
+                                            msgId = msg.id,
+                                            scopeKind = scopeKind,
+                                            fileName = msg.fileName,
+                                        ) { data ->
+                                            fileStatus =
+                                                if (saveAndOpenFile(context, msg.fileName!!, data)) ""
+                                                else "Нет приложения для этого типа файла"
                                         }
                                     }
                                     .padding(8.dp),

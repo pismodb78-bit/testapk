@@ -94,7 +94,7 @@ import com.pismo.messenger.data.model.Presence
 import com.pismo.messenger.data.model.ReactionSummary
 import com.pismo.messenger.data.model.Scope
 import com.pismo.messenger.data.model.headerText
-import com.pismo.messenger.data.Uploads
+import com.pismo.messenger.data.Transfers
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.data.repo.ReactionsRepository
@@ -698,7 +698,7 @@ fun ChatScreen(
         // бы под каждым.
         if (attach.isNotEmpty()) {
             attach.forEachIndexed { i, att ->
-                Uploads.sendChat(
+                Transfers.sendChat(
                     scopeKind = scopeKind,
                     target = targetId,
                     isGroup = isGroup,
@@ -740,8 +740,8 @@ fun ChatScreen(
 
     // Отправка закончилась (или отменена) — перечитываем: сообщение с файлом
     // появилось целиком, отменённое исчезло.
-    val uploadCount = Uploads.active.collectAsState().value
-        .count { it.where == Uploads.chatKey(isGroup, targetId) }
+    val uploadCount = Transfers.active.collectAsState().value
+        .count { it.where == Transfers.chatKey(isGroup, targetId) }
     LaunchedEffect(uploadCount) {
         if (uploadCount == 0) reload(scrollToEnd = true, force = true)
     }
@@ -932,6 +932,7 @@ fun ChatScreen(
                             if (showDate) DateSeparator(formatDateSeparator(msg.createdAtMs))
 
                             MessageBubble(
+                                transferKey = Transfers.chatKey(isGroup, targetId),
                                 msg = msg,
                                 isGroup = isGroup,
                                 reactions = reactions[msg.id].orEmpty(),
@@ -978,8 +979,8 @@ fun ChatScreen(
 
             // Полоса идущей отправки файла. Живёт вне экрана, поэтому видна
             // и после возвращения в чат, и отменить её можно оттуда же.
-            val uploads by Uploads.active.collectAsState()
-            uploads.filter { it.where == Uploads.chatKey(isGroup, targetId) }
+            val uploads by Transfers.active.collectAsState()
+            uploads.filter { it.where == Transfers.chatKey(isGroup, targetId) }
                 .forEach { UploadBar(it) }
 
             // Панель прикреплённых файлов: они ждут отправки вместе с текстом.
@@ -1469,7 +1470,7 @@ internal fun formatBytesShort(bytes: Long): String = when {
  * идёт он или уже сорвался, было нельзя.
  */
 @Composable
-internal fun UploadBar(task: com.pismo.messenger.data.Uploads.Task?) {
+internal fun UploadBar(task: com.pismo.messenger.data.Transfers.Task?) {
     if (task == null) return
     Row(
         Modifier
@@ -1487,14 +1488,20 @@ internal fun UploadBar(task: com.pismo.messenger.data.Uploads.Task?) {
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                if (task.error != null) "Не отправлено"
-                else "Отправка · ${(task.progress * 100).toInt()}%",
+                when {
+                    task.error != null -> if (task.download) "Не скачано" else "Не отправлено"
+                    task.waiting -> "В очереди"
+                    task.download -> "Скачивание · ${(task.progress * 100).toInt()}%"
+                    else -> "Отправка · ${(task.progress * 100).toInt()}%"
+                },
                 color = if (task.error != null) PismoColors.Red else PismoColors.Blurple,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                task.error ?: (task.fileName + " · " + formatBytesShort(task.totalBytes)),
+                task.error ?: if (task.totalBytes > 0)
+                    task.fileName + " · " + formatBytesShort(task.totalBytes)
+                else task.fileName,
                 color = PismoColors.TextMuted,
                 fontSize = 12.sp,
                 maxLines = 2,
@@ -1507,7 +1514,7 @@ internal fun UploadBar(task: com.pismo.messenger.data.Uploads.Task?) {
                 trackColor = PismoColors.BgMain,
             )
         }
-        IconButton(onClick = { com.pismo.messenger.data.Uploads.cancel(task.id) }) {
+        IconButton(onClick = { com.pismo.messenger.data.Transfers.cancel(task.id) }) {
             Icon(Icons.Default.Close, "Отменить отправку", tint = PismoColors.TextMuted)
         }
     }

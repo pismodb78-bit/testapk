@@ -69,7 +69,7 @@ import com.pismo.messenger.core.ellipsize
 import com.pismo.messenger.core.formatDateSeparator
 import com.pismo.messenger.core.formatDuration
 import com.pismo.messenger.data.MessageMemory
-import com.pismo.messenger.data.Uploads
+import com.pismo.messenger.data.Transfers
 import com.pismo.messenger.data.model.ChatMessage
 import com.pismo.messenger.data.model.ReactionSummary
 import com.pismo.messenger.data.model.Scope
@@ -361,7 +361,7 @@ fun ChannelChatScreen(
         // уходит своим сообщением, подпись достаётся первому.
         if (attach.isNotEmpty()) {
             attach.forEachIndexed { i, att ->
-                Uploads.sendChannel(
+                Transfers.sendChannel(
                     channelId = channelId,
                     text = if (i == 0) text else "",
                     replyToId = if (i == 0) replyTo?.id ?: 0 else 0,
@@ -393,8 +393,8 @@ fun ChannelChatScreen(
     }
 
     // Отправка файла закончилась или отменена — перечитываем канал.
-    val chanUploadCount = Uploads.active.collectAsState().value
-        .count { it.where == Uploads.channelKey(channelId) }
+    val chanUploadCount = Transfers.active.collectAsState().value
+        .count { it.where == Transfers.channelKey(channelId) }
     LaunchedEffect(chanUploadCount) {
         if (chanUploadCount == 0) reload(scrollToEnd = true)
     }
@@ -559,6 +559,7 @@ fun ChannelChatScreen(
                             if (showDate) DateSeparator(formatDateSeparator(msg.createdAtMs))
 
                             MessageBubble(
+                                transferKey = Transfers.channelKey(channelId),
                                 msg = msg,
                                 isGroup = true,          // в канале всегда показываем автора
                                 onOpenVideo = { file, name, id ->
@@ -667,8 +668,8 @@ fun ChannelChatScreen(
             // Прикреплённое показываем строкой над полем: файл уходит вместе
             // с подписью одним сообщением, а не двумя, — как в личных чатах.
             // Полоса идущей отправки файла — та же, что в личных чатах.
-            val chanUploads by Uploads.active.collectAsState()
-            chanUploads.filter { it.where == Uploads.channelKey(channelId) }
+            val chanUploads by Transfers.active.collectAsState()
+            chanTransfers.filter { it.where == Transfers.channelKey(channelId) }
                 .forEach { UploadBar(it) }
 
             pending.forEach { p ->

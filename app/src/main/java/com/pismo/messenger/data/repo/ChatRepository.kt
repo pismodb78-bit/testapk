@@ -765,6 +765,72 @@ object ChatRepository {
         }
     }
 
+    /**
+     * Чтение большого вложения — порциями и с долей.
+     *
+     * Обычный SELECT тянет блоб одним куском: сто мегабайт так не приходят
+     * вовсе (тот же max_allowed_packet, только в обратную сторону), а пока
+     * они идут, о происходящем не известно ничего. Читаем по кускам тем же
+     * размером, что и пишем, на ОДНОМ соединении с длинными таймаутами —
+     * ровно как при отправке.
+     */
+    internal suspend fun downloadBlob(
+        table: String,
+        msgId: Int,
+        column: String,
+        onProgress: ((Float) -> Unit)? = null,
+    ): ByteArray? {
+        val chunk = chunkSize()
+        val job = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
+
+        return Db.use(idempotent = true) { conn ->
+            runCatching {
+                conn.createStatement().use { st ->
+                    st.execute(
+                        "SET SESSION net_read_timeout=600, net_write_timeout=600, wait_timeout=600"
+                    )
+                }
+            }
+
+            val total = conn.prepareStatement(
+                "SELECT OCTET_LENGTH($column) FROM $table WHERE id=?"
+            ).use { ps ->
+                ps.setInt(1, msgId)
+                ps.executeQuery().use { rs -> if (rs.next()) rs.getInt(1) else 0 }
+            }
+            if (total <= 0) return@use null
+
+            val out = java.io.ByteArrayOutputStream(total)
+            val sql = "SELECT SUBSTRING($column, ?, ?) FROM $table WHERE id=?"
+            var off = 0
+            while (off < total) {
+                if (job != null && !job.isActive) throw kotlinx.coroutines.CancellationException()
+                val len = minOf(chunk, total - off)
+                val part = conn.prepareStatement(sql).use { ps ->
+                    ps.setInt(1, off + 1)          // SUBSTRING считает с единицы
+                    ps.setInt(2, len)
+                    ps.setInt(3, msgId)
+                    ps.executeQuery().use { rs -> if (rs.next()) rs.getBytes(1) else null }
+                } ?: break
+                out.write(part)
+                off += part.size
+                onProgress?.invoke(off.toFloat() / total)
+                if (part.size < len) break         // строка короче, чем обещала
+            }
+            out.toByteArray()
+        }
+    }
+
+    /** Файл сообщения: из кеша, иначе с сервера порциями. */
+    internal suspend fun loadFileTracked(
+        msgId: Int, scope: Scope, fileName: String?, onProgress: ((Float) -> Unit)? = null,
+    ): ByteArray? {
+        MediaCache.get(msgId, "file", fileName)?.let { return it }
+        val data = downloadBlob(scope.table, msgId, "file_data", onProgress)
+        if (data != null && data.isNotEmpty()) MediaCache.put(msgId, "file", data, fileName)
+        return data
+    }
+
     /** Предел пакета сервера: спрашиваем один раз за запуск. */
     private var maxPacket: Long = -1
 
