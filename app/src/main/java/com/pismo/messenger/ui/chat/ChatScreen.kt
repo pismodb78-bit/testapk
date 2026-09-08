@@ -603,6 +603,10 @@ fun ChatScreen(
             // из-за одного лишнего файла терять остальные обидно.
             val tooBig = mutableListOf<String>()
             val added = mutableListOf<PendingFile>()
+            // Всё приложенное лежит в памяти до отправки, поэтому предел общий,
+            // а не на каждый файл: иначе пачкой можно набрать столько, что
+            // приложению не хватит памяти и оно просто закроется.
+            var used = pending.sumOf { it.bytes.size.toLong() }
             for (uri in uris) {
                 runCatching {
                     val name = queryFileName(context, uri)
@@ -610,11 +614,14 @@ fun ChatScreen(
                     // Размер узнаём ДО чтения: файл на 300 МБ иначе успел бы
                     // положить приложение ещё до проверки.
                     val declared = fileSizeOf(context, uri)
-                    if (declared > MAX_ATTACH_BYTES) { tooBig += name; return@runCatching }
+                    if (declared > 0 && used + declared > MAX_ATTACH_BYTES) {
+                        tooBig += name; return@runCatching
+                    }
 
                     val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                         ?: return@runCatching
-                    if (bytes.size > MAX_ATTACH_BYTES) { tooBig += name; return@runCatching }
+                    if (used + bytes.size > MAX_ATTACH_BYTES) { tooBig += name; return@runCatching }
+                    used += bytes.size
 
                     val isImage = com.pismo.messenger.core.isImageName(name) ||
                             com.pismo.messenger.core.isGifName(name)
@@ -628,7 +635,7 @@ fun ChatScreen(
             }
             if (added.isNotEmpty()) pending = pending + added
             if (tooBig.isNotEmpty()) {
-                jumpNote = "Не приложено (больше ${MAX_ATTACH_BYTES / 1024 / 1024} МБ): " +
+                jumpNote = "Не приложено — всего можно ${MAX_ATTACH_BYTES / 1024 / 1024} МБ за раз: " +
                         tooBig.joinToString(", ")
             }
         }
