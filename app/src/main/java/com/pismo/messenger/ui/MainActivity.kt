@@ -213,6 +213,12 @@ class MainActivity : ComponentActivity() {
                 // «нет связи» значило бы сделать неверную настройку
                 // неисправимой. На ПК по той же причине ConnectionGuard
                 // живёт в MainForm и формы входа не закрывает.
+                // Кружок идущих передач — в корне и ПОСЛЕ NavHost, иначе он
+                // окажется под экраном по порядку отрисовки. Отправка и
+                // скачивание продолжаются после выхода из чата, поэтому видеть
+                // их надо с любого экрана.
+                com.pismo.messenger.ui.components.TransfersBadge()
+
                 val currentEntry by navController.currentBackStackEntryAsState()
                 val route = currentEntry?.destination?.route
                 ConnectionOverlay(
