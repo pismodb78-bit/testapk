@@ -82,7 +82,7 @@ object Uploads {
         replyToId: Int,
     ) {
         val where = chatKey(isGroup, target)
-        launchUpload(where, fileName, file, scopeKind.table) { onRow, onBytes ->
+        launchUpload(where, fileName ?: "Фото", file, image, scopeKind.table) { onRow, onBytes ->
             ChatRepository.sendMessage(
                 scope = scopeKind,
                 target = target,
@@ -109,7 +109,7 @@ object Uploads {
         fileName: String?,
     ) {
         val where = channelKey(channelId)
-        launchUpload(where, fileName, file, Scope.SERVER.table) { onRow, onBytes ->
+        launchUpload(where, fileName ?: "Фото", file, image, Scope.SERVER.table) { onRow, onBytes ->
             ServerRepository.sendChannelMessage(
                 channelId = channelId,
                 text = text,
@@ -128,10 +128,13 @@ object Uploads {
         where: String,
         fileName: String?,
         file: ByteArray?,
+        image: ByteArray?,
         table: String,
         body: suspend (onRow: (Int) -> Unit, onBytes: (Float) -> Unit) -> Unit,
     ) {
-        val total = (file?.size ?: 0).toLong()
+        // Следим и за фото: крупный снимок тоже уходит порциями, и без полосы
+        // его отправка выглядела бы как «ничего не происходит».
+        val total = ((file ?: image)?.size ?: 0).toLong()
         val id = synchronized(this) { nextId++ }
         // Полосу показываем только для файлов: картинка уходит одним запросом
         // вместе со строкой, следить там не за чем.

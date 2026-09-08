@@ -178,7 +178,9 @@ fun ChannelChatScreen(
 
     // Вложения в каналах: ПК их сюда только что принёс, а репозиторий у нас
     // умел их с самого начала — не хватало ровно кнопок.
-    var pending by remember(channelId) { mutableStateOf<PendingFile?>(null) }
+    // Вложений может быть несколько: выбираются пачкой и уходят отдельными
+    // сообщениями — в строке базы ровно одно место под файл.
+    var pending by remember(channelId) { mutableStateOf<List<PendingFile>>(emptyList()) }
     var showGifPicker by remember { mutableStateOf(false) }
 
     var attachNote by remember(channelId) { mutableStateOf("") }
@@ -352,20 +354,25 @@ fun ChannelChatScreen(
 
         val attach = pending
         // С вложением подпись необязательна — как в личных чатах.
-        if (text.isEmpty() && attach == null) return
+        if (text.isEmpty() && attach.isEmpty()) return
 
-        // Файл — вне области экрана: уход из канала обрывал дозапись и
-        // оставлял в канале пустое сообщение с одним именем файла.
-        if (attach != null && !attach.isImage) {
-            Uploads.sendChannel(
-                channelId = channelId,
-                text = text,
-                replyToId = replyTo?.id ?: 0,
-                image = null,
-                file = attach.bytes,
-                fileName = attach.fileName,
-            )
-            input = TextFieldValue(""); replyTo = null; pending = null
+        // Вложения — вне области экрана: уход из канала обрывал дозапись и
+        // оставлял в канале пустое сообщение с одним именем файла. Каждое
+        // уходит своим сообщением, подпись достаётся первому.
+        if (attach.isNotEmpty()) {
+            attach.forEachIndexed { i, att ->
+                Uploads.sendChannel(
+                    channelId = channelId,
+                    text = if (i == 0) text else "",
+                    replyToId = if (i == 0) replyTo?.id ?: 0 else 0,
+                    image = att.bytes.takeIf { att.isImage },
+                    file = att.bytes.takeIf { !att.isImage },
+                    // Имя файла только для не-картинок: с ним ПК рисует под
+                    // фото вторую строку-карточку того же вложения.
+                    fileName = att.fileName.takeIf { !att.isImage },
+                )
+            }
+            input = TextFieldValue(""); replyTo = null; pending = emptyList()
             return
         }
 
@@ -376,15 +383,10 @@ fun ChannelChatScreen(
                     channelId = channelId,
                     text = text,
                     replyToId = replyTo?.id ?: 0,
-                    image = attach?.takeIf { it.isImage }?.bytes,
-                    file = attach?.takeIf { !it.isImage }?.bytes,
-                    // Имя файла только для не-картинок: с ним ПК рисует под
-                    // фото вторую строку-карточку того же вложения.
-                    fileName = attach?.takeIf { !it.isImage }?.fileName,
                 )
                 SignalingClient.send("new_message", 0, channelId, "server")
             }
-            input = TextFieldValue(""); replyTo = null; pending = null
+            input = TextFieldValue(""); replyTo = null
             sending = false
             reload(scrollToEnd = true)
         }
@@ -398,35 +400,35 @@ fun ChannelChatScreen(
     }
 
     val filePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
         scope.launch {
-            runCatching {
-                val name = queryFileName(context, uri)
-                // Размер узнаём ДО чтения: файл на двести мегабайт иначе
-                // успел бы положить приложение ещё до проверки.
-                val declared = fileSizeOf(context, uri)
-                if (declared > MAX_ATTACH_BYTES) {
-                    attachNote = "Файл слишком большой: ${declared / 1024 / 1024} МБ " +
-                            "при пределе ${MAX_ATTACH_BYTES / 1024 / 1024} МБ."
-                    return@runCatching
+            // Слишком большие пропускаем поимённо, а не бросаем всю пачку.
+            val tooBig = mutableListOf<String>()
+            val added = mutableListOf<PendingFile>()
+            for (uri in uris) {
+                runCatching {
+                    val name = queryFileName(context, uri)
+                    // Размер узнаём ДО чтения: файл на двести мегабайт иначе
+                    // успел бы положить приложение ещё до проверки.
+                    val declared = fileSizeOf(context, uri)
+                    if (declared > MAX_ATTACH_BYTES) { tooBig += name; return@runCatching }
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                        ?: return@runCatching
+                    if (bytes.size > MAX_ATTACH_BYTES) { tooBig += name; return@runCatching }
+                    added += PendingFile(
+                        bytes = bytes,
+                        fileName = name,
+                        isImage = com.pismo.messenger.core.isImageName(name) ||
+                                com.pismo.messenger.core.isGifName(name),
+                    )
                 }
-                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    ?: return@runCatching
-                if (bytes.size > MAX_ATTACH_BYTES) {
-                    attachNote = "Файл слишком большой: ${bytes.size / 1024 / 1024} МБ " +
-                            "при пределе ${MAX_ATTACH_BYTES / 1024 / 1024} МБ."
-                    return@runCatching
-                }
-                attachNote = ""
-                pending = PendingFile(
-                    bytes = bytes,
-                    fileName = name,
-                    isImage = com.pismo.messenger.core.isImageName(name) ||
-                            com.pismo.messenger.core.isGifName(name),
-                )
             }
+            if (added.isNotEmpty()) pending = pending + added
+            attachNote = if (tooBig.isEmpty()) ""
+                else "Не приложено (больше ${MAX_ATTACH_BYTES / 1024 / 1024} МБ): " +
+                        tooBig.joinToString(", ")
         }
     }
 
@@ -659,9 +661,10 @@ fun ChannelChatScreen(
             // с подписью одним сообщением, а не двумя, — как в личных чатах.
             // Полоса идущей отправки файла — та же, что в личных чатах.
             val chanUploads by Uploads.active.collectAsState()
-            UploadBar(chanUploads.firstOrNull { it.where == Uploads.channelKey(channelId) })
+            chanUploads.filter { it.where == Uploads.channelKey(channelId) }
+                .forEach { UploadBar(it) }
 
-            pending?.let { p ->
+            pending.forEach { p ->
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -677,7 +680,7 @@ fun ChannelChatScreen(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
-                    IconButton(onClick = { pending = null }, modifier = Modifier.size(28.dp)) {
+                    IconButton(onClick = { pending = pending - p }, modifier = Modifier.size(28.dp)) {
                         Icon(
                             Icons.Default.Close, "Убрать вложение",
                             tint = PismoColors.TextMuted, modifier = Modifier.size(16.dp),
@@ -835,7 +838,7 @@ fun ChannelChatScreen(
     if (showGifPicker) {
         com.pismo.messenger.ui.chat.GifPickerDialog(
             onPicked = { bytes ->
-                pending = PendingFile(bytes = bytes, fileName = "giphy.gif", isImage = true)
+                pending = pending + PendingFile(bytes = bytes, fileName = "giphy.gif", isImage = true)
             },
             onDismiss = { showGifPicker = false },
         )

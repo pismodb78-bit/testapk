@@ -628,21 +628,32 @@ object ChatRepository {
         val encText = Crypto.enc(text)
         val reply = if (replyToId > 0) replyToId else null
 
+        // Крупное фото одним пакетом не проходит — сервер режет по
+        // max_allowed_packet, и вставка падала целиком: снимок не уходил
+        // вообще. Такое вставляем пустым и дописываем порциями, тем же
+        // путём, что и документы.
+        val bigImage = image?.takeIf { it.size > chunkSize() }
+        val inlineImage = if (bigImage != null) null else image
+
         val newId = if (scope == Scope.GROUP) {
             Db.insert(
                 "INSERT INTO group_messages (group_id, sender_id, text, image_data, audio_data, " +
                         "video_data, file_data, file_name, reply_to_id) VALUES (?,?,?,?,?,?,NULL,?,?)",
-                target, me, encText, image, audio, video, fileName, reply
+                target, me, encText, inlineImage, audio, video, fileName, reply
             )
         } else {
             Db.insert(
                 "INSERT INTO messages (sender_id, receiver_id, text, image_data, audio_data, " +
                         "video_data, file_data, file_name, reply_to_id) VALUES (?,?,?,?,?,?,NULL,?,?)",
-                me, target, encText, image, audio, video, fileName, reply
+                me, target, encText, inlineImage, audio, video, fileName, reply
             )
         }
 
         onRowCreated?.invoke(newId)
+
+        if (bigImage != null && newId > 0) {
+            uploadFileData(table, newId, bigImage, onProgress, column = "image_data")
+        }
 
         if (file != null && file.isNotEmpty() && newId > 0) {
             uploadFileData(table, newId, file, onProgress)
@@ -687,6 +698,8 @@ object ChatRepository {
         msgId: Int,
         data: ByteArray,
         onProgress: ((Float) -> Unit)? = null,
+        /** Столбец: file_data для документов, image_data для крупных фото. */
+        column: String = "file_data",
     ) {
         // Сессионные таймауты: запись большого blob легко выходит за
         // дефолтные 30 секунд, и сервер рвёт соединение посреди команды.
@@ -703,19 +716,19 @@ object ChatRepository {
         val chunk = chunkSize()
 
         if (data.size <= chunk) {
-            Db.exec("UPDATE $table SET file_data=? WHERE id=?", data, msgId)
+            Db.exec("UPDATE $table SET $column=? WHERE id=?", data, msgId)
             onProgress?.invoke(1f)
             return
         }
 
         // Не влезает — сразу порциями, не тратя попытку на заведомо большой пакет.
-        Db.exec("UPDATE $table SET file_data=NULL WHERE id=?", msgId)
+        Db.exec("UPDATE $table SET $column=NULL WHERE id=?", msgId)
         var off = 0
         while (off < data.size) {
             val len = minOf(chunk, data.size - off)
             val part = data.copyOfRange(off, off + len)
             Db.exec(
-                "UPDATE $table SET file_data = CONCAT(IFNULL(file_data, _binary''), ?) WHERE id=?",
+                "UPDATE $table SET $column = CONCAT(IFNULL($column, _binary''), ?) WHERE id=?",
                 part, msgId
             )
             off += len
