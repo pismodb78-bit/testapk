@@ -68,6 +68,13 @@ object CallRepository {
             WHERE (cs.callee_id = ? OR gm.user_id = ?)
               AND cs.status = 'ringing'
               AND cs.caller_id <> ?
+              -- Звонящий должен быть ЖИВ. Статус 'ringing' снимает только
+              -- ответ, отказ или штатное завершение: если у звонящего упало
+              -- приложение или пропала сеть, строка остаётся в базе навсегда,
+              -- и телефон звонил бы по вызову, которого давно нет. Живость —
+              -- по тому же last_seen, по которому считается «в сети».
+              AND u.last_seen IS NOT NULL
+              AND TIMESTAMPDIFF(SECOND, u.last_seen, NOW()) <= 60
             ORDER BY cs.id ASC
         """.trimIndent()
 
