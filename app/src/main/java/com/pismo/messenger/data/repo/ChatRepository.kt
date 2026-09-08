@@ -701,12 +701,6 @@ object ChatRepository {
         /** Столбец: file_data для документов, image_data для крупных фото. */
         column: String = "file_data",
     ) {
-        // Сессионные таймауты: запись большого blob легко выходит за
-        // дефолтные 30 секунд, и сервер рвёт соединение посреди команды.
-        runCatching {
-            Db.exec("SET SESSION net_read_timeout=600, net_write_timeout=600, wait_timeout=600")
-        }
-
         // Сколько сервер готов принять за раз — спрашиваем его самого, а не
         // гадаем. Раньше здесь сначала шла попытка залить файл ОДНИМ пакетом,
         // и только после отказа начиналась дозапись порциями. На телефоне это
@@ -714,25 +708,60 @@ object ChatRepository {
         // процента, сервер его отвергает — и только потом начинается настоящая
         // отправка. Со стороны выглядело как «ничего не происходит».
         val chunk = chunkSize()
+        val job = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
 
-        if (data.size <= chunk) {
-            Db.exec("UPDATE $table SET $column=? WHERE id=?", data, msgId)
-            onProgress?.invoke(1f)
-            return
-        }
+        // ВСЁ на ОДНОМ соединении — и настройка таймаутов, и сами порции.
+        //
+        // Здесь была причина «Communications link failure». Таймауты ставились
+        // отдельным запросом, а он брал соединение из пула (их четыре) — то
+        // есть настройка почти всегда доставалась не тому соединению, по
+        // которому потом шёл файл. На нём оставался серверный net_read_timeout
+        // в 30 секунд, и порция, которая по мобильной сети идёт дольше, обрывалась
+        // сервером посреди команды. Записи не повторяются (повтор вставил бы
+        // дубль), поэтому отправка просто падала.
+        //
+        // На ПК этого не было: там всё выполняется на одном явно открытом
+        // соединении, и таймауты применяются к нему же.
+        Db.use(idempotent = false) { conn ->
+            runCatching {
+                conn.createStatement().use { st ->
+                    st.execute(
+                        "SET SESSION net_read_timeout=600, net_write_timeout=600, wait_timeout=600"
+                    )
+                }
+            }
 
-        // Не влезает — сразу порциями, не тратя попытку на заведомо большой пакет.
-        Db.exec("UPDATE $table SET $column=NULL WHERE id=?", msgId)
-        var off = 0
-        while (off < data.size) {
-            val len = minOf(chunk, data.size - off)
-            val part = data.copyOfRange(off, off + len)
-            Db.exec(
-                "UPDATE $table SET $column = CONCAT(IFNULL($column, _binary''), ?) WHERE id=?",
-                part, msgId
-            )
-            off += len
-            onProgress?.invoke(off.toFloat() / data.size)
+            if (data.size <= chunk) {
+                conn.prepareStatement("UPDATE $table SET $column=? WHERE id=?").use { ps ->
+                    ps.setBytes(1, data)
+                    ps.setInt(2, msgId)
+                    ps.executeUpdate()
+                }
+                onProgress?.invoke(1f)
+                return@use
+            }
+
+            // Не влезает — сразу порциями, не тратя попытку на заведомо большой пакет.
+            conn.prepareStatement("UPDATE $table SET $column=NULL WHERE id=?").use { ps ->
+                ps.setInt(1, msgId)
+                ps.executeUpdate()
+            }
+
+            val sql = "UPDATE $table SET $column = CONCAT(IFNULL($column, _binary''), ?) WHERE id=?"
+            var off = 0
+            while (off < data.size) {
+                // Отмену проверяем сами: блок обычный, не приостанавливаемый,
+                // поэтому прерывать его посреди порции некому.
+                if (job != null && !job.isActive) throw kotlinx.coroutines.CancellationException()
+                val len = minOf(chunk, data.size - off)
+                conn.prepareStatement(sql).use { ps ->
+                    ps.setBytes(1, data.copyOfRange(off, off + len))
+                    ps.setInt(2, msgId)
+                    ps.executeUpdate()
+                }
+                off += len
+                onProgress?.invoke(off.toFloat() / data.size)
+            }
         }
     }
 
