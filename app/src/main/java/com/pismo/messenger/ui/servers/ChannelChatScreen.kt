@@ -181,6 +181,8 @@ fun ChannelChatScreen(
     // Вложений может быть несколько: выбираются пачкой и уходят отдельными
     // сообщениями — в строке базы ровно одно место под файл.
     var pending by remember(channelId) { mutableStateOf<List<PendingFile>>(emptyList()) }
+    /** Сообщение, к которому только что прыгнули по цитате: мигает и гаснет. */
+    var flashId by remember(channelId) { mutableIntStateOf(0) }
     var showGifPicker by remember { mutableStateOf(false) }
 
     var attachNote by remember(channelId) { mutableStateOf("") }
@@ -568,8 +570,14 @@ fun ChannelChatScreen(
                                     // Прыгаем, если сообщение на загруженной
                                     // странице; вглубь истории пока не идём.
                                     val idx = messages.indexOfFirst { it.id == id }
-                                    if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
+                                    if (idx >= 0) scope.launch {
+                                        listState.animateScrollToItem(idx)
+                                        flashId = id
+                                        delay(1200)
+                                        if (flashId == id) flashId = 0
+                                    }
                                 },
+                                highlighted = msg.id == flashId,
                                 msg = msg,
                                 isGroup = true,          // в канале всегда показываем автора
                                 onOpenVideo = { file, name, id ->

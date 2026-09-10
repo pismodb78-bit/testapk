@@ -260,6 +260,8 @@ fun ChatScreen(
     // отдельными сообщениями — по одному файлу на строку, как того требует
     // схема базы. Подпись достаётся первому.
     var pending by remember(targetId) { mutableStateOf<List<PendingFile>>(emptyList()) }
+    /** Сообщение, к которому только что прыгнули по цитате: мигает и гаснет. */
+    var flashId by remember(targetId) { mutableIntStateOf(0) }
 
     // Сколько сообщений тянуть. Переход к дате расширяет страницу ровно так
     // же, как _dmLimit на ПК: лента грузится с конца, и без расширения
@@ -938,11 +940,19 @@ fun ChatScreen(
                             MessageBubble(
                                 transferKey = Transfers.chatKey(isGroup, targetId),
                                 onQuoteClick = { id ->
-                                    // Прыгаем, если сообщение на загруженной
-                                    // странице; вглубь истории пока не идём.
-                                    val idx = messages.indexOfFirst { it.id == id }
-                                    if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
+                                    // Индекс берём по ВИДИМОМУ списку, а не по
+                                    // messages: в закрытой переписке часть
+                                    // сообщений отфильтрована, и номера
+                                    // разъезжаются — прыжок уводил бы не туда.
+                                    val idx = visible.indexOfFirst { it.id == id }
+                                    if (idx >= 0) scope.launch {
+                                        listState.animateScrollToItem(idx)
+                                        flashId = id
+                                        delay(1200)
+                                        if (flashId == id) flashId = 0
+                                    }
                                 },
+                                highlighted = msg.id == flashId,
                                 msg = msg,
                                 isGroup = isGroup,
                                 reactions = reactions[msg.id].orEmpty(),

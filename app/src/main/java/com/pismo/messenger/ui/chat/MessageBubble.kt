@@ -38,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
@@ -111,6 +112,12 @@ fun MessageBubble(
     transferKey: String = "",
     /** Нажатие на цитату — прыжок к тому сообщению, на которое отвечали. */
     onQuoteClick: (Int) -> Unit = {},
+    /**
+     * Мигнуть — сюда только что прыгнули по цитате. Без этого прыжок было
+     * не заметить: лента просто оказывалась в другом месте, и какое
+     * сообщение искомое, приходилось угадывать.
+     */
+    highlighted: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
     val isMine = msg.isMine
@@ -172,10 +179,26 @@ fun MessageBubble(
 
         Column(horizontalAlignment = if (isMine) Alignment.End else Alignment.Start) {
             Box {
+                // Вспышка гаснет сама: появляется быстро, уходит плавно, —
+                // так глаз успевает поймать, куда прыгнули, и подсветка не
+                // остаётся висеть.
+                val flash by androidx.compose.animation.core.animateFloatAsState(
+                    targetValue = if (highlighted) 1f else 0f,
+                    animationSpec = androidx.compose.animation.core.tween(
+                        durationMillis = if (highlighted) 150 else 900
+                    ),
+                    label = "flash",
+                )
                 Column(
                     modifier = Modifier
                         .widthIn(max = 300.dp)
                         .clip(RoundedCornerShape(12.dp))
+                        .drawWithContent {
+                            drawContent()
+                            if (flash > 0f) {
+                                drawRect(PismoColors.Cyan.copy(alpha = 0.30f * flash))
+                            }
+                        }
                         .background(
                             when {
                                 // Выбранный пузырь подсвечивается, как на ПК
