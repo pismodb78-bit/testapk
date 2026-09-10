@@ -1,6 +1,10 @@
 package com.pismo.messenger.ui.chat
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -453,14 +457,12 @@ fun MessageBubble(
                                     // сообщения.
                                     modifier = if (textLinks.isEmpty()) Modifier
                                     else Modifier.pointerInput(msg.text) {
-                                        androidx.compose.foundation.gestures.awaitEachGesture {
-                                            val down = androidx.compose.foundation.gestures
-                                                .awaitFirstDown(requireUnconsumed = false)
-                                            val up = kotlinx.coroutines.withTimeoutOrNull(
+                                        awaitEachGesture {
+                                            val down = awaitFirstDown(requireUnconsumed = false)
+                                            val up = withTimeoutOrNull(
                                                 viewConfiguration.longPressTimeoutMillis
                                             ) {
-                                                androidx.compose.foundation.gestures
-                                                    .waitForUpOrCancellation()
+                                                waitForUpOrCancellation()
                                             }
                                             if (up == null) {
                                                 val off = layout?.getOffsetForPosition(down.position)
