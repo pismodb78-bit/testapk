@@ -434,6 +434,11 @@ fun MessageBubble(
                                 color = PismoColors.onBubble(isMine),
                                 fontSize = 15.sp,
                             )
+                            // Строка источника под текстом: по одному адресу
+                            // в самом сообщении не всегда понятно, куда он
+                            // ведёт, — длинные ссылки обрезаются, а короткие
+                            // вроде t.me/xxx ничего не говорят.
+                            LinkSourceRows(msg.text)
                         }
                     }
 
@@ -736,4 +741,57 @@ private fun highlightMentions(text: String, isMine: Boolean): AnnotatedString {
         }
         if (pos < text.length) append(text.substring(pos))
     }
+}
+
+/**
+ * Строки «откуда ссылка» под текстом сообщения.
+ *
+ * Значков служб не качаем и с собой не носим: тянуть иконку с самого сайта
+ * значит сообщить ему, что человек открыл переписку, ещё до того, как он
+ * нажал на ссылку. Рисуем сами — цвет службы и одна-две буквы, тем же
+ * способом, что и бейджи типов файлов.
+ */
+@Composable
+private fun LinkSourceRows(text: String) {
+    val links = remember(text) { com.pismo.messenger.core.Links.find(text) }
+    if (links.isEmpty()) return
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+
+    // Больше трёх строк под сообщением — уже полотно; остальные ссылки
+    // по-прежнему нажимаются прямо в тексте.
+    links.distinctBy { com.pismo.messenger.core.LinkSources.domainOf(it.url) }
+        .take(3)
+        .forEach { link ->
+            val src = com.pismo.messenger.core.LinkSources.of(link.url)
+            Spacer(Modifier.height(4.dp))
+            Row(
+                Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { runCatching { uriHandler.openUri(link.url) } }
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier
+                        .size(18.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color(src.color)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        src.mark,
+                        color = Color.White,
+                        fontSize = if (src.mark.length > 1) 9.sp else 11.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    src.title,
+                    color = PismoColors.TextMuted,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                )
+            }
+        }
 }
