@@ -127,7 +127,6 @@ fun MessageBubble(
 ) {
     val scope = rememberCoroutineScope()
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
-    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
     /** Открытое окно проигрывателя для ссылки на видео. */
     var videoLink by remember { mutableStateOf<com.pismo.messenger.core.VideoLinks.Playable?>(null) }
     val isMine = msg.isMine
@@ -505,7 +504,8 @@ fun MessageBubble(
                                                     val play = com.pismo.messenger.core
                                                         .VideoLinks.of(hit.url)
                                                     if (play != null) videoLink = play
-                                                    else runCatching { uriHandler.openUri(hit.url) }
+                                                    else com.pismo.messenger.core
+                                                        .LinkOpener.open(context, hit.url)
                                                 }
                                                 // Жест отменили (потянули ленту) —
                                                 // не делаем ничего.
@@ -531,9 +531,11 @@ fun MessageBubble(
                                         )
                                     }
                                     DropdownMenuItem(
-                                        text = { Text("🔗  Открыть") },
+                                        text = { Text("🔗  Открыть в приложении") },
                                         onClick = {
-                                            url?.let { runCatching { uriHandler.openUri(it) } }
+                                            url?.let {
+                                                com.pismo.messenger.core.LinkOpener.open(context, it)
+                                            }
                                             linkMenu = null
                                         },
                                     )
@@ -884,7 +886,7 @@ private fun highlightMentions(
 private fun LinkSourceRows(text: String) {
     val links = remember(text) { com.pismo.messenger.core.Links.find(text) }
     if (links.isEmpty()) return
-    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     /** Открытое окно проигрывателя для ссылки на видео. */
     var videoLink by remember { mutableStateOf<com.pismo.messenger.core.VideoLinks.Playable?>(null) }
 
@@ -915,7 +917,7 @@ private fun LinkSourceRows(text: String) {
                     // Уходить из переписки ради ролика не нужно.
                     .clickable {
                         if (playable != null) videoLink = playable
-                        else runCatching { uriHandler.openUri(link.url) }
+                        else com.pismo.messenger.core.LinkOpener.open(context, link.url)
                     }
                     .padding(8.dp)
                     .widthIn(max = 260.dp),
