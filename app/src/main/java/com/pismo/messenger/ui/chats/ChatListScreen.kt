@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -102,6 +103,10 @@ fun ChatListScreen(
     var query by remember { mutableStateOf("") }
     var searchOpen by remember { mutableStateOf(false) }
     var userActions by remember { mutableStateOf<Conversation?>(null) }
+    // Закреплённые чаты. Держим отдельным состоянием, а не спрашиваем
+    // настройки прямо при отрисовке: настройки об изменении не сообщают, и
+    // список остался бы в прежнем порядке до следующей перезагрузки.
+    var pinnedIds by remember { mutableStateOf(Prefs.pinnedChats()) }
 
     suspend fun reload() {
         runCatching {
@@ -112,6 +117,9 @@ fun ChatListScreen(
                 ChatRepository.loadConversations()
             }
             ChatListMemory.put(conversations, groups)
+            // Закрепить чат можно и из самой переписки — подхватываем здесь,
+            // чтобы порядок списка не отставал от того, что человек сделал.
+            pinnedIds = Prefs.pinnedChats()
             // Аватарки списка тянем одним запросом, а не по одной на строку.
             ProfileRepository.prefetchAvatars(conversations.map { it.userId })
             error = ""
@@ -244,11 +252,16 @@ fun ChatListScreen(
                     if (q.isEmpty()) groups
                     else groups.filter { it.name.lowercase().contains(q) }
                 val shownChats =
-                    if (q.isEmpty()) conversations
+                    (if (q.isEmpty()) conversations
                     else conversations.filter {
                         it.name.lowercase().contains(q) ||
                             it.login.lowercase().contains(q)
-                    }
+                    })
+                        // Закреплённые — к верху личных сообщений, как на ПК.
+                        // Сортировка устойчивая, поэтому внутри закреплённых и
+                        // внутри остальных сохраняется порядок по свежести
+                        // переписки, который посчитала база.
+                        .sortedByDescending { pinnedIds.contains(it.userId) }
 
                 Column(Modifier.fillMaxSize()) {
                 if (searchOpen) {
@@ -297,6 +310,7 @@ fun ChatListScreen(
                         ConversationRow(
                             c = c,
                             presence = presence[c.userId],
+                            pinned = pinnedIds.contains(c.userId),
                             onClick = { onOpenChat(c.userId, c.name) },
                             onLongClick = { userActions = c },
                         )
@@ -324,7 +338,11 @@ fun ChatListScreen(
         UserActionsDialog(
             conversation = c,
             onDismiss = { userActions = null },
-            onChanged = { userActions = null; scope.launch { reload() } },
+            onChanged = {
+                userActions = null
+                pinnedIds = Prefs.pinnedChats()
+                scope.launch { reload() }
+            },
             onOpenChat = { userActions = null; onOpenChat(c.userId, c.name) },
         )
     }
@@ -358,6 +376,7 @@ private fun SectionHeader(text: String) {
 private fun ConversationRow(
     c: Conversation,
     presence: Presence?,
+    pinned: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
@@ -372,6 +391,18 @@ private fun ConversationRow(
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // Закреплённый виден прямо из списка — как 📌 на ПК. Значок
+                // перед именем: почему этот чат стоит выше всех, должно быть
+                // понятно сразу, а не после долгого нажатия.
+                if (pinned) {
+                    Icon(
+                        Icons.Default.PushPin,
+                        "Закреплён",
+                        tint = PismoColors.TextMuted,
+                        modifier = Modifier.size(13.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                }
                 Text(
                     c.name,
                     color = PismoColors.TextPrimary,

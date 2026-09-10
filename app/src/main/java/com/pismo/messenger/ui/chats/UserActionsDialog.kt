@@ -48,6 +48,9 @@ fun UserActionsDialog(
         mutableStateOf(Prefs.isCallBlocked(conversation.userId))
     }
     var showProfile by remember(conversation.userId) { mutableStateOf(false) }
+    var pinned by remember(conversation.userId) {
+        mutableStateOf(Prefs.isChatPinned(conversation.userId))
+    }
 
     if (showProfile) {
         UserProfileDialog(
@@ -104,6 +107,18 @@ fun UserActionsDialog(
                 Action("👤  Профиль") { showProfile = true }
 
                 if (showOpenChat) Action("💬  Написать", onClick = onOpenChat)
+
+                // Закреплённый чат стоит вверху списка личных сообщений
+                // независимо от давности переписки — порт «📌 Закрепить чат»
+                // из меню карточки диалога на ПК. Закреп локальный: он про
+                // это устройство, а не про аккаунт, и в базу не уходит.
+                Action(
+                    if (pinned) "📌  Открепить чат" else "📌  Закрепить чат",
+                    color = if (pinned) PismoColors.Cyan else PismoColors.TextPrimary,
+                ) {
+                    pinned = Prefs.toggleChatPinned(conversation.userId)
+                    onChanged()
+                }
 
                 when (relation) {
                     FriendsRepository.Relation.NONE -> Action("➕  Добавить в друзья") {

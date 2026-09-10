@@ -95,8 +95,28 @@ private fun DirectPlayer(url: String) {
 @Composable
 private fun EmbedPlayer(url: String, origin: String) {
     val context = androidx.compose.ui.platform.LocalContext.current
+
+    // Кому возвращать поворот экрана после полного экрана. Ищем окно по
+    // цепочке обёрток: у диалога это не сам Activity, а обёртка вокруг него.
+    val activity = remember(context) {
+        generateSequence(context) { (it as? android.content.ContextWrapper)?.baseContext }
+            .filterIsInstance<android.app.Activity>()
+            .firstOrNull()
+    }
+    val savedOrientation = remember(context) {
+        activity?.requestedOrientation
+            ?: android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+
+    // Рамка вокруг страницы. Она нужна не для порядка: кнопка «на весь
+    // экран» внутри проигрывателя просит у приложения ОТДЕЛЬНОЕ
+    // представление, и если положить его некуда, нажатие просто ничего не
+    // делает — ровно так это и выглядело.
+    val host = remember(url) { android.widget.FrameLayout(context) }
+
     val web = remember(url) {
-        WebView(context).apply {
+        val view = WebView(context)
+        view.apply {
             settings.javaScriptEnabled = true          // без него проигрыватель не запустится
             settings.domStorageEnabled = true
             settings.mediaPlaybackRequiresUserGesture = false
@@ -104,7 +124,37 @@ private fun EmbedPlayer(url: String, origin: String) {
             settings.useWideViewPort = true
             setBackgroundColor(android.graphics.Color.BLACK)
             webViewClient = WebViewClient()
-            webChromeClient = WebChromeClient()
+            webChromeClient = object : WebChromeClient() {
+                private var custom: android.view.View? = null
+
+                override fun onShowCustomView(
+                    view: android.view.View?,
+                    callback: CustomViewCallback?,
+                ) {
+                    if (view == null) return
+                    if (custom != null) { callback?.onCustomViewHidden(); return }
+                    custom = view
+                    host.addView(
+                        view,
+                        android.widget.FrameLayout.LayoutParams(
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        ),
+                    )
+                    view.visibility = android.view.View.GONE
+                    // Видео шире, чем выше: в полном экране разворачиваем
+                    // телефон, как это делает любой проигрыватель.
+                    activity?.requestedOrientation =
+                        android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                }
+
+                override fun onHideCustomView() {
+                    custom?.let { host.removeView(it) }
+                    custom = null
+                    view.visibility = android.view.View.VISIBLE
+                    activity?.requestedOrientation = savedOrientation
+                }
+            }
 
             // Страницу с рамкой собираем САМИ и отдаём от имени домена службы.
             //
@@ -112,31 +162,55 @@ private fun EmbedPlayer(url: String, origin: String) {
             // проигрыватель отказывается работать: YouTube отвечает на это
             // ошибкой 153 «Video player configuration error». Базовый адрес в
             // loadDataWithBaseURL и есть тот источник, которого ему не хватало.
+            //
+            // referrerpolicy — вторая половина того же лечения. С конца 2025
+            // года YouTube требует, чтобы страница-хозяин называла себя
+            // заголовком Referer; если его нет или он вырезан, настройка
+            // проигрывателя срывается с той же ошибкой. Значение отдаёт только
+            // домен и ничего сверх него.
             val html = """
                 <!doctype html>
                 <html><head><meta name="viewport"
-                    content="width=device-width, initial-scale=1, viewport-fit=cover"></head>
+                    content="width=device-width, initial-scale=1, viewport-fit=cover">
+                <meta name="referrer" content="strict-origin-when-cross-origin"></head>
                 <body style="margin:0;background:#000;height:100vh">
                 <iframe src="$url" style="border:0;width:100%;height:100%"
+                        referrerpolicy="strict-origin-when-cross-origin"
                         allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
                         allowfullscreen></iframe>
                 </body></html>
             """.trimIndent()
             loadDataWithBaseURL(origin, html, "text/html", "utf-8", null)
         }
+        view
     }
 
-    // Останавливаем звук и снимаем страницу при закрытии: WebView иначе
-    // продолжает играть в фоне.
+    // Останавливаем звук, снимаем страницу и возвращаем поворот экрана при
+    // закрытии: WebView иначе продолжает играть в фоне, а телефон — лежать
+    // на боку.
     DisposableEffect(url) {
         onDispose {
             runCatching {
+                activity?.requestedOrientation = savedOrientation
                 web.loadUrl("about:blank")
                 web.onPause()
+                host.removeAllViews()
                 web.destroy()
             }
         }
     }
 
-    AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())
+    AndroidView(
+        factory = {
+            host.addView(
+                web,
+                android.widget.FrameLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            host
+        },
+        modifier = Modifier.fillMaxSize(),
+    )
 }

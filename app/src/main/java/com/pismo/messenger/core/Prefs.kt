@@ -208,6 +208,38 @@ object Prefs {
         return now
     }
 
+    /**
+     * Закреплённые ЧАТЫ — порт ChatPins.cs.
+     *
+     * Собеседники, чьи диалоги прижаты к верху списка личных сообщений
+     * независимо от давности переписки. Группы не трогаются: они и так идут
+     * отдельным разделом выше, ровно как на ПК.
+     *
+     * Хранится ЛОКАЛЬНО и на сервер не уходит — как и на ПК, где это файл
+     * pinned_chats_<id>.txt рядом с настройками. «Что мне держать наверху» —
+     * дело этого устройства, а не общей базы. Ключ включает id аккаунта,
+     * чтобы закрепы разных пользователей на одном телефоне не смешивались.
+     */
+    private fun pinnedKey() = "pinned_chats_${UserSession.effectiveId}"
+
+    fun isChatPinned(userId: Int): Boolean = userId > 0 && pinnedChats().contains(userId)
+
+    fun pinnedChats(): Set<Int> =
+        sp.getString(pinnedKey(), "").orEmpty()
+            .split(',')
+            .mapNotNull { it.trim().toIntOrNull() }
+            .toSet()
+
+    /** Закрепить/открепить чат. Возвращает НОВОЕ состояние (true — закреплён). */
+    fun toggleChatPinned(userId: Int): Boolean {
+        if (userId <= 0) return false
+        val set = pinnedChats().toMutableSet()
+        val nowPinned = set.add(userId)
+        if (!nowPinned) set.remove(userId)
+        sp.edit().putString(pinnedKey(), set.joinToString(",")).apply()
+        return nowPinned
+    }
+
     /** Включить/выключить игнор. Возвращает НОВОЕ состояние. */
     fun toggleUserIgnored(userId: Int): Boolean {
         if (userId <= 0) return false
