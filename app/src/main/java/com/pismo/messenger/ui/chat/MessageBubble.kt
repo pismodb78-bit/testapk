@@ -477,6 +477,20 @@ fun MessageBubble(
                                                 if (hit != null) {
                                                     down.consume()
                                                     linkMenu = hit.url
+                                                    // Доедаем жест до отпускания,
+                                                    // гася каждое событие.
+                                                    //
+                                                    // Одного consume() на нажатии
+                                                    // мало: разметка ссылки
+                                                    // открывает адрес по
+                                                    // ОТПУСКАНИЮ, а его никто не
+                                                    // гасил — отсюда и меню, и
+                                                    // переход разом.
+                                                    while (true) {
+                                                        val ev = awaitPointerEvent()
+                                                        ev.changes.forEach { it.consume() }
+                                                        if (ev.changes.none { it.pressed }) break
+                                                    }
                                                 }
                                             }
                                         }
@@ -804,7 +818,14 @@ private fun highlightMentions(text: String, isMine: Boolean): AnnotatedString {
     val accent = if (isMine) Color.White else PismoColors.Cyan
     val linkColor = if (isMine) Color.White else PismoColors.Cyan
     val linkStyles = TextLinkStyles(
-        style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)
+        style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline),
+        // Подсветка на время нажатия: без неё непонятно, попал ли палец по
+        // адресу, — особенно когда ссылка переносится на несколько строк.
+        pressedStyle = SpanStyle(
+            color = linkColor,
+            background = linkColor.copy(alpha = 0.25f),
+            textDecoration = TextDecoration.Underline,
+        ),
     )
 
     // Куски, отсортированные по началу. Ссылка старше упоминания: адрес вида
