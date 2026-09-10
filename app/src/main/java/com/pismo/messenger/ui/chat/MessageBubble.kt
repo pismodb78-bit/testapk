@@ -131,6 +131,8 @@ fun MessageBubble(
     val scope = rememberCoroutineScope()
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    /** Открытое окно проигрывателя для ссылки на видео. */
+    var videoLink by remember { mutableStateOf<com.pismo.messenger.core.VideoLinks.Playable?>(null) }
     val isMine = msg.isMine
     var menuOpen by remember { mutableStateOf(false) }
     // Начальное значение берём из памяти СИНХРОННО. Пузырь, ушедший за край
@@ -138,6 +140,8 @@ fun MessageBubble(
     // прокрутке всё грузилось заново — выглядело как перезагрузка чата,
     // из которого ты даже не выходил. Готовое из памяти показывается сразу,
     // а LaunchedEffect ниже дочитывает только то, чего в ней нет.
+    videoLink?.let { LinkVideoDialog(it) { videoLink = null } }
+
     var quote by remember(msg.id) { mutableStateOf(QuoteMemory.get(msg.replyToId, scopeKind)) }
     var image by remember(msg.id) { mutableStateOf(MediaCache.peek(msg.id, "img")) }
     var audio by remember(msg.id) { mutableStateOf(MediaCache.peek(msg.id, "audio")) }
@@ -485,6 +489,15 @@ fun MessageBubble(
                                     modifier = Modifier.background(PismoColors.BgElevated),
                                 ) {
                                     val url = linkMenu
+                                    val playable = url?.let {
+                                        com.pismo.messenger.core.VideoLinks.of(it)
+                                    }
+                                    if (playable != null) {
+                                        DropdownMenuItem(
+                                            text = { Text("▶  Смотреть здесь") },
+                                            onClick = { videoLink = playable; linkMenu = null },
+                                        )
+                                    }
                                     DropdownMenuItem(
                                         text = { Text("🔗  Открыть") },
                                         onClick = {
@@ -836,6 +849,10 @@ private fun LinkSourceRows(text: String) {
     val links = remember(text) { com.pismo.messenger.core.Links.find(text) }
     if (links.isEmpty()) return
     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    /** Открытое окно проигрывателя для ссылки на видео. */
+    var videoLink by remember { mutableStateOf<com.pismo.messenger.core.VideoLinks.Playable?>(null) }
+
+    videoLink?.let { LinkVideoDialog(it) { videoLink = null } }
 
     // Больше трёх карточек под сообщением — уже полотно; остальные ссылки
     // по-прежнему нажимаются прямо в тексте.
@@ -843,6 +860,7 @@ private fun LinkSourceRows(text: String) {
         .take(3)
         .forEach { link ->
             val src = com.pismo.messenger.core.LinkSources.of(link.url)
+            val playable = remember(link.url) { com.pismo.messenger.core.VideoLinks.of(link.url) }
             var card by remember(link.url) {
                 mutableStateOf(com.pismo.messenger.data.LinkPreviews.cached(link.url))
             }
@@ -857,7 +875,12 @@ private fun LinkSourceRows(text: String) {
                 Modifier
                     .clip(RoundedCornerShape(8.dp))
                     .background(Color(0x22000000))
-                    .clickable { runCatching { uriHandler.openUri(link.url) } }
+                    // Видео открываем прямо здесь, остальное — в браузере.
+                    // Уходить из переписки ради ролика не нужно.
+                    .clickable {
+                        if (playable != null) videoLink = playable
+                        else runCatching { uriHandler.openUri(link.url) }
+                    }
                     .padding(8.dp)
                     .widthIn(max = 260.dp),
             ) {
@@ -878,7 +901,8 @@ private fun LinkSourceRows(text: String) {
                     }
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        card?.site?.takeIf { it.isNotBlank() } ?: src.title,
+                        (card?.site?.takeIf { it.isNotBlank() } ?: src.title) +
+                                if (playable != null) "  ▶" else "",
                         color = PismoColors.Cyan,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
