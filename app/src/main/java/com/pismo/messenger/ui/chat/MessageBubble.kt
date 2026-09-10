@@ -41,6 +41,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.withLink
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -684,19 +688,51 @@ private fun voiceClock(ms: Int): String {
  * ещё и слово значило бы сказать одно и то же дважды.
  */
 @Composable
+/**
+ * Размечает текст сообщения: упоминания и ссылки.
+ *
+ * Ссылка — это не просто цвет: она помечается так, что Compose сам открывает
+ * её при нажатии. Раньше адрес был обычным текстом, и его приходилось
+ * выделять и копировать вручную.
+ *
+ * Оба вида разметки идут одним проходом по общему списку кусков: если
+ * размечать их по очереди, второй проход не знал бы о смещениях первого.
+ */
 private fun highlightMentions(text: String, isMine: Boolean): AnnotatedString {
-    val spans = com.pismo.messenger.core.Mentions.spans(text)
-    if (spans.isEmpty()) return AnnotatedString(text)
+    val mentions = com.pismo.messenger.core.Mentions.spans(text)
+    val links = com.pismo.messenger.core.Links.find(text)
+    if (mentions.isEmpty() && links.isEmpty()) return AnnotatedString(text)
 
     val accent = if (isMine) Color.White else PismoColors.Cyan
+    val linkColor = if (isMine) Color.White else PismoColors.Cyan
+    val linkStyles = TextLinkStyles(
+        style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)
+    )
+
+    // Куски, отсортированные по началу. Ссылка старше упоминания: адрес вида
+    // https://site/@user иначе распался бы на части.
+    data class Piece(val range: IntRange, val url: String?)
+    val pieces = (links.map { Piece(it.range, it.url) } +
+            mentions.map { Piece(it, null) })
+        .sortedBy { it.range.first }
+        .fold(mutableListOf<Piece>()) { acc, p ->
+            if (acc.isEmpty() || p.range.first > acc.last().range.last) acc.add(p)
+            acc
+        }
+
     return buildAnnotatedString {
         var pos = 0
-        for (range in spans) {
-            if (range.first > pos) append(text.substring(pos, range.first))
-            withStyle(SpanStyle(color = accent, fontWeight = FontWeight.SemiBold)) {
-                append(text.substring(range.first, range.last + 1))
+        for (p in pieces) {
+            if (p.range.first > pos) append(text.substring(pos, p.range.first))
+            val chunk = text.substring(p.range.first, p.range.last + 1)
+            if (p.url != null) {
+                withLink(LinkAnnotation.Url(p.url, linkStyles)) { append(chunk) }
+            } else {
+                withStyle(SpanStyle(color = accent, fontWeight = FontWeight.SemiBold)) {
+                    append(chunk)
+                }
             }
-            pos = range.last + 1
+            pos = p.range.last + 1
         }
         if (pos < text.length) append(text.substring(pos))
     }
