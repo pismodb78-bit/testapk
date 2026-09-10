@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -665,13 +666,19 @@ fun SettingsScreen(onBack: () -> Unit) {
             if (crash != null) {
                 Spacer(Modifier.height(20.dp))
                 Section("Последнее падение")
-                Text(
-                    // Шести строк не хватало: в них помещались только время,
-                    // версия и заголовок исключения, а настоящая причина —
-                    // строка «Caused by» — оставалась за краем.
-                    crash!!.lineSequence().take(16).joinToString("\n"),
-                    color = PismoColors.TextSecondary, fontSize = 12.sp,
-                )
+                // След показываем ЦЕЛИКОМ, в прокручиваемом окошке. Любое
+                // ограничение по числу строк обрезало именно то, что нужно:
+                // строка «Caused by» лежит в самом низу следа, после всех
+                // кадров обёртки, — а без неё видно только «не удалось
+                // запустить», то есть ничего.
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 260.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Text(crash!!, color = PismoColors.TextSecondary, fontSize = 12.sp)
+                }
                 Row(Modifier.fillMaxWidth()) {
                     TextButton(onClick = { shareCrash(ctx, crash!!) }) {
                         Text("Отправить разработчику", color = PismoColors.Blurple)

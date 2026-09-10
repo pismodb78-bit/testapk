@@ -47,6 +47,11 @@ object CrashLog {
         target.writeText(
             buildString {
                 appendLine("Время: $stamp")
+                // Настоящая причина — самая глубокая в цепочке. Верхнее
+                // исключение часто лишь обёртка вроде «Unable to start
+                // service», и по нему не понять ничего; строка «Caused by»
+                // при этом лежит в самом низу следа, за краем показа.
+                appendLine("Причина: " + rootCause(error))
                 appendLine("Поток: $threadName")
                 appendLine("Версия: ${com.pismo.messenger.BuildConfig.VERSION_NAME}")
                 appendLine("Телефон: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}, Android ${android.os.Build.VERSION.RELEASE}")
@@ -54,6 +59,14 @@ object CrashLog {
                 append(stack.toString())
             }
         )
+    }
+
+    /** Самое глубокое исключение в цепочке — то, с чего всё началось. */
+    private fun rootCause(error: Throwable): String {
+        var e: Throwable = error
+        val seen = HashSet<Throwable>()
+        while (e.cause != null && seen.add(e)) e = e.cause!!
+        return e.javaClass.name + (e.message?.let { ": " + it } ?: "")
     }
 
     /** След последнего падения или null, если приложение ещё не падало. */
