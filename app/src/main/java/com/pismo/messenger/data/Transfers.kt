@@ -223,9 +223,26 @@ object Transfers {
     /** Отмена: обрываем передачу и убираем наполовину написанную строку. */
     fun cancel(id: Long) {
         val job = synchronized(this) { jobs.remove(id) }
-        job?.cancel()
-        dropRow(id)
-        finish(id)
+        job?.let {
+            // Рвём соединение НАСИЛЬНО, а не просто отменяем.
+            //
+            // Отмена корутины не прерывает уже начатый запрос к базе: поток
+            // сидит внутри блокирующей записи до сетевого таймаута и всё это
+            // время держит очередь — следующий файл просто не начинается.
+            ChatRepository.abortTransfer(it)
+            it.cancel()
+        }
+
+        val row = synchronized(this) { rows.remove(id) }
+        scope.launch {
+            if (row != null) {
+                withContext(NonCancellable) { ChatRepository.deleteRowIn(row.first, row.second) }
+            }
+            // Список правим ПОСЛЕ удаления строки: экран перечитывает
+            // переписку, как только задача из него пропадёт, и раньше успевал
+            // сделать это до удаления — пустой пузырь оставался висеть.
+            finish(id)
+        }
     }
 
     /** Убирает строку сообщения, если она уже вставлена. */

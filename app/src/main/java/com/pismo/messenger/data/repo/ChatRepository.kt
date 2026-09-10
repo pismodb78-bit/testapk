@@ -822,6 +822,7 @@ object ChatRepository {
         // На ПК этого не было: там всё выполняется на одном явно открытом
         // соединении, и таймауты применяются к нему же.
         val conn = Db.openTransfer(compress)
+        if (job != null) transferConns[job] = conn
         try {
             if (data.size <= chunk) {
                 // Одним запросом. Повторять его безопасно: та же строка с тем
@@ -875,6 +876,7 @@ object ChatRepository {
                 onProgress?.invoke(off.toFloat() / data.size)
             }
         } finally {
+            if (job != null) transferConns.remove(job)
             runCatching { conn.close() }
         }
     }
@@ -940,6 +942,7 @@ object ChatRepository {
         compress: Boolean,
     ): ByteArray? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val conn = Db.openTransfer(compress)
+        if (job != null) transferConns[job] = conn
         try {
             val total = conn.prepareStatement(
                 "SELECT OCTET_LENGTH($column) FROM $table WHERE id=?"
@@ -981,6 +984,7 @@ object ChatRepository {
             }
             out.toByteArray()
         } finally {
+            if (job != null) transferConns.remove(job)
             runCatching { conn.close() }
         }
     }
@@ -993,6 +997,23 @@ object ChatRepository {
         val data = downloadBlob(scope.table, msgId, "file_data", onProgress, fileName)
         if (data != null && data.isNotEmpty()) MediaCache.put(msgId, "file", data, fileName)
         return data
+    }
+
+    /**
+     * Соединения идущих передач — чтобы отмена могла их оборвать.
+     *
+     * Отмена корутины сама по себе НЕ прерывает начатый запрос к базе: поток
+     * сидит внутри блокирующей записи до сетевого таймаута, то есть до десяти
+     * минут, и всё это время держит очередь передач. Со стороны выглядит так,
+     * будто после отмены файлы вообще перестали отправляться. Единственный
+     * способ прервать — закрыть соединение из другого потока; ровно это же
+     * делает ПК-версия при отмене.
+     */
+    private val transferConns =
+        java.util.concurrent.ConcurrentHashMap<kotlinx.coroutines.Job, java.sql.Connection>()
+
+    internal fun abortTransfer(job: kotlinx.coroutines.Job) {
+        runCatching { transferConns.remove(job)?.close() }
     }
 
     /** Тот же размер порции — нужен каналам, чтобы решить судьбу крупного фото. */
