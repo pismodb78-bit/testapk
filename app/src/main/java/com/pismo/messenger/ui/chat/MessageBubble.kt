@@ -46,9 +46,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.LinkAnnotation
-import androidx.compose.ui.text.TextLinkStyles
-import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -447,52 +444,73 @@ fun MessageBubble(
                                 mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null)
                             }
                             var linkMenu by remember(msg.id) { mutableStateOf<String?>(null) }
+                            /** Ссылка под пальцем — её подсвечиваем. */
+                            var pressedLink by remember(msg.text) {
+                                mutableStateOf<IntRange?>(null)
+                            }
 
                             Box {
                                 Text(
-                                    highlightMentions(msg.text, isMine),
+                                    highlightMentions(msg.text, isMine, pressedLink),
                                     color = PismoColors.onBubble(isMine),
                                     fontSize = 15.sp,
                                     onTextLayout = { layout = it },
-                                    // Долгое нажатие ПО САМОЙ ссылке открывает
-                                    // меню для неё. Событие не забираем, пока не
-                                    // убедились, что палец держат именно на
-                                    // адресе: иначе обычное нажатие перестало бы
-                                    // открывать ссылку, а долгое — вызывать меню
-                                    // сообщения.
+                                    // Оба жеста по ссылке ведём САМИ.
+                                    //
+                                    // Встроенная разметка ссылок имеет свой
+                                    // обработчик, и он живёт ВНУТРИ текста —
+                                    // получает событие раньше любого нашего.
+                                    // Отсюда и было: держишь палец, отпускаешь —
+                                    // меню открылось И браузер уехал. Снаружи
+                                    // это не гасится, поэтому обработчика там
+                                    // больше нет, ссылка просто покрашена.
+                                    //
+                                    // Событие забираем ТОЛЬКО когда палец
+                                    // опустился на сам адрес: иначе обычное
+                                    // нажатие и долгое нажатие по остальному
+                                    // тексту перестали бы доходить до пузыря.
                                     modifier = if (textLinks.isEmpty()) Modifier
                                     else Modifier.pointerInput(msg.text) {
                                         awaitEachGesture {
                                             val down = awaitFirstDown(requireUnconsumed = false)
-                                            val up = withTimeoutOrNull(
+                                            val off = layout?.getOffsetForPosition(down.position)
+                                            val hit = off?.let { o ->
+                                                textLinks.firstOrNull { o in it.range }
+                                            } ?: return@awaitEachGesture
+
+                                            down.consume()
+                                            pressedLink = hit.range
+
+                                            var released: androidx.compose.ui.input.pointer.PointerInputChange? = null
+                                            val timedOut = withTimeoutOrNull(
                                                 viewConfiguration.longPressTimeoutMillis
                                             ) {
-                                                waitForUpOrCancellation()
-                                            }
-                                            if (up == null) {
-                                                val off = layout?.getOffsetForPosition(down.position)
-                                                val hit = off?.let { o ->
-                                                    textLinks.firstOrNull { o in it.range }
-                                                }
-                                                if (hit != null) {
-                                                    down.consume()
+                                                released = waitForUpOrCancellation()
+                                            } == null
+
+                                            when {
+                                                // Держат — меню, и доедаем жест
+                                                // до отпускания, гася события.
+                                                timedOut -> {
                                                     linkMenu = hit.url
-                                                    // Доедаем жест до отпускания,
-                                                    // гася каждое событие.
-                                                    //
-                                                    // Одного consume() на нажатии
-                                                    // мало: разметка ссылки
-                                                    // открывает адрес по
-                                                    // ОТПУСКАНИЮ, а его никто не
-                                                    // гасил — отсюда и меню, и
-                                                    // переход разом.
                                                     while (true) {
                                                         val ev = awaitPointerEvent()
                                                         ev.changes.forEach { it.consume() }
                                                         if (ev.changes.none { it.pressed }) break
                                                     }
                                                 }
+                                                // Отпустили быстро — обычное нажатие.
+                                                released != null -> {
+                                                    released?.consume()
+                                                    val play = com.pismo.messenger.core
+                                                        .VideoLinks.of(hit.url)
+                                                    if (play != null) videoLink = play
+                                                    else runCatching { uriHandler.openUri(hit.url) }
+                                                }
+                                                // Жест отменили (потянули ленту) —
+                                                // не делаем ничего.
                                             }
+                                            pressedLink = null
                                         }
                                     },
                                 )
@@ -803,36 +821,33 @@ private fun voiceClock(ms: Int): String {
 /**
  * Размечает текст сообщения: упоминания и ссылки.
  *
- * Ссылка — это не просто цвет: она помечается так, что Compose сам открывает
- * её при нажатии. Раньше адрес был обычным текстом, и его приходилось
- * выделять и копировать вручную.
+ * Ссылки размечаются ОБЫЧНЫМ стилем, а не встроенной разметкой ссылок.
+ * У встроенной свой обработчик нажатий, и живёт он ВНУТРИ текста — то есть
+ * получает событие раньше любого нашего. Погасить его снаружи нельзя:
+ * долгое нажатие открывало меню и одновременно уводило в браузер. Поэтому
+ * оба жеста ведём сами (см. pointerInput выше), а отсюда нужен только вид.
+ *
+ * [pressed] — кусок, на котором сейчас палец: его подсвечиваем.
  *
  * Оба вида разметки идут одним проходом по общему списку кусков: если
  * размечать их по очереди, второй проход не знал бы о смещениях первого.
  */
-private fun highlightMentions(text: String, isMine: Boolean): AnnotatedString {
+private fun highlightMentions(
+    text: String,
+    isMine: Boolean,
+    pressed: IntRange? = null,
+): AnnotatedString {
     val mentions = com.pismo.messenger.core.Mentions.spans(text)
     val links = com.pismo.messenger.core.Links.find(text)
     if (mentions.isEmpty() && links.isEmpty()) return AnnotatedString(text)
 
     val accent = if (isMine) Color.White else PismoColors.Cyan
     val linkColor = if (isMine) Color.White else PismoColors.Cyan
-    val linkStyles = TextLinkStyles(
-        style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline),
-        // Подсветка на время нажатия: без неё непонятно, попал ли палец по
-        // адресу, — особенно когда ссылка переносится на несколько строк.
-        pressedStyle = SpanStyle(
-            color = linkColor,
-            background = linkColor.copy(alpha = 0.25f),
-            textDecoration = TextDecoration.Underline,
-        ),
-    )
 
     // Куски, отсортированные по началу. Ссылка старше упоминания: адрес вида
     // https://site/@user иначе распался бы на части.
-    data class Piece(val range: IntRange, val url: String?)
-    val pieces = (links.map { Piece(it.range, it.url) } +
-            mentions.map { Piece(it, null) })
+    data class Piece(val range: IntRange, val isLink: Boolean)
+    val pieces = (links.map { Piece(it.range, true) } + mentions.map { Piece(it, false) })
         .sortedBy { it.range.first }
         .fold(mutableListOf<Piece>()) { acc, p ->
             if (acc.isEmpty() || p.range.first > acc.last().range.last) acc.add(p)
@@ -844,13 +859,13 @@ private fun highlightMentions(text: String, isMine: Boolean): AnnotatedString {
         for (p in pieces) {
             if (p.range.first > pos) append(text.substring(pos, p.range.first))
             val chunk = text.substring(p.range.first, p.range.last + 1)
-            if (p.url != null) {
-                withLink(LinkAnnotation.Url(p.url, linkStyles)) { append(chunk) }
-            } else {
-                withStyle(SpanStyle(color = accent, fontWeight = FontWeight.SemiBold)) {
-                    append(chunk)
-                }
-            }
+            val style = if (p.isLink) SpanStyle(
+                color = linkColor,
+                textDecoration = TextDecoration.Underline,
+                background = if (p.range == pressed) linkColor.copy(alpha = 0.25f)
+                             else Color.Unspecified,
+            ) else SpanStyle(color = accent, fontWeight = FontWeight.SemiBold)
+            withStyle(style) { append(chunk) }
             pos = p.range.last + 1
         }
         if (pos < text.length) append(text.substring(pos))

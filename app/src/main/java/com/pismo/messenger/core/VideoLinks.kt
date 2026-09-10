@@ -34,6 +34,12 @@ object VideoLinks {
         rutubeId(url, host)?.let {
             return Playable.Embed("https://rutube.ru/play/embed/$it", "RUTUBE")
         }
+        instagramCode(url, host)?.let {
+            return Playable.Embed("https://www.instagram.com/reel/$it/embed/", "Instagram")
+        }
+        tiktokId(url, host)?.let {
+            return Playable.Embed("https://www.tiktok.com/embed/v2/$it", "TikTok")
+        }
 
         // Прямой файл: смотрим на расширение в пути, не задевая параметры
         // после «?» — там расширение может встретиться случайно.
@@ -61,6 +67,32 @@ object VideoLinks {
         // Идентификатор у YouTube — одиннадцать знаков из ограниченного набора.
         // Проверка нужна, чтобы не собрать проигрыватель из случайного мусора.
         return id?.takeIf { it.length in 8..16 && it.all { c -> c.isLetterOrDigit() || c == '_' || c == '-' } }
+    }
+
+    /**
+     * Reels и обычные записи Instagram. Встраивание они предлагают сами
+     * (адрес с /embed/), но показывают не всё: закрытые записи требуют входа,
+     * и тогда окно останется пустым. На этот случай в меню остаётся «Открыть».
+     */
+    private fun instagramCode(url: String, host: String): String? {
+        if (!host.endsWith("instagram.com")) return null
+        val code = when {
+            "/reel/" in url -> url.substringAfter("/reel/")
+            "/reels/" in url -> url.substringAfter("/reels/")
+            "/p/" in url -> url.substringAfter("/p/")
+            "/tv/" in url -> url.substringAfter("/tv/")
+            else -> null
+        }?.substringBefore('?')?.substringBefore('/')
+        return code?.takeIf { it.length >= 5 && it.all { c -> c.isLetterOrDigit() || c == '_' || c == '-' } }
+    }
+
+    private fun tiktokId(url: String, host: String): String? {
+        if (!host.endsWith("tiktok.com")) return null
+        val id = when {
+            "/video/" in url -> url.substringAfter("/video/").substringBefore('?').substringBefore('/')
+            else -> null
+        }
+        return id?.takeIf { it.length >= 8 && it.all { c -> c.isDigit() } }
     }
 
     private fun rutubeId(url: String, host: String): String? {
