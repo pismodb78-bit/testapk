@@ -84,7 +84,36 @@ class PollingService : LifecycleService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
-        startForeground(Notifications.ID_SERVICE, Notifications.serviceNotification(this))
+
+        // Переход в передний план может НЕ РАЗРЕШИТЬ система — и это не
+        // исключительный случай, а обычная жизнь на свежих Android.
+        //
+        // Служба возвращает START_STICKY, то есть система сама поднимает её
+        // после того, как прибила. Поднимает из фона, а из фона переводить
+        // службу в передний план разрешено далеко не всегда; сверх того, на
+        // Android 15 у типа dataSync есть суточный предел в шесть часов, и
+        // после него запуск отвергается. Отказ прилетал исключением прямо в
+        // onStartCommand — то есть падением всего приложения. Именно его вы и
+        // прислали: «Unable to start service PollingService».
+        //
+        // Отказ — не повод падать: тихо уходим. Службу поднимет следующий
+        // запуск приложения или приёмник загрузки.
+        val ok = runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                startForeground(
+                    Notifications.ID_SERVICE,
+                    Notifications.serviceNotification(this),
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                )
+            } else {
+                startForeground(Notifications.ID_SERVICE, Notifications.serviceNotification(this))
+            }
+        }.isSuccess
+        if (!ok) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         restoreBaselines()
 
         lifecycleScope.launch {

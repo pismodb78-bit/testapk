@@ -109,6 +109,8 @@ fun MessageBubble(
      * этому ключу полоса показывается там, откуда её запустили.
      */
     transferKey: String = "",
+    /** Нажатие на цитату — прыжок к тому сообщению, на которое отвечали. */
+    onQuoteClick: (Int) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val isMine = msg.isMine
@@ -227,6 +229,11 @@ fun MessageBubble(
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(Color(0x22000000))
+                                    // Нажатие ведёт к исходному сообщению:
+                                    // раньше цитата была просто картинкой, и
+                                    // найти, на что отвечают, приходилось
+                                    // прокруткой вручную.
+                                    .clickable { onQuoteClick(q.messageId) }
                                     .padding(6.dp)
                             ) {
                                 Box(

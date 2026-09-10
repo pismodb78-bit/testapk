@@ -564,6 +564,12 @@ fun ChannelChatScreen(
 
                             MessageBubble(
                                 transferKey = Transfers.channelKey(channelId),
+                                onQuoteClick = { id ->
+                                    // Прыгаем, если сообщение на загруженной
+                                    // странице; вглубь истории пока не идём.
+                                    val idx = messages.indexOfFirst { it.id == id }
+                                    if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
+                                },
                                 msg = msg,
                                 isGroup = true,          // в канале всегда показываем автора
                                 onOpenVideo = { file, name, id ->
@@ -639,7 +645,12 @@ fun ChannelChatScreen(
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            banner.text.ellipsize(60),
+                            // Та же пометка, что и в самой цитате: отвечая на
+                            // фото или кружок, полоска была пустой.
+                            ChatRepository.quotePreview(
+                                banner.text, banner.hasImage, banner.hasAudio,
+                                banner.hasVideo, banner.fileName,
+                            ).ellipsize(60),
                             color = PismoColors.TextMuted, fontSize = 12.sp, maxLines = 1,
                         )
                     }

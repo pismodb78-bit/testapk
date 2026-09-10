@@ -417,18 +417,46 @@ object ChatRepository {
     /** Мини-цитата сообщения, на которое отвечают. */
     suspend fun loadReplyQuote(replyToId: Int, scope: Scope): ReplyQuote? {
         if (replyToId <= 0) return null
+        // Берём и признаки вложений. Раньше выбирался ОДИН текст, и ответ на
+        // фото, кружок или файл выглядел пустой полоской с одним именем: по
+        // ней нельзя понять, на что вообще отвечают. Вложения не тянем — только
+        // отметку об их наличии, иначе цитата поднимала бы с диска сам файл.
         val sql = """
-            SELECT m.text, TRIM(CONCAT(u.Name,' ',u.Surname)) AS sname, u.login
+            SELECT m.text, m.file_name,
+                   (m.image_data IS NOT NULL) AS has_img,
+                   (m.audio_data IS NOT NULL) AS has_audio,
+                   (m.video_data IS NOT NULL) AS has_video,
+                   TRIM(CONCAT(u.Name,' ',u.Surname)) AS sname, u.login
             FROM ${scope.table} m JOIN users u ON u.id = m.sender_id
             WHERE m.id = ?
         """.trimIndent()
         return Db.queryFirst(sql, replyToId) { rs ->
+            val txt = runCatching { Crypto.dec(rs.getString("text")) }.getOrDefault("")
             ReplyQuote(
                 messageId = replyToId,
                 sender = rs.str("sname").trim().ifBlank { rs.str("login") },
-                text = Crypto.dec(rs.getString("text")),
+                text = quotePreview(
+                    txt, rs.bool("has_img"), rs.bool("has_audio"),
+                    rs.bool("has_video"), rs.str("file_name"),
+                ),
             )
         }
+    }
+
+    /**
+     * Строка цитаты: сам текст, а если его нет — чем было сообщение.
+     * Те же пометки, что и в списке чатов, чтобы не заводить два словаря.
+     */
+    internal fun quotePreview(
+        text: String, hasImage: Boolean, hasAudio: Boolean,
+        hasVideo: Boolean, fileName: String?,
+    ): String = when {
+        text.isNotBlank() -> text
+        hasImage -> "\uD83D\uDCF7 Фото"
+        hasVideo -> "\uD83C\uDFA5 Видео"
+        hasAudio -> "\uD83C\uDFA4 Голосовое сообщение"
+        !fileName.isNullOrBlank() -> "\uD83D\uDCCE " + fileName
+        else -> ""
     }
 
     // ── Счётчики для polling ──────────────────────────────────────────

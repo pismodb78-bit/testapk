@@ -666,7 +666,10 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Spacer(Modifier.height(20.dp))
                 Section("Последнее падение")
                 Text(
-                    crash!!.lineSequence().take(6).joinToString("\n"),
+                    // Шести строк не хватало: в них помещались только время,
+                    // версия и заголовок исключения, а настоящая причина —
+                    // строка «Caused by» — оставалась за краем.
+                    crash!!.lineSequence().take(16).joinToString("\n"),
                     color = PismoColors.TextSecondary, fontSize = 12.sp,
                 )
                 Row(Modifier.fillMaxWidth()) {
