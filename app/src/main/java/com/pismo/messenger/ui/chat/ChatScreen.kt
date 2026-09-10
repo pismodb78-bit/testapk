@@ -940,16 +940,40 @@ fun ChatScreen(
                             MessageBubble(
                                 transferKey = Transfers.chatKey(isGroup, targetId),
                                 onQuoteClick = { id ->
-                                    // Индекс берём по ВИДИМОМУ списку, а не по
-                                    // messages: в закрытой переписке часть
-                                    // сообщений отфильтрована, и номера
-                                    // разъезжаются — прыжок уводил бы не туда.
-                                    val idx = visible.indexOfFirst { it.id == id }
-                                    if (idx >= 0) scope.launch {
-                                        listState.animateScrollToItem(idx)
-                                        flashId = id
-                                        delay(1200)
-                                        if (flashId == id) flashId = 0
+                                    scope.launch {
+                                        // Индекс берём по ВИДИМОМУ списку, а не
+                                        // по messages: в закрытой переписке
+                                        // часть сообщений отфильтрована, и
+                                        // номера разъезжаются.
+                                        fun indexOf() = messages
+                                            .filter { !readOnly || it.isMine }
+                                            .indexOfFirst { it.id == id }
+
+                                        // Сообщения может не быть на
+                                        // загруженной странице — тогда прыжок
+                                        // просто ничего не делал. Расширяем
+                                        // страницу ровно настолько, чтобы оно
+                                        // в неё вошло, тем же приёмом, что и
+                                        // переход по дате.
+                                        if (indexOf() < 0) {
+                                            val need = ChatRepository.countSinceId(
+                                                scopeKind, targetId, id
+                                            )
+                                            if (need > 0 && need + 5 > messages.size) {
+                                                pageLimit = need + 5
+                                                loading = true
+                                                reload()
+                                            }
+                                        }
+                                        val idx = indexOf()
+                                        if (idx >= 0) {
+                                            listState.animateScrollToItem(idx)
+                                            flashId = id
+                                            delay(1200)
+                                            if (flashId == id) flashId = 0
+                                        } else {
+                                            jumpNote = "Сообщение не найдено — возможно, удалено."
+                                        }
                                     }
                                 },
                                 highlighted = msg.id == flashId,

@@ -567,14 +567,32 @@ fun ChannelChatScreen(
                             MessageBubble(
                                 transferKey = Transfers.channelKey(channelId),
                                 onQuoteClick = { id ->
-                                    // Прыгаем, если сообщение на загруженной
-                                    // странице; вглубь истории пока не идём.
-                                    val idx = messages.indexOfFirst { it.id == id }
-                                    if (idx >= 0) scope.launch {
-                                        listState.animateScrollToItem(idx)
-                                        flashId = id
-                                        delay(1200)
-                                        if (flashId == id) flashId = 0
+                                    scope.launch {
+                                        // Сообщения может не быть на
+                                        // загруженной странице — тогда прыжок
+                                        // просто ничего не делал. Расширяем
+                                        // страницу ровно настолько, чтобы оно
+                                        // в неё вошло, тем же приёмом, что и
+                                        // переход по дате.
+                                        if (messages.indexOfFirst { it.id == id } < 0) {
+                                            val need = ChatRepository.countSinceId(
+                                                Scope.SERVER, channelId, id
+                                            )
+                                            if (need > 0 && need + 5 > messages.size) {
+                                                pageLimit = need + 5
+                                                loading = true
+                                                reload()
+                                            }
+                                        }
+                                        val idx = messages.indexOfFirst { it.id == id }
+                                        if (idx >= 0) {
+                                            listState.animateScrollToItem(idx)
+                                            flashId = id
+                                            delay(1200)
+                                            if (flashId == id) flashId = 0
+                                        } else {
+                                            jumpNote = "Сообщение не найдено — возможно, удалено."
+                                        }
                                     }
                                 },
                                 highlighted = msg.id == flashId,

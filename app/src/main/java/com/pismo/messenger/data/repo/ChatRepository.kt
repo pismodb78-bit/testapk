@@ -312,6 +312,34 @@ object ChatRepository {
         }.getOrDefault(0)
     }
 
+    /**
+     * Сколько сообщений в переписке начиная с указанного — считая его самого.
+     *
+     * Нужно прыжку по цитате: чтобы дотянуться до старого сообщения, страницу
+     * надо расширить ровно настолько, чтобы оно в неё попало. Тот же приём,
+     * что и у перехода по дате, только мерка не время, а номер.
+     */
+    suspend fun countSinceId(scope: Scope, target: Int, msgId: Int): Int {
+        val me = UserSession.effectiveId
+        return runCatching {
+            when (scope) {
+                Scope.GROUP -> Db.scalarInt(
+                    "SELECT COUNT(*) FROM group_messages WHERE group_id=? AND id >= ?",
+                    target, msgId
+                )
+                Scope.SERVER -> Db.scalarInt(
+                    "SELECT COUNT(*) FROM server_messages WHERE channel_id=? AND id >= ?",
+                    target, msgId
+                )
+                else -> Db.scalarInt(
+                    "SELECT COUNT(*) FROM messages WHERE ((sender_id=? AND receiver_id=?) " +
+                            "OR (sender_id=? AND receiver_id=?)) AND id >= ?",
+                    me, target, target, me, msgId
+                )
+            }
+        }.getOrDefault(0)
+    }
+
     suspend fun loadDirectMessages(partnerId: Int, limit: Int = PAGE_SIZE, beforeId: Int = 0): List<ChatMessage> {
         val me = UserSession.effectiveId
         val cursor = if (beforeId > 0) "AND id < $beforeId " else ""
