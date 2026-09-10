@@ -367,6 +367,13 @@ object ServerRepository {
         val enc = Crypto.enc(text)
         if (hasReplyCol == null) hasReplyCol = columnExists("server_messages", "reply_to_id")
 
+        // Крупное фото одним пакетом не проходит — сервер режет по
+        // max_allowed_packet, и вставка падает ЦЕЛИКОМ: снимок не уходит
+        // вообще. В личных чатах это уже чинилось, а канал остался с прежним
+        // поведением. Такое фото вставляем пустым и дописываем порциями.
+        val bigImage = image?.takeIf { it.size > ChatRepository.chunkSizeForBlob() }
+        val inlineImage = if (bigImage != null) null else image
+
         val hasMedia = image != null || audio != null || video != null || file != null
         val newId = if (hasMedia) {
             val id = Db.insert(
@@ -376,11 +383,15 @@ object ServerRepository {
                         ") VALUES (?,?,?,?,?,?,NULL,?" +
                         (if (hasReplyCol == true) ",?" else "") + ")",
                 *buildList {
-                    addAll(listOf(channelId, me, enc, image, audio, video, fileName))
+                    addAll(listOf(channelId, me, enc, inlineImage, audio, video, fileName))
                     if (hasReplyCol == true) add(if (replyToId > 0) replyToId else null)
                 }.toTypedArray()
             )
             onRowCreated?.invoke(id)
+            if (bigImage != null && id > 0) {
+                ChatRepository.uploadFileData("server_messages", id, bigImage, onProgress,
+                                              column = "image_data")
+            }
             if (file != null && file.isNotEmpty() && id > 0) {
                 // Тем же дозаписывающим путём, что и личные чаты: одним
                 // пакетом двести мегабайт сервер не примет.

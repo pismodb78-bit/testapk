@@ -779,16 +779,21 @@ object ChatRepository {
         //
         // Раньше первый же обрыв убивал отправку целиком.
         var attempt = 0
+        // Сжатие протокола ускоряет отправку документов, но это самая свежая
+        // и самая хрупкая часть пути: у старого драйвера с ним бывают ссоры на
+        // больших блобах, и выглядят они как обрыв связи. Поэтому со второй
+        // попытки идём БЕЗ сжатия — лучше медленнее, чем никак.
+        var compress = compressible(fileName, column)
         while (true) {
             try {
-                uploadOnce(table, msgId, column, data, chunk, job, onProgress,
-                           compress = compressible(fileName, column))
+                uploadOnce(table, msgId, column, data, chunk, job, onProgress, compress)
                 return
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Throwable) {
                 attempt++
                 if (attempt >= 4 || !Db.looksLikeConnectionLoss(e)) throw e
+                compress = false
                 kotlinx.coroutines.delay(1500L * attempt)
             }
         }
@@ -989,6 +994,9 @@ object ChatRepository {
         if (data != null && data.isNotEmpty()) MediaCache.put(msgId, "file", data, fileName)
         return data
     }
+
+    /** Тот же размер порции — нужен каналам, чтобы решить судьбу крупного фото. */
+    internal suspend fun chunkSizeForBlob(): Int = chunkSize()
 
     /** Предел пакета сервера: спрашиваем один раз за запуск. */
     private var maxPacket: Long = -1
