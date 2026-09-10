@@ -20,6 +20,15 @@ object Prefs {
         sp = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
     }
 
+    /**
+     * Показывать карточки ссылок. По умолчанию включено — ради этого их и
+     * просили, — но выключатель нужен: чтобы собрать карточку, приложение
+     * само идёт на сайт по ссылке, и сайт узнаёт, что сообщение открыли.
+     */
+    var linkPreviews: Boolean
+        get() = sp.getBoolean("link_previews", true)
+        set(v) = sp.edit().putBoolean("link_previews", v).apply()
+
     // ── Подключение к MySQL ────────────────────────────────────────────
     // Значения по умолчанию взяты из ip.txt ПК-версии:
     // server=85.174.248.59;port=3307;uid=user1;password=scent01;database=bdauth

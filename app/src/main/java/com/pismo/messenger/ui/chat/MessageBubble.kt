@@ -744,12 +744,12 @@ private fun highlightMentions(text: String, isMine: Boolean): AnnotatedString {
 }
 
 /**
- * Строки «откуда ссылка» под текстом сообщения.
+ * Карточка ссылки под текстом сообщения: значок и название службы, а если
+ * сайт отдал разметку — ещё заголовок, описание и картинку.
  *
- * Значков служб не качаем и с собой не носим: тянуть иконку с самого сайта
- * значит сообщить ему, что человек открыл переписку, ещё до того, как он
- * нажал на ссылку. Рисуем сами — цвет службы и одна-две буквы, тем же
- * способом, что и бейджи типов файлов.
+ * Значок и название есть всегда: они рисуются на месте, без всякой сети.
+ * Остальное подтягивается с самого сайта и потому может не появиться —
+ * страница без разметки, нет связи, показ выключен в настройках.
  */
 @Composable
 private fun LinkSourceRows(text: String) {
@@ -757,41 +757,88 @@ private fun LinkSourceRows(text: String) {
     if (links.isEmpty()) return
     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
 
-    // Больше трёх строк под сообщением — уже полотно; остальные ссылки
+    // Больше трёх карточек под сообщением — уже полотно; остальные ссылки
     // по-прежнему нажимаются прямо в тексте.
     links.distinctBy { com.pismo.messenger.core.LinkSources.domainOf(it.url) }
         .take(3)
         .forEach { link ->
             val src = com.pismo.messenger.core.LinkSources.of(link.url)
-            Spacer(Modifier.height(4.dp))
-            Row(
+            var card by remember(link.url) {
+                mutableStateOf(com.pismo.messenger.data.LinkPreviews.cached(link.url))
+            }
+            LaunchedEffect(link.url) {
+                if (card == null) {
+                    card = com.pismo.messenger.data.LinkPreviews.fetch(link.url)
+                }
+            }
+
+            Spacer(Modifier.height(6.dp))
+            Column(
                 Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0x22000000))
                     .clickable { runCatching { uriHandler.openUri(link.url) } }
-                    .padding(vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .padding(8.dp)
+                    .widthIn(max = 260.dp),
             ) {
-                Box(
-                    Modifier
-                        .size(18.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(Color(src.color)),
-                    contentAlignment = Alignment.Center,
-                ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .size(18.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(src.color)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            src.mark,
+                            color = Color.White,
+                            fontSize = if (src.mark.length > 1) 9.sp else 11.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Spacer(Modifier.width(6.dp))
                     Text(
-                        src.mark,
-                        color = Color.White,
-                        fontSize = if (src.mark.length > 1) 9.sp else 11.sp,
-                        fontWeight = FontWeight.Bold,
+                        card?.site?.takeIf { it.isNotBlank() } ?: src.title,
+                        color = PismoColors.Cyan,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
                     )
                 }
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    src.title,
-                    color = PismoColors.TextMuted,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                )
+
+                card?.let { c ->
+                    if (c.title.isNotBlank()) {
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            c.title,
+                            color = PismoColors.TextPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (c.description.isNotBlank()) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            c.description,
+                            color = PismoColors.TextMuted,
+                            fontSize = 12.sp,
+                            maxLines = 3,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                    }
+                    c.imageFile?.let { path ->
+                        Spacer(Modifier.height(6.dp))
+                        AsyncImage(
+                            model = java.io.File(path),
+                            contentDescription = null,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp)),
+                        )
+                    }
+                }
             }
         }
 }

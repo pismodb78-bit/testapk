@@ -94,6 +94,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     var checkUpdates by remember { mutableStateOf(Prefs.checkUpdatesOnStart) }
     var frontCamera by remember { mutableStateOf(Prefs.frontCamera) }
     var bgPolling by remember { mutableStateOf(Prefs.backgroundPolling) }
+    var linkPreviews by remember { mutableStateOf(Prefs.linkPreviews) }
     // Счётчик пересчёта: вернувшись из системного диалога, состояние надо
     // перечитать — само по себе оно не обновится.
     var batteryTick by remember { mutableIntStateOf(0) }
@@ -325,6 +326,19 @@ fun SettingsScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             SwitchRow("Фронтальная камера по умолчанию", frontCamera) { frontCamera = it }
             SwitchRow("Фоновая проверка сообщений", bgPolling) { bgPolling = it }
+
+            // Карточки ссылок стоят похода на сам сайт — об этом честнее
+            // сказать прямо здесь, а не прятать в согласии при установке.
+            SwitchRow("Карточки ссылок", linkPreviews) {
+                linkPreviews = it
+                Prefs.linkPreviews = it
+            }
+            Text(
+                "Чтобы показать заголовок и картинку, приложение открывает сам сайт. " +
+                        "Сайт при этом узнаёт, что вы открыли переписку, и видит ваш адрес — " +
+                        "ещё до того, как вы нажали на ссылку.",
+                color = PismoColors.TextMuted, fontSize = 12.sp,
+            )
 
             // Экономия батареи прибивает фоновую службу, и уведомления просто
             // перестают приходить — при включённом переключателе выше. Кнопка

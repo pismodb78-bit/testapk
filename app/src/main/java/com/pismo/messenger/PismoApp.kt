@@ -24,6 +24,7 @@ class PismoApp : Application() {
         CrashLog.install(this)
         Prefs.init(this)
         MediaCache.init(this)
+        com.pismo.messenger.data.LinkPreviews.init(this)
         // Кеш переписок и раскладки серверов теперь переживает закрытие
         // приложения: без диска первый заход в любой чат после запуска
         // снова упирался бы в кружок на всё время запроса к базе.
