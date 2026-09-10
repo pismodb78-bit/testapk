@@ -53,7 +53,7 @@ fun LinkVideoDialog(playable: VideoLinks.Playable, onClose: () -> Unit) {
         ) {
             when (playable) {
                 is VideoLinks.Playable.Direct -> DirectPlayer(playable.url)
-                is VideoLinks.Playable.Embed -> EmbedPlayer(playable.url)
+                is VideoLinks.Playable.Embed -> EmbedPlayer(playable.url, playable.origin)
             }
 
             IconButton(
@@ -93,7 +93,7 @@ private fun DirectPlayer(url: String) {
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun EmbedPlayer(url: String) {
+private fun EmbedPlayer(url: String, origin: String) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val web = remember(url) {
         WebView(context).apply {
@@ -105,7 +105,24 @@ private fun EmbedPlayer(url: String) {
             setBackgroundColor(android.graphics.Color.BLACK)
             webViewClient = WebViewClient()
             webChromeClient = WebChromeClient()
-            loadUrl(url)
+
+            // Страницу с рамкой собираем САМИ и отдаём от имени домена службы.
+            //
+            // Прямая загрузка адреса встраивания приходит без источника, и
+            // проигрыватель отказывается работать: YouTube отвечает на это
+            // ошибкой 153 «Video player configuration error». Базовый адрес в
+            // loadDataWithBaseURL и есть тот источник, которого ему не хватало.
+            val html = """
+                <!doctype html>
+                <html><head><meta name="viewport"
+                    content="width=device-width, initial-scale=1, viewport-fit=cover"></head>
+                <body style="margin:0;background:#000;height:100vh">
+                <iframe src="$url" style="border:0;width:100%;height:100%"
+                        allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+                        allowfullscreen></iframe>
+                </body></html>
+            """.trimIndent()
+            loadDataWithBaseURL(origin, html, "text/html", "utf-8", null)
         }
     }
 

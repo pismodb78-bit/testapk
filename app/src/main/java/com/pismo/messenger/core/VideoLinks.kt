@@ -16,8 +16,15 @@ object VideoLinks {
         /** Обычный видеофайл — играем сами. */
         data class Direct(val url: String) : Playable
 
-        /** Страница службы — играем её встроенным проигрывателем. */
-        data class Embed(val url: String, val title: String) : Playable
+        /**
+         * Страница службы — играем её встроенным проигрывателем.
+         *
+         * [origin] — домен службы. Он обязателен: проигрыватель отказывается
+         * работать, если не видит, с какой страницы его открыли (YouTube
+         * отвечает на это ошибкой 153). Значит, страницу с рамкой надо
+         * собрать самим и отдать её от имени этого домена.
+         */
+        data class Embed(val url: String, val origin: String, val title: String) : Playable
     }
 
     private val FILE_EXT = setOf("mp4", "webm", "m4v", "mov", "mkv", "m3u8", "3gp")
@@ -27,18 +34,25 @@ object VideoLinks {
 
         youtubeId(url, host)?.let {
             return Playable.Embed(
-                "https://www.youtube.com/embed/$it?autoplay=1&playsinline=1&rel=0",
+                "https://www.youtube.com/embed/$it?autoplay=1&playsinline=1&rel=0&enablejsapi=1",
+                "https://www.youtube.com",
                 "YouTube",
             )
         }
         rutubeId(url, host)?.let {
-            return Playable.Embed("https://rutube.ru/play/embed/$it", "RUTUBE")
+            return Playable.Embed(
+                "https://rutube.ru/play/embed/$it", "https://rutube.ru", "RUTUBE",
+            )
         }
-        instagramCode(url, host)?.let {
-            return Playable.Embed("https://www.instagram.com/reel/$it/embed/", "Instagram")
-        }
+        // Instagram отсюда УБРАН намеренно. Их адрес встраивания теперь
+        // требует входа: вместо ролика окно показывало бы «зарегистрируйтесь».
+        // Обойти это можно только обойдя их же ограничение доступа — этого мы
+        // не делаем. Такая ссылка открывается снаружи, где вход уже есть:
+        // в приложении Instagram или в браузере.
         tiktokId(url, host)?.let {
-            return Playable.Embed("https://www.tiktok.com/embed/v2/$it", "TikTok")
+            return Playable.Embed(
+                "https://www.tiktok.com/embed/v2/$it", "https://www.tiktok.com", "TikTok",
+            )
         }
 
         // Прямой файл: смотрим на расширение в пути, не задевая параметры
@@ -67,23 +81,6 @@ object VideoLinks {
         // Идентификатор у YouTube — одиннадцать знаков из ограниченного набора.
         // Проверка нужна, чтобы не собрать проигрыватель из случайного мусора.
         return id?.takeIf { it.length in 8..16 && it.all { c -> c.isLetterOrDigit() || c == '_' || c == '-' } }
-    }
-
-    /**
-     * Reels и обычные записи Instagram. Встраивание они предлагают сами
-     * (адрес с /embed/), но показывают не всё: закрытые записи требуют входа,
-     * и тогда окно останется пустым. На этот случай в меню остаётся «Открыть».
-     */
-    private fun instagramCode(url: String, host: String): String? {
-        if (!host.endsWith("instagram.com")) return null
-        val code = when {
-            "/reel/" in url -> url.substringAfter("/reel/")
-            "/reels/" in url -> url.substringAfter("/reels/")
-            "/p/" in url -> url.substringAfter("/p/")
-            "/tv/" in url -> url.substringAfter("/tv/")
-            else -> null
-        }?.substringBefore('?')?.substringBefore('/')
-        return code?.takeIf { it.length >= 5 && it.all { c -> c.isLetterOrDigit() || c == '_' || c == '-' } }
     }
 
     private fun tiktokId(url: String, host: String): String? {
