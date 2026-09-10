@@ -124,6 +124,8 @@ fun MessageBubble(
     highlighted: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
     val isMine = msg.isMine
     var menuOpen by remember { mutableStateOf(false) }
     // Начальное значение берём из памяти СИНХРОННО. Пузырь, ушедший за край
@@ -429,11 +431,80 @@ fun MessageBubble(
                         }
 
                         if (msg.text.isNotBlank()) {
-                            Text(
-                                highlightMentions(msg.text, isMine),
-                                color = PismoColors.onBubble(isMine),
-                                fontSize = 15.sp,
-                            )
+                            val textLinks = remember(msg.text) {
+                                com.pismo.messenger.core.Links.find(msg.text)
+                            }
+                            var layout by remember(msg.text) {
+                                mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null)
+                            }
+                            var linkMenu by remember(msg.id) { mutableStateOf<String?>(null) }
+
+                            Box {
+                                Text(
+                                    highlightMentions(msg.text, isMine),
+                                    color = PismoColors.onBubble(isMine),
+                                    fontSize = 15.sp,
+                                    onTextLayout = { layout = it },
+                                    // Долгое нажатие ПО САМОЙ ссылке открывает
+                                    // меню для неё. Событие не забираем, пока не
+                                    // убедились, что палец держат именно на
+                                    // адресе: иначе обычное нажатие перестало бы
+                                    // открывать ссылку, а долгое — вызывать меню
+                                    // сообщения.
+                                    modifier = if (textLinks.isEmpty()) Modifier
+                                    else Modifier.pointerInput(msg.text) {
+                                        androidx.compose.foundation.gestures.awaitEachGesture {
+                                            val down = androidx.compose.foundation.gestures
+                                                .awaitFirstDown(requireUnconsumed = false)
+                                            val up = kotlinx.coroutines.withTimeoutOrNull(
+                                                viewConfiguration.longPressTimeoutMillis
+                                            ) {
+                                                androidx.compose.foundation.gestures
+                                                    .waitForUpOrCancellation()
+                                            }
+                                            if (up == null) {
+                                                val off = layout?.getOffsetForPosition(down.position)
+                                                val hit = off?.let { o ->
+                                                    textLinks.firstOrNull { o in it.range }
+                                                }
+                                                if (hit != null) {
+                                                    down.consume()
+                                                    linkMenu = hit.url
+                                                }
+                                            }
+                                        }
+                                    },
+                                )
+
+                                DropdownMenu(
+                                    expanded = linkMenu != null,
+                                    onDismissRequest = { linkMenu = null },
+                                    modifier = Modifier.background(PismoColors.BgElevated),
+                                ) {
+                                    val url = linkMenu
+                                    DropdownMenuItem(
+                                        text = { Text("🔗  Открыть") },
+                                        onClick = {
+                                            url?.let { runCatching { uriHandler.openUri(it) } }
+                                            linkMenu = null
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("📋  Копировать ссылку") },
+                                        onClick = {
+                                            url?.let { clipboard.setText(AnnotatedString(it)) }
+                                            linkMenu = null
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("↗  Поделиться") },
+                                        onClick = {
+                                            url?.let { shareText(context, it) }
+                                            linkMenu = null
+                                        },
+                                    )
+                                }
+                            }
                             // Строка источника под текстом: по одному адресу
                             // в самом сообщении не всегда понятно, куда он
                             // ведёт, — длинные ссылки обрезаются, а короткие
@@ -509,7 +580,13 @@ fun MessageBubble(
                     if (msg.text.isNotBlank()) {
                         DropdownMenuItem(
                             text = { Text("📋  Копировать текст") },
-                            onClick = { menuOpen = false },
+                            onClick = {
+                                // Пункт был, а обработчика у него не было: меню
+                                // просто закрывалось, и со стороны это выглядело
+                                // как «копирование не работает».
+                                clipboard.setText(AnnotatedString(msg.text))
+                                menuOpen = false
+                            },
                         )
                     }
                     if (msg.isEdited) {
@@ -841,4 +918,15 @@ private fun LinkSourceRows(text: String) {
                 }
             }
         }
+}
+
+/** Отдаёт адрес любому приложению, которым его захотят переслать. */
+private fun shareText(context: android.content.Context, text: String) {
+    runCatching {
+        val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(android.content.Intent.EXTRA_TEXT, text)
+        }
+        context.startActivity(android.content.Intent.createChooser(send, "Поделиться ссылкой"))
+    }
 }
