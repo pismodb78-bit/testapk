@@ -695,6 +695,109 @@ object ChatRepository {
      * а если пакет не пролезает в max_allowed_packet — дозапись кусками по
      * 4 МБ через CONCAT.
      */
+    // ── Один и тот же файл не заливается на сервер дважды ──────────────
+    //
+    // ЗАЧЕМ. Отправить одно видео двум собеседникам значило залить его на
+    // сервер два раза — второй раз ровно так же долго, как первый, хотя те же
+    // байты там уже лежат. Теперь у вложения считается отпечаток (SHA-256), и
+    // если такой файл уже есть среди СВОИХ отправленных, новое сообщение
+    // собирается запросом INSERT … SELECT: база копирует содержимое у себя
+    // внутри, по сети не уходит ни байта.
+    //
+    // ЧЕГО ЭТО НЕ ДЕЛАЕТ. Места на сервере не экономит: у каждого сообщения
+    // по-прежнему своя копия. Настоящая общая ссылка на тело файла — это
+    // отдельная таблица и переписанные запросы чтения во всех трёх таблицах
+    // сообщений, плюс подсчёт ссылок при удалении.
+    //
+    // ДОНОРА ИЩЕМ ТОЛЬКО СРЕДИ СВОИХ. Не из вежливости: копировать чужое
+    // вложение по совпадению отпечатка значило бы сообщать отправителю, что
+    // такой файл у кого-то на сервере уже есть, — по одной скорости отправки.
+
+    @Volatile
+    private var fileShaSupported: Int = -1      // -1 не спрашивали, 0 нет, 1 есть
+
+    private fun sha256Hex(data: ByteArray): String =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(data)
+            .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+
+    /**
+     * Есть ли в базе столбец file_sha. Прав ALTER у учётной записи приложения
+     * может не быть, и тогда миграция не применилась — это не ошибка, просто
+     * отправка идёт по-старому.
+     */
+    private suspend fun fileShaAvailable(): Boolean {
+        if (fileShaSupported >= 0) return fileShaSupported == 1
+        val ok = runCatching {
+            Db.query("SELECT file_sha FROM messages LIMIT 0") { rs -> rs.getString(1) }
+        }.isSuccess
+        fileShaSupported = if (ok) 1 else 0
+        return ok
+    }
+
+    /** Своё же сообщение, в котором это вложение уже лежит: таблица и id. */
+    private suspend fun findFileDonor(sha: String): Pair<String, Int>? {
+        val me = UserSession.effectiveId
+        if (me <= 0) return null
+        val sql = """
+            (SELECT 'messages' AS t, id FROM messages
+               WHERE sender_id=? AND file_sha=? AND file_data IS NOT NULL LIMIT 1)
+            UNION ALL
+            (SELECT 'group_messages', id FROM group_messages
+               WHERE sender_id=? AND file_sha=? AND file_data IS NOT NULL LIMIT 1)
+            UNION ALL
+            (SELECT 'server_messages', id FROM server_messages
+               WHERE sender_id=? AND file_sha=? AND file_data IS NOT NULL LIMIT 1)
+            LIMIT 1
+        """.trimIndent()
+        return runCatching {
+            Db.query(sql, me, sha, me, sha, me, sha) { rs ->
+                rs.getString(1) to rs.getInt(2)
+            }.firstOrNull()
+        }.getOrNull()
+    }
+
+    /** Вставляет сообщение, взяв тело файла у донора. 0 — не получилось. */
+    private suspend fun insertWithDonorFile(
+        scope: Scope,
+        target: Int,
+        me: Int,
+        encText: String,
+        image: ByteArray?,
+        audio: ByteArray?,
+        video: ByteArray?,
+        fileName: String?,
+        sha: String,
+        reply: Int?,
+        donor: Pair<String, Int>,
+    ): Int {
+        // Имя таблицы-донора подставляется в текст запроса, но взято оно из
+        // нашего же перечня выше, а не из чужих данных.
+        val from = donor.first
+        val sql = if (scope == Scope.GROUP) {
+            "INSERT INTO group_messages (group_id, sender_id, text, image_data, audio_data, " +
+                "video_data, file_data, file_name, file_sha, reply_to_id) " +
+                "SELECT ?,?,?,?,?,?, d.file_data, ?,?,? FROM $from d WHERE d.id=?"
+        } else {
+            "INSERT INTO messages (sender_id, receiver_id, text, image_data, audio_data, " +
+                "video_data, file_data, file_name, file_sha, reply_to_id) " +
+                "SELECT ?,?,?,?,?,?, d.file_data, ?,?,? FROM $from d WHERE d.id=?"
+        }
+        val first = if (scope == Scope.GROUP) target else me
+        val second = if (scope == Scope.GROUP) me else target
+        return runCatching {
+            Db.insert(
+                sql, first, second, encText, image, audio, video,
+                fileName, sha, reply, donor.second,
+            )
+        }.getOrDefault(0)
+    }
+
+    /** Проставляет отпечаток уже залитому вложению. */
+    private suspend fun stampFileSha(table: String, msgId: Int, sha: String) {
+        runCatching { Db.exec("UPDATE $table SET file_sha=? WHERE id=?", sha, msgId) }
+    }
+
     suspend fun sendMessage(
         scope: Scope,
         target: Int,                 // partnerId для ЛС, groupId для группы
@@ -725,6 +828,32 @@ object ChatRepository {
         val bigImage = image?.takeIf { it.size > chunkSize() }
         val inlineImage = if (bigImage != null) null else image
 
+        // Может, этот файл уже лежит на сервере — среди НАШИХ отправленных.
+        // Тогда новое сообщение собирается прямо в базе, копией у неё внутри, и
+        // по сети не уходит ни байта: отправка того же видео второму
+        // собеседнику становится мгновенной.
+        val fileSha = file?.takeIf { it.isNotEmpty() }?.let {
+            runCatching { sha256Hex(it) }.getOrNull()
+        }
+        if (fileSha != null && fileShaAvailable()) {
+            val donor = findFileDonor(fileSha)
+            if (donor != null) {
+                val copied = insertWithDonorFile(
+                    scope, target, me, encText, inlineImage, audio, video,
+                    fileName, fileSha, reply, donor,
+                )
+                if (copied > 0) {
+                    onRowCreated?.invoke(copied)
+                    onProgress?.invoke(1f)
+                    if (bigImage != null) {
+                        uploadFileData(table, copied, bigImage, onProgress, column = "image_data")
+                    }
+                    cacheOwnAttachment(copied, image, audio, video, file, fileName)
+                    return@withContext copied
+                }
+            }
+        }
+
         val newId = if (scope == Scope.GROUP) {
             Db.insert(
                 "INSERT INTO group_messages (group_id, sender_id, text, image_data, audio_data, " +
@@ -747,6 +876,10 @@ object ChatRepository {
 
         if (file != null && file.isNotEmpty() && newId > 0) {
             uploadFileData(table, newId, file, onProgress, fileName = fileName)
+            // Отпечаток ставим ПОСЛЕ заливки: только теперь тело файла в строке
+            // действительно есть, и её можно предлагать донором следующей
+            // отправке того же файла.
+            if (fileSha != null) stampFileSha(table, newId, fileSha)
         }
 
         // Своё вложение кладём в кеш прямо здесь. Байты уже на руках, а без

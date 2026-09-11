@@ -208,6 +208,24 @@ object DbMigrator {
                     "pinned_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
                     "PRIMARY KEY (user_id, scope, target_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
         },
+        Migration(20, "file_sha: отпечаток вложения, чтобы не заливать одно и то же дважды") { c ->
+            // Один и тот же файл, отправленный двум собеседникам, уходил на
+            // сервер дважды — второй раз ровно так же долго, как первый.
+            // Отпечаток позволяет узнать своё уже залитое вложение и
+            // скопировать его ВНУТРИ базы, не гоняя байты по сети.
+            //
+            // Прав ALTER у учётной записи может не быть; тогда столбцы кладутся
+            // руками, а до тех пор всё работает по-старому: код проверяет
+            // наличие столбца и молча откатывается на обычную заливку.
+            for (t in listOf("messages", "group_messages", "server_messages")) {
+                if (!tableExists(c, t)) continue
+                if (!columnExists(c, t, "file_sha"))
+                    exec(c, "ALTER TABLE $t ADD COLUMN file_sha CHAR(64) NULL")
+                // Индекс по (отправитель, отпечаток): донора ищем только среди
+                // СВОИХ вложений, чужие не трогаем.
+                addIndex(c, t, "idx_file_sha", "(sender_id, file_sha)")
+            }
+        },
     )
 
     /**
