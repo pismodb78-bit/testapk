@@ -103,7 +103,7 @@ class PollingService : LifecycleService() {
                 startForeground(
                     Notifications.ID_SERVICE,
                     Notifications.serviceNotification(this),
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                    foregroundType(),
                 )
             } else {
                 startForeground(Notifications.ID_SERVICE, Notifications.serviceNotification(this))
@@ -267,6 +267,82 @@ class PollingService : LifecycleService() {
                 preview = preview,
             )
         }
+    }
+
+    /**
+     * Под каким типом проситься в передний план.
+     *
+     * НЕ dataSync, начиная с Android 14. У dataSync с Android 15 есть суточный
+     * предел работы в шесть часов; когда он выбран, система вызывает onTimeout
+     * и требует остановиться, а если приложение не успело — убивает его с
+     * ForegroundServiceDidNotStopInTimeException. Ровно это и происходило
+     * ночью: телефон присылал отчёт о падении, хотя человек ничего не делал.
+     *
+     * Подходящего типа для «мессенджер без своего push-сервера» в списке нет,
+     * и specialUse заведён ровно для таких случаев. Предела у него нет.
+     * На Android 13 и старше specialUse ещё не существует — там остаётся
+     * dataSync, но там нет и предела.
+     */
+    private fun foregroundType(): Int =
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        } else {
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        }
+
+    /**
+     * Система решила, что служба работает слишком долго.
+     *
+     * С типом specialUse этого быть не должно, но обработчик обязан быть
+     * всё равно: если предел когда-нибудь применят и к нему, молчание здесь
+     * снова кончится убийством приложения. Останавливаемся сами — тихо и
+     * сразу, — а через полчаса пробуем подняться заново.
+     */
+    override fun onTimeout(startId: Int) {
+        stopByTimeout()
+    }
+
+    private fun stopByTimeout() {
+        runCatching { saveBaselines() }
+        scheduleRetry(30)
+        runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        }
+        stopSelf()
+    }
+
+    /** Будильник «попробовать снова»: сама по себе остановленная служба не вернётся. */
+    private fun scheduleRetry(minutes: Long) {
+        runCatching {
+            val ctx = applicationContext
+            val intent = Intent(ctx, BootReceiver::class.java)
+                .setAction(BootReceiver.ACTION_RETRY_POLLING)
+            val pi = android.app.PendingIntent.getBroadcast(
+                ctx, 71, intent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                    android.app.PendingIntent.FLAG_IMMUTABLE,
+            )
+            val am = ctx.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+            // Неточный будильник: точный требует отдельного разрешения, а
+            // получасовая погрешность здесь ничего не решает.
+            am.setAndAllowWhileIdle(
+                android.app.AlarmManager.RTC_WAKEUP,
+                System.currentTimeMillis() + minutes * 60_000,
+                pi,
+            )
+        }
+    }
+
+    override fun onDestroy() {
+        // Отметки «о чём уже сообщали» обязаны пережить остановку: иначе после
+        // возврата службы посыплется разом всё, что накопилось.
+        runCatching { saveBaselines() }
+        super.onDestroy()
     }
 
     override fun onBind(intent: Intent): IBinder? {

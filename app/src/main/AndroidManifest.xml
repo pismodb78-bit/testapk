@@ -37,6 +37,12 @@
          прибивает фоновую службу и сообщения перестают приходить. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Опрос новых сообщений живёт под типом specialUse, а не dataSync: у
+         dataSync на Android 15+ есть суточный предел в шесть часов, после
+         которого система ТРЕБУЕТ остановить службу и убивает приложение, если
+         оно не успело. Для мессенджера без своего push-сервера подходящего
+         типа в списке нет — specialUse ровно для таких случаев и заведён. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
@@ -79,10 +85,17 @@
             android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
             android:theme="@style/Theme.Pismo" />
 
+        <!-- Объявлены ОБА типа: specialUse понимают только Android 14 и
+             новее, на более старых система выберет dataSync. Какой из них
+             запрашивать, решает сам сервис по версии. -->
         <service
             android:name=".service.PollingService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Проверка новых сообщений и звонков: приложение работает напрямую с базой, push-сервиса у него нет" />
+        </service>
 
         <!-- mediaProjection тут НЕ объявлен намеренно: демонстрацию экрана
              держит свой foreground-сервис LiveKit (ScreenCaptureService),

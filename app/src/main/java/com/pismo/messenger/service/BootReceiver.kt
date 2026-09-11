@@ -31,10 +31,21 @@ import kotlinx.coroutines.launch
  */
 class BootReceiver : BroadcastReceiver() {
 
+    companion object {
+        /**
+         * Будильник «попробовать поднять опрос снова» — его ставит сама
+         * служба, когда система велела ей остановиться. Действие своё, не
+         * системное: приёмник вызывается явно, по имени класса, поэтому
+         * объявлять его в манифесте не нужно.
+         */
+        const val ACTION_RETRY_POLLING = "com.pismo.messenger.RETRY_POLLING"
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
         if (action != Intent.ACTION_BOOT_COMPLETED &&
-            action != Intent.ACTION_MY_PACKAGE_REPLACED
+            action != Intent.ACTION_MY_PACKAGE_REPLACED &&
+            action != ACTION_RETRY_POLLING
         ) return
 
         val app = context.applicationContext
