@@ -1,6 +1,7 @@
 package com.pismo.messenger.data
 
 import com.pismo.messenger.data.model.Scope
+import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.net.SignalingClient
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Отправка и получение вложений — отдельно от экрана.
@@ -223,24 +225,52 @@ object Transfers {
     /** Отмена: обрываем передачу и убираем наполовину написанную строку. */
     fun cancel(id: Long) {
         val job = synchronized(this) { jobs.remove(id) }
-        job?.let {
-            // Рвём соединение НАСИЛЬНО, а не просто отменяем.
-            //
-            // Отмена корутины не прерывает уже начатый запрос к базе: поток
-            // сидит внутри блокирующей записи до сетевого таймаута и всё это
-            // время держит очередь — следующий файл просто не начинается.
-            ChatRepository.abortTransfer(it)
-            it.cancel()
+        val row = synchronized(this) { rows.remove(id) }
+
+        if (job == null) {
+            scope.launch {
+                if (row != null) {
+                    withContext(NonCancellable) { ChatRepository.deleteRowIn(row.first, row.second) }
+                }
+                finish(id)
+            }
+            return
         }
 
-        val row = synchronized(this) { rows.remove(id) }
+        // Пока отмена идёт, задача ОСТАЁТСЯ в списке — с пометкой.
+        //
+        // Раньше она пропадала мгновенно, а сама корутина могла ещё сидеть
+        // внутри блокирующего запроса и держать очередь. Со стороны это
+        // выглядело необъяснимо: список пуст, а следующий файл стоит «в
+        // очереди» и не двигается. Теперь видно, что именно его держит.
+        update(id) { it.copy(error = "отменяется…") }
+
+        // Рвём соединение НАСИЛЬНО, а не просто отменяем.
+        //
+        // Отмена корутины не прерывает уже начатый запрос к базе: поток сидит
+        // внутри блокирующей записи до сетевого таймаута и всё это время
+        // держит очередь — следующий файл просто не начинается.
+        ChatRepository.abortTransfer(job)
+        job.cancel()
+
         scope.launch {
+            // Строку убираем сразу, не дожидаясь смерти корутины: пустой
+            // пузырь в переписке — первое, что видит человек после отмены.
             if (row != null) {
                 withContext(NonCancellable) { ChatRepository.deleteRowIn(row.first, row.second) }
             }
-            // Список правим ПОСЛЕ удаления строки: экран перечитывает
-            // переписку, как только задача из него пропадёт, и раньше успевал
-            // сделать это до удаления — пустой пузырь оставался висеть.
+
+            // А вот из списка задача уходит, только когда корутина и правда
+            // закончилась. Не закончилась за десять секунд — значит поток
+            // сидит в запросе, которого обрыв ОДНОГО соединения не касается
+            // (например, в запросе на общем соединении из пула). Тогда
+            // сбрасываем пул целиком: разбудить заблокированный поток можно
+            // только закрыв соединение, на котором он висит.
+            val died = withTimeoutOrNull(10_000) { job.join() } != null
+            if (!died) {
+                runCatching { Db.closeAll() }
+                withTimeoutOrNull(10_000) { job.join() }
+            }
             finish(id)
         }
     }

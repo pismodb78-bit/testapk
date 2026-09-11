@@ -385,6 +385,29 @@ object Db {
             }
         }
 
+    /**
+     * Запрос с потолком по времени: драйвер обрывает его сам через [seconds].
+     *
+     * Нужен там, где ответ ЖЕЛАТЕЛЕН, но не обязателен, а ожидание дороже
+     * пользы. У обычного query такого потолка нет, и это правильно: выборка
+     * переписки должна дойти до конца, сколько бы ни заняла. Но запрос,
+     * который идёт по таблице без подходящего индекса и при этом держит
+     * очередь передач, останавливает всю отправку — вот от этого потолок.
+     */
+    suspend fun <T> queryCapped(
+        sql: String, seconds: Int, vararg params: Any?, map: (ResultSet) -> T,
+    ): List<T> = use { conn ->
+        conn.prepareStatement(sql).use { ps ->
+            runCatching { ps.queryTimeout = seconds }
+            bind(ps, params)
+            ps.executeQuery().use { rs ->
+                val out = ArrayList<T>()
+                while (rs.next()) out.add(map(rs))
+                out
+            }
+        }
+    }
+
     suspend fun <T> queryFirst(sql: String, vararg params: Any?, map: (ResultSet) -> T): T? =
         use { conn ->
             conn.prepareStatement(sql).use { ps ->

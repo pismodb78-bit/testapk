@@ -729,7 +729,7 @@ object ChatRepository {
     private suspend fun fileShaAvailable(): Boolean {
         if (fileShaSupported >= 0) return fileShaSupported == 1
         val ok = runCatching {
-            Db.query("SELECT file_sha FROM messages LIMIT 0") { rs -> rs.getString(1) }
+            Db.queryCapped("SELECT file_sha FROM messages LIMIT 0", 5) { rs -> rs.getString(1) }
         }.isSuccess
         fileShaSupported = if (ok) 1 else 0
         return ok
@@ -750,8 +750,13 @@ object ChatRepository {
                WHERE sender_id=? AND file_sha=? AND file_data IS NOT NULL LIMIT 1)
             LIMIT 1
         """.trimIndent()
+        // С потолком по времени. Поиск донора — удобство, а не обязанность:
+        // если подходящего индекса в базе нет (а прав добавить его у
+        // приложения может не быть), запрос пойдёт по таблице целиком и
+        // задержит ОЧЕРЕДЬ ПЕРЕДАЧ — то есть следующий файл просто не
+        // начнётся. Лучше не найти донора и залить как обычно.
         return runCatching {
-            Db.query(sql, me, sha, me, sha, me, sha) { rs ->
+            Db.queryCapped(sql, 5, me, sha, me, sha, me, sha) { rs ->
                 rs.getString(1) to rs.getInt(2)
             }.firstOrNull()
         }.getOrNull()
@@ -938,7 +943,21 @@ object ChatRepository {
         // означало: весь файл уходит по мобильной сети впустую, без единого
         // процента, сервер его отвергает — и только потом начинается настоящая
         // отправка. Со стороны выглядело как «ничего не происходит».
-        val chunk = chunkSize()
+        // Порция — не только про предел сервера, но и про то, видно ли работу.
+        //
+        // Предел у этого сервера 512 МБ, то есть порция выходит максимальная,
+        // 16 МБ, и файл на десять мегабайт уезжает ОДНИМ запросом. Доля тогда
+        // прыгает с нуля сразу к единице в самом конце: минуту-другую полоса
+        // стоит на нуле, и со стороны это выглядит как «загрузка не идёт».
+        // Поэтому для небольших файлов берём порцию меньше — так, чтобы их
+        // было хотя бы восемь. Крупных это не касается: там и так много
+        // порций, а дробить их мельче вредно — каждая дозапись заставляет
+        // сервер переписать весь накопленный блоб.
+        val serverChunk = chunkSize()
+        val chunk = minOf(
+            serverChunk.toLong(),
+            maxOf(1L * 1024 * 1024, data.size.toLong() / 8),
+        ).toInt().coerceAtLeast(1)
         val job = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
 
         // ВОЗОБНОВЛЕНИЕ ПОСЛЕ ОБРЫВА.
@@ -1191,7 +1210,10 @@ object ChatRepository {
 
     /** Отпечаток вложения сообщения. null — столбца нет или он пуст. */
     private suspend fun fileShaOf(table: String, msgId: Int): String? = runCatching {
-        Db.queryFirst("SELECT file_sha FROM $table WHERE id=?", msgId) { rs -> rs.getString(1) }
+        // Тоже с потолком: не дождались отпечатка — просто качаем как раньше.
+        Db.queryCapped("SELECT file_sha FROM $table WHERE id=?", 5, msgId) { rs ->
+            rs.getString(1)
+        }.firstOrNull()
     }.getOrNull()
 
     /**
