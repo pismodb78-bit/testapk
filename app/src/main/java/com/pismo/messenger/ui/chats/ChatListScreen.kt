@@ -117,9 +117,24 @@ fun ChatListScreen(
                 ChatRepository.loadConversations()
             }
             ChatListMemory.put(conversations, groups)
-            // Закрепить чат можно и из самой переписки — подхватываем здесь,
-            // чтобы порядок списка не отставал от того, что человек сделал.
-            pinnedIds = Prefs.pinnedChats()
+
+            // Закрепы теперь общие с компьютером и живут в базе. Раз в
+            // перезагрузку списка этого достаточно: их меняют руками, а не
+            // сами по себе. Если база не ответит, останется прежний кеш.
+            runCatching {
+                var pins = ChatRepository.loadChatPins()
+                if (!Prefs.pinsSynced) {
+                    // Разовый перенос того, что копилось на этом телефоне до
+                    // общего хранилища. Метка не даёт открепленному на ПК
+                    // воскресать при каждом запуске.
+                    val local = Prefs.pinnedChats()
+                    local.filterNot { it in pins }.forEach { ChatRepository.setChatPin(it, true) }
+                    pins = pins + local
+                    Prefs.pinsSynced = true
+                }
+                Prefs.setPinnedChats(pins)
+                pinnedIds = pins
+            }
             // Аватарки списка тянем одним запросом, а не по одной на строку.
             ProfileRepository.prefetchAvatars(conversations.map { it.userId })
             error = ""

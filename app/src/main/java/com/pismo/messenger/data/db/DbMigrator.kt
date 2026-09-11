@@ -192,6 +192,22 @@ object DbMigrator {
             // индекс кладётся руками, см. sql/2026-08-20_feed_indexes.sql.
             addIndex(c, "messages", "idx_msg_recv_read", "(receiver_id, is_read, sender_id)")
         },
+        Migration(19, "chat_pins: закреплённые ЧАТЫ (общие для ПК и телефона)") { c ->
+            // Раньше закреплённые чаты лежали у каждого клиента своим файлом:
+            // на ПК — pinned_chats_<id>.txt, здесь — в настройках приложения.
+            // Из-за этого один и тот же человек видел РАЗНЫЙ порядок списка на
+            // компьютере и в телефоне. Теперь закрепы живут в базе, и у
+            // аккаунта они одни.
+            //
+            // Миграции 18 в этом списке нет намеренно: та была разовой чисткой
+            // текста сообщений и делается со стороны ПК. Журнал общий, поэтому
+            // пропуск номера ничего не ломает.
+            exec(c, "CREATE TABLE IF NOT EXISTS chat_pins (" +
+                    "user_id INT NOT NULL, scope TINYINT NOT NULL DEFAULT 0, " +
+                    "target_id INT NOT NULL, " +
+                    "pinned_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+                    "PRIMARY KEY (user_id, scope, target_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+        },
     )
 
     /**

@@ -528,6 +528,40 @@ object ChatRepository {
         Db.scalarInt("SELECT COUNT(*) FROM group_messages WHERE group_id=?", groupId)
 
     /** Непрочитанные по отправителям, сразу исключая блокировки (один запрос). */
+    // ── Закреплённые чаты ──────────────────────────────────────────────
+    //
+    // Лежат в базе (таблица chat_pins, миграция 19) и потому одни и те же на
+    // телефоне и на компьютере. Раньше каждый клиент хранил свой список у
+    // себя, и один и тот же человек видел РАЗНЫЙ порядок списка на разных
+    // устройствах — с этого и начался перенос.
+    //
+    // В настройках приложения список всё равно остаётся, но уже как кеш:
+    // порядок строк спрашивают при каждой отрисовке, а база отвечает не
+    // мгновенно и не всегда.
+
+    suspend fun loadChatPins(): Set<Int> {
+        val me = UserSession.effectiveId
+        return Db.query(
+            "SELECT target_id FROM chat_pins WHERE user_id=? AND scope=0", me,
+        ) { rs -> rs.getInt("target_id") }.toSet()
+    }
+
+    suspend fun setChatPin(targetId: Int, pinned: Boolean) {
+        val me = UserSession.effectiveId
+        if (me <= 0 || targetId <= 0) return
+        if (pinned) {
+            Db.exec(
+                "INSERT IGNORE INTO chat_pins (user_id, scope, target_id) VALUES (?,0,?)",
+                me, targetId,
+            )
+        } else {
+            Db.exec(
+                "DELETE FROM chat_pins WHERE user_id=? AND scope=0 AND target_id=?",
+                me, targetId,
+            )
+        }
+    }
+
     suspend fun unreadBySender(): Map<Int, Int> {
         val me = UserSession.effectiveId
         val sql = """

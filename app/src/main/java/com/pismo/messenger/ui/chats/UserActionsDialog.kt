@@ -109,15 +109,22 @@ fun UserActionsDialog(
                 if (showOpenChat) Action("💬  Написать", onClick = onOpenChat)
 
                 // Закреплённый чат стоит вверху списка личных сообщений
-                // независимо от давности переписки — порт «📌 Закрепить чат»
-                // из меню карточки диалога на ПК. Закреп локальный: он про
-                // это устройство, а не про аккаунт, и в базу не уходит.
+                // независимо от давности переписки — тот же «📌 Закрепить чат»,
+                // что в меню карточки диалога на ПК. Закреп общий: он живёт в
+                // базе, и компьютер увидит его тоже.
                 Action(
                     if (pinned) "📌  Открепить чат" else "📌  Закрепить чат",
                     color = if (pinned) PismoColors.Cyan else PismoColors.TextPrimary,
                 ) {
-                    pinned = Prefs.toggleChatPinned(conversation.userId)
-                    onChanged()
+                    // Кеш правим сразу — список должен переставиться без
+                    // ожидания сервера, — а в базу пишем следом, до закрытия
+                    // диалога: область корутин живёт, пока он на экране.
+                    val now = Prefs.toggleChatPinned(conversation.userId)
+                    pinned = now
+                    scope.launch {
+                        runCatching { ChatRepository.setChatPin(conversation.userId, now) }
+                        onChanged()
+                    }
                 }
 
                 when (relation) {
