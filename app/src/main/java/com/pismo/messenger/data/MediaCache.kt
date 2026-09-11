@@ -70,6 +70,43 @@ object MediaCache {
         File(dir, "$msgId.$ext")
     }.getOrNull()
 
+    // ── По отпечатку содержимого ───────────────────────────────────────
+    //
+    // Один и тот же файл в двух чатах — это два разных сообщения, но одни и
+    // те же байты. По номеру сообщения кеш их не узнаёт и качает второй раз
+    // целиком; по отпечатку — узнаёт сразу.
+
+    private fun hashPathFor(sha: String, fileName: String?): File? = runCatching {
+        // Отпечаток идёт в ИМЯ ФАЙЛА, поэтому проверяем, что это правда он:
+        // шестьдесят четыре шестнадцатеричных знака и ничего больше.
+        if (sha.length != 64 || !sha.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' }) {
+            return@runCatching null
+        }
+        val ext = fileName?.substringAfterLast('.', "")?.lowercase()
+            ?.takeIf { it.isNotBlank() && it.length <= 12 } ?: "bin"
+        val dir = File(root, "byhash")
+        if (!dir.exists()) dir.mkdirs()
+        File(dir, "$sha.$ext")
+    }.getOrNull()
+
+    fun getByHash(sha: String, fileName: String? = null): ByteArray? {
+        val f = hashPathFor(sha, fileName) ?: return null
+        if (!f.exists()) return null
+        return runCatching {
+            f.setLastModified(System.currentTimeMillis())
+            f.readBytes()
+        }.getOrNull()
+    }
+
+    fun putByHash(sha: String, data: ByteArray?, fileName: String? = null) {
+        if (data == null || data.isEmpty()) return
+        val f = hashPathFor(sha, fileName) ?: return
+        runCatching {
+            f.writeBytes(data)
+            trimIfNeeded()
+        }
+    }
+
     private fun memoryKey(msgId: Int, kind: String): String =
         "${UserSession.effectiveId}/$kind/$msgId"
 

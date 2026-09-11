@@ -848,7 +848,7 @@ object ChatRepository {
                     if (bigImage != null) {
                         uploadFileData(table, copied, bigImage, onProgress, column = "image_data")
                     }
-                    cacheOwnAttachment(copied, image, audio, video, file, fileName)
+                    cacheOwnAttachment(copied, image, audio, video, file, fileName, fileSha)
                     return@withContext copied
                 }
             }
@@ -885,7 +885,7 @@ object ChatRepository {
         // Своё вложение кладём в кеш прямо здесь. Байты уже на руках, а без
         // этого открытие собственной картинки тянуло её обратно из базы —
         // то есть отправитель платил за неё дважды.
-        cacheOwnAttachment(newId, image, audio, video, file, fileName)
+        cacheOwnAttachment(newId, image, audio, video, file, fileName, fileSha)
 
         newId
     }
@@ -898,13 +898,19 @@ object ChatRepository {
         video: ByteArray?,
         file: ByteArray?,
         fileName: String?,
+        sha: String? = null,
     ) {
         if (msgId <= 0) return
         runCatching {
             image?.takeIf { it.isNotEmpty() }?.let { MediaCache.put(msgId, "img", it, fileName) }
             audio?.takeIf { it.isNotEmpty() }?.let { MediaCache.put(msgId, "audio", it) }
             video?.takeIf { it.isNotEmpty() }?.let { MediaCache.put(msgId, "video", it) }
-            file?.takeIf { it.isNotEmpty() }?.let { MediaCache.put(msgId, "file", it, fileName) }
+            file?.takeIf { it.isNotEmpty() }?.let {
+                MediaCache.put(msgId, "file", it, fileName)
+                // И под отпечатком: тот же файл, отправленный ещё кому-то,
+                // будет открываться из кеша, а не качаться заново.
+                if (sha != null) MediaCache.putByHash(sha, it, fileName)
+            }
         }
     }
 
@@ -1161,10 +1167,32 @@ object ChatRepository {
         msgId: Int, scope: Scope, fileName: String?, onProgress: ((Float) -> Unit)? = null,
     ): ByteArray? {
         MediaCache.get(msgId, "file", fileName)?.let { return it }
+
+        // Тот же файл мог уже приезжать в ДРУГОМ чате: сообщения разные, а
+        // байты одни. Спрашиваем отпечаток — запрос крошечный, тела файла в
+        // нём нет, — и если такие байты уже лежат, качать нечего.
+        val sha = fileShaOf(scope.table, msgId)
+        if (sha != null) {
+            MediaCache.getByHash(sha, fileName)?.let {
+                // Кладём и под номером этого сообщения: следующее открытие
+                // обойдётся уже без запроса за отпечатком.
+                MediaCache.put(msgId, "file", it, fileName)
+                return it
+            }
+        }
+
         val data = downloadBlob(scope.table, msgId, "file_data", onProgress, fileName)
-        if (data != null && data.isNotEmpty()) MediaCache.put(msgId, "file", data, fileName)
+        if (data != null && data.isNotEmpty()) {
+            MediaCache.put(msgId, "file", data, fileName)
+            if (sha != null) MediaCache.putByHash(sha, data, fileName)
+        }
         return data
     }
+
+    /** Отпечаток вложения сообщения. null — столбца нет или он пуст. */
+    private suspend fun fileShaOf(table: String, msgId: Int): String? = runCatching {
+        Db.queryFirst("SELECT file_sha FROM $table WHERE id=?", msgId) { rs -> rs.getString(1) }
+    }.getOrNull()
 
     /**
      * Соединения идущих передач — чтобы отмена могла их оборвать.
