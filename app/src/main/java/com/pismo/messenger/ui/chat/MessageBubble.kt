@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
@@ -565,6 +566,19 @@ fun MessageBubble(
 
                     Spacer(Modifier.height(3.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Закреплено. На ПК такая отметка у пузыря есть давно, а
+                        // здесь закрепы были видны ТОЛЬКО в отдельном списке —
+                        // то есть в самой переписке понять, что сообщение
+                        // закреплено, было нельзя.
+                        if (msg.isPinned) {
+                            Icon(
+                                Icons.Default.PushPin,
+                                contentDescription = "Закреплено",
+                                tint = if (isMine) Color(0xFFB9BEFF) else PismoColors.Yellow,
+                                modifier = Modifier.size(11.dp),
+                            )
+                            Spacer(Modifier.width(3.dp))
+                        }
                         Text(
                             if (msg.isEdited) "${formatTime(msg.createdAtMs)} · изменено"
                             else formatTime(msg.createdAtMs),

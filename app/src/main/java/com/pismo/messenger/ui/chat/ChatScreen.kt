@@ -96,6 +96,7 @@ import com.pismo.messenger.data.model.Scope
 import com.pismo.messenger.data.model.headerText
 import com.pismo.messenger.data.Transfers
 import com.pismo.messenger.data.repo.ChatRepository
+import com.pismo.messenger.data.repo.PinsRepository
 import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.data.repo.ReactionsRepository
 import com.pismo.messenger.media.Sounds
@@ -144,7 +145,10 @@ internal const val MAX_ATTACH_BYTES = 200L * 1024 * 1024
 private const val PAGE_STEP = 40
 
 /** Пауза между подгрузками старых сообщений — как 800 мс на ПК. */
-private const val PAGE_COOLDOWN_MS = 800L
+// Пауза между подгрузками. Была 800 мс: каждая стоила похода к серверу, и
+// частые срабатывания сливались в рывки. Теперь порция чаще всего уже
+// привезена заранее, и держать человека дольше незачем.
+private const val PAGE_COOLDOWN_MS = 200L
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -197,6 +201,8 @@ fun ChatScreen(
     var lastTotal by remember(targetId) { mutableIntStateOf(-1) }
     var lastUnreadToPartner by remember(targetId) { mutableIntStateOf(-1) }
     var tick by remember(targetId) { mutableIntStateOf(0) }
+    /** Отпечаток закрепов на прошлом опросе; null — ещё не мерили. */
+    var lastPins by remember(targetId) { mutableStateOf<String?>(null) }
 
     // Режимы ответа и редактирования — как панель над строкой ввода на ПК.
     var replyTo by remember { mutableStateOf<ChatMessage?>(null) }
@@ -273,6 +279,21 @@ fun ChatScreen(
     var loadingOlder by remember(targetId) { mutableStateOf(false) }
     var noMoreOlder by remember(targetId) { mutableStateOf(false) }
 
+    /*
+     * Порция «про запас» — следующая страница, привезённая заранее.
+     *
+     * Пока человек читает только что приехавшие сообщения, канал до базы
+     * свободен, и это лучшее время, чтобы съездить за следующей. Когда он
+     * домотает доверху, она уже лежит готовой, вместе с картинками, и
+     * подгрузка обходится БЕЗ похода к серверу.
+     *
+     * reserveBefore — курсор, от которого её брали: если лента успела
+     * измениться, запас не подойдёт, и это видно по одному сравнению.
+     */
+    var reserve by remember(targetId) { mutableStateOf<List<ChatMessage>?>(null) }
+    var reserveBefore by remember(targetId) { mutableIntStateOf(0) }
+    var reserveBusy by remember(targetId) { mutableStateOf(false) }
+
     /**
      * Кто сейчас печатает в этом чате и когда об этом сообщили. Порт
      * индикатора «печатает…» с ПК: собственный статус уходит по вебсокету
@@ -304,10 +325,17 @@ fun ChatScreen(
             // Присваиваем ТОЛЬКО при реальном изменении: одинаковый по
             // содержимому список всё равно заставил бы перекомпоновать все
             // пузыри, а это заметный рывок посреди прокрутки.
-            if (loaded.size != messages.size ||
-                loaded.zip(messages).any { (a, b) -> a != b }
+            // Закрепы приходят отдельным запросом и проставляются на
+            // сообщения: в самих таблицах сообщений закрепа нет, он лежит в
+            // pinned_messages и общий для чата.
+            val pinned = runCatching { PinsRepository.pinnedIds(scopeKind) }
+                .getOrDefault(emptySet())
+            val marked = if (pinned.isEmpty()) loaded
+                         else loaded.map { it.copy(isPinned = it.id in pinned) }
+            if (marked.size != messages.size ||
+                marked.zip(messages).any { (a, b) -> a != b }
             ) {
-                messages = loaded
+                messages = marked
             }
             // Максимум ленты — это и есть максимум переписки: страница
             // грузится с конца. Записываем его здесь, чтобы опрос не считал
@@ -358,6 +386,29 @@ fun ChatScreen(
         if (messages.isNotEmpty() && !userScrolling && (force || (scrollToEnd && atBottom))) {
             listState.scrollToItem(messages.lastIndex)
         }
+    }
+
+    /**
+     * Съездить за следующей порцией заранее, в фоне. Повторно не ездим:
+     * запас либо уже привезён под этот курсор, либо как раз едет.
+     */
+    suspend fun warmReserve() {
+        if (reserveBusy || noMoreOlder) return
+        val oldest = messages.firstOrNull()?.id ?: return
+        if (reserve != null && reserveBefore == oldest) return
+        reserveBusy = true
+        val got = runCatching {
+            if (isGroup) ChatRepository.loadGroupMessages(targetId, PAGE_STEP, oldest)
+            else ChatRepository.loadDirectMessages(targetId, PAGE_STEP, oldest)
+        }.getOrDefault(emptyList())
+        if (got.isNotEmpty()) {
+            // Картинки тоже заранее: иначе пузыри встанут пустыми и
+            // подрастут потом, дёрнув ленту под пальцем.
+            runCatching { ChatRepository.prefetchPageMedia(got, scopeKind) }
+            reserve = got
+            reserveBefore = oldest
+        }
+        reserveBusy = false
     }
 
     /**
@@ -454,8 +505,13 @@ fun ChatScreen(
         snapshotFlow { listState.firstVisibleItemIndex to listState.isScrollInProgress }
             .collect { (first, scrolling) ->
                 if (!scrolling) return@collect
-                if (first > 2 || loading || loadingOlder || noMoreOlder) return@collect
+                if (loading || loadingOlder || noMoreOlder) return@collect
                 if (messages.isEmpty()) return@collect
+                // Запас начинаем везти ЗАДОЛГО до порога. Почти вся пауза при
+                // подгрузке — это поход к серверу, а не работа; сходить заранее,
+                // пока человек ещё читает, и есть самый дешёвый способ её убрать.
+                if (first <= 12) scope.launch { warmReserve() }
+                if (first > 2) return@collect
 
                 // Пауза между подгрузками: пока предыдущая порция укладывается,
                 // номер первого видимого успевает дёрнуться ещё несколько раз.
@@ -473,7 +529,10 @@ fun ChatScreen(
                 // тяжелее предыдущей. Теперь запрос идёт по курсору id < самого
                 // старого показанного и возвращает ровно новую двадцатку.
                 val oldestId = messages.firstOrNull()?.id ?: 0
-                val older = runCatching {
+                // Запас подошёл — за сообщениями ехать уже не надо.
+                val fromReserve = reserve?.takeIf { reserveBefore == oldestId && it.isNotEmpty() }
+                if (fromReserve != null) { reserve = null; reserveBefore = 0 }
+                val older = fromReserve ?: runCatching {
                     if (isGroup) ChatRepository.loadGroupMessages(targetId, PAGE_STEP, oldestId)
                     else ChatRepository.loadDirectMessages(targetId, PAGE_STEP, oldestId)
                 }.getOrDefault(emptyList())
@@ -486,12 +545,22 @@ fun ChatScreen(
                     // (её делает опрос, когда лента и правда изменилась) должна
                     // вернуть всё показанное, а не схлопнуть ленту до сорока.
                     pageLimit = (if (pageLimit > 0) pageLimit else messages.size) + older.size
-                    messages = older + messages
+                    // Отметку закрепа ставим и на порцию: она приходит из базы
+                    // без неё, и без этого закреплённое старое сообщение
+                    // выглядело бы обычным.
+                    val pinnedNow = runCatching { PinsRepository.pinnedIds(scopeKind) }
+                        .getOrDefault(emptySet())
+                    messages = (if (pinnedNow.isEmpty()) older
+                                else older.map { it.copy(isPinned = it.id in pinnedNow) }) + messages
                     reactions = reactions + ReactionsRepository.forMessages(
                         older.map { it.id }, scopeKind
                     )
                     MessageMemory.put(scopeKind, targetId, messages, reactions)
-                    ChatRepository.prefetchPageMedia(older, scopeKind)
+                    if (fromReserve == null) ChatRepository.prefetchPageMedia(older, scopeKind)
+                    // И сразу везём следующую порцию: человек читает
+                    // приехавшее, канал свободен — к его приходу наверх она
+                    // будет лежать готовой, и подгрузка обойдётся без запроса.
+                    warmReserve()
                 }
                 // Поправлять позицию руками НЕ НУЖНО и вредно: LazyColumn держит
                 // якорь на первом видимом элементе по его ключу, поэтому порция,
@@ -548,6 +617,15 @@ fun ChatScreen(
                 else if (isGroup) ChatRepository.groupMessageCount(targetId)
                 else ChatRepository.directMessageCount(targetId)
 
+                // Закрепы. Теперь они видны прямо на пузыре, так что сверять
+                // их стало зачем. Событие по ws до своего же второго входа не
+                // доходит — сервер держит одно соединение на пользователя, —
+                // а «открепил на компьютере, смотрю на телефоне» это именно
+                // тот случай, поэтому отпечаток сверяем и опросом.
+                val pins = runCatching { PinsRepository.fingerprint() }.getOrDefault("")
+                val pinsChanged = lastPins != null && pins.isNotEmpty() && pins != lastPins
+                if (pins.isNotEmpty()) lastPins = pins
+
                 // Каждое сравнение — только против ранее ИЗМЕРЕННОГО значения
                 // того же рода. Первое измерение (−1) поводом не считается.
                 val changed = (lastMaxId >= 0 && maxId != lastMaxId) ||
@@ -559,6 +637,8 @@ fun ChatScreen(
                 lastTotal = total
                 lastUnreadToPartner = mineUnread
                 if (changed) reload(scrollToEnd = true)
+                // Закреп ленту вниз не гонит: человек мог читать старое.
+                else if (pinsChanged) reload()
             }
         }
     }
@@ -566,6 +646,11 @@ fun ChatScreen(
     DisposableEffect(targetId) {
         val listener: (String, Int, Int, String) -> Unit = { type, sender, session, payload ->
             if (type == "new_message") scope.launch { reload(scrollToEnd = true) }
+
+            // Закрепили или открепили — перечитываем: отметка закрепа теперь
+            // стоит на самом пузыре. Событие шлёт и ПК, и мы сами
+            // (см. PinsRepository.toggle).
+            if (type == "pin") scope.launch { reload() }
 
             // Собеседник прочитал мои сообщения — обновляем галочки сразу, не
             // дожидаясь опроса. Событие шлёт и ПК, и мы сами (см. markAsRead):
