@@ -197,8 +197,6 @@ fun ChatScreen(
     var lastTotal by remember(targetId) { mutableIntStateOf(-1) }
     var lastUnreadToPartner by remember(targetId) { mutableIntStateOf(-1) }
     var tick by remember(targetId) { mutableIntStateOf(0) }
-    /** Отпечаток закрепов на прошлом опросе; null — ещё не мерили. */
-    var lastPins by remember(targetId) { mutableStateOf<String?>(null) }
 
     // Режимы ответа и редактирования — как панель над строкой ввода на ПК.
     var replyTo by remember { mutableStateOf<ChatMessage?>(null) }
@@ -550,26 +548,17 @@ fun ChatScreen(
                 else if (isGroup) ChatRepository.groupMessageCount(targetId)
                 else ChatRepository.directMessageCount(targetId)
 
-                // Закрепы. Событие по ws до своего же второго входа не доходит
-                // (сервер держит одно соединение на пользователя), а «открепил
-                // на компьютере — вижу на телефоне» это именно тот случай.
-                val pins = PinsRepository.fingerprint()
-
                 // Каждое сравнение — только против ранее ИЗМЕРЕННОГО значения
                 // того же рода. Первое измерение (−1) поводом не считается.
                 val changed = (lastMaxId >= 0 && maxId != lastMaxId) ||
                     (lastTotal >= 0 && total != lastTotal) ||
                     (!isGroup && lastUnreadToPartner >= 0 &&
                             mineUnread != lastUnreadToPartner)
-                val pinsChanged = lastPins != null && pins.isNotEmpty() && pins != lastPins
 
                 lastMaxId = maxId
                 lastTotal = total
                 lastUnreadToPartner = mineUnread
-                if (pins.isNotEmpty()) lastPins = pins
-                // Закрепы ленту вниз не гонят: человек мог читать старое.
                 if (changed) reload(scrollToEnd = true)
-                else if (pinsChanged) reload()
             }
         }
     }
@@ -577,11 +566,6 @@ fun ChatScreen(
     DisposableEffect(targetId) {
         val listener: (String, Int, Int, String) -> Unit = { type, sender, session, payload ->
             if (type == "new_message") scope.launch { reload(scrollToEnd = true) }
-
-            // Закрепили или открепили — перечитываем ленту: отметка закрепа
-            // приезжает вместе с сообщениями. Событие шлёт и ПК, и мы сами
-            // (см. PinsRepository.toggle).
-            if (type == "pin") scope.launch { reload() }
 
             // Собеседник прочитал мои сообщения — обновляем галочки сразу, не
             // дожидаясь опроса. Событие шлёт и ПК, и мы сами (см. markAsRead):

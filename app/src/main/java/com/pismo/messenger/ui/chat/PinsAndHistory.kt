@@ -27,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,8 +46,10 @@ import com.pismo.messenger.core.formatTime
 import com.pismo.messenger.data.model.Scope
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.PinsRepository
+import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.theme.PismoColors
 import com.pismo.messenger.core.EmojiCatalog
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -76,6 +79,40 @@ fun PinnedMessagesDialog(
     }
 
     LaunchedEffect(targetId, scopeKind) { reload() }
+
+    /*
+     * Список закреплённых — живой, пока открыт.
+     *
+     * Раньше он читался ОДИН раз при открытии, и всё: открепили на другом
+     * устройстве — здесь по-прежнему висит, пока не закроешь и не откроешь
+     * заново. Отметки закрепа на пузырях в приложении нет, так что этот
+     * список — единственное место, где закрепы вообще видны, и устаревать
+     * ему нельзя.
+     *
+     * Два источника, как и везде: событие по вебсокету — быстрый путь, и
+     * сверка отпечатка — гарантия. Гарантия нужна потому, что ws-сервер
+     * держит ОДНО соединение на пользователя: свой же второй вход (телефон
+     * рядом с компьютером) событий не получает вовсе, а это и есть самый
+     * частый случай.
+     */
+    DisposableEffect(targetId, scopeKind) {
+        val listener: (String, Int, Int, String) -> Unit = { type, _, _, _ ->
+            if (type == "pin") scope.launch { reload() }
+        }
+        SignalingClient.addListener(listener)
+        onDispose { SignalingClient.removeListener(listener) }
+    }
+
+    LaunchedEffect(targetId, scopeKind) {
+        var last: String? = null
+        while (true) {
+            delay(2_500)
+            val now = runCatching { PinsRepository.fingerprint() }.getOrDefault("")
+            if (now.isEmpty()) continue
+            if (last != null && now != last) reload()
+            last = now
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
