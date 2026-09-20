@@ -1,0 +1,61 @@
+# Сборка настольной версии (Linux).
+#
+# Зачем отдельно от APK: модуль :desktop собирается обычным Kotlin/JVM без
+# Android SDK, и держать его в одной работе с телефоном значило бы ждать
+# установку SDK ради кода, которому она не нужна.
+#
+# Что получается на выходе:
+#   pismo-linux-deb      — пакет для Debian/Ubuntu/Mint, ставится двойным щелчком
+#   pismo-linux-appimage — каталог с запускаемым приложением, без установки
+#
+# Обе сборки несут внутри свою JVM (jpackage кладёт урезанную среду рядом),
+# поэтому на машине пользователя Java ставить не нужно.
+name: Сборка (Linux)
+
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+      - 'sql/**'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - run: chmod +x ./gradlew
+
+      # Ошибки компиляции — отдельно и первыми, как в сборке APK: строки
+      # «e: file: …» иначе тонут в стеке Gradle.
+      - name: Собрать
+        run: |
+          set -o pipefail
+          ./gradlew :desktop:packageDeb :desktop:createDistributable --no-daemon 2>&1 | tee desktop.log
+
+      - name: Ошибки компиляции
+        if: failure()
+        run: |
+          echo "──────── ошибки компиляции ────────"
+          grep -E "^e: |^w: .*error" desktop.log || echo "(строк 'e:' в логе нет — смотрите полный лог)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pismo-linux-deb
+          path: desktop/build/compose/binaries/main/deb/*.deb
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pismo-linux-appimage
+          path: desktop/build/compose/binaries/main/app/**
+          if-no-files-found: error
