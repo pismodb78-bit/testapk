@@ -5,6 +5,7 @@ import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.data.db.str
 import com.pismo.messenger.data.model.Scope
+import com.pismo.messenger.net.SignalingClient
 
 /**
  * Закреплённые сообщения — порт PISMO/PinsRepository.cs.
@@ -23,7 +24,7 @@ object PinsRepository {
 
     /** Тумблер закрепа. true — после операции сообщение закреплено. */
     suspend fun toggle(messageId: Int, scope: Scope): Boolean = runCatching {
-        if (isPinned(messageId, scope)) {
+        val nowPinned = if (isPinned(messageId, scope)) {
             Db.exec("DELETE FROM pinned_messages WHERE message_id=? AND scope=?", messageId, scope.db)
             false
         } else {
@@ -33,7 +34,40 @@ object PinsRepository {
             )
             true
         }
+        announce(messageId)
+        nowPinned
     }.getOrDefault(false)
+
+    /**
+     * Сказать остальным, что закрепы изменились.
+     *
+     * Отсюда, а не от кнопки: закрепляют из двух мест — меню пузыря и список
+     * закреплённых, — и каждое пришлось бы помнить об этом отдельно. Здесь
+     * место одно, и забыть негде.
+     *
+     * Широковещательно, как new_message: получателю всё равно перечитывать
+     * закрепы своего открытого чата, кто бы их ни тронул.
+     */
+    private fun announce(messageId: Int) {
+        runCatching { SignalingClient.send("pin", 0, messageId, "") }
+    }
+
+    /**
+     * Отпечаток закрепов — чтобы опрос замечал правку, до которой событие не
+     * дошло.
+     *
+     * Дойти оно может не всегда: ws-сервер держит по ОДНОМУ соединению на
+     * пользователя, и свой же второй вход (телефон рядом с компьютером) событий
+     * не получает вовсе. А это и есть самый частый случай: открепил там — хочу
+     * видеть здесь.
+     *
+     * Закрепов единицы, так что пересчёт по таблице дёшев.
+     */
+    suspend fun fingerprint(): String = runCatching {
+        Db.queryFirst("SELECT COUNT(*) AS n, COALESCE(SUM(message_id),0) AS s FROM pinned_messages") { rs ->
+            rs.getLong("n").toString() + ":" + rs.getLong("s")
+        } ?: ""
+    }.getOrDefault("")
 
     /** Все закреплённые id в этой области — для пометки пузырей. */
     suspend fun pinnedIds(scope: Scope): Set<Int> = runCatching {
