@@ -15,12 +15,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Badge
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
@@ -36,8 +36,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.model.Conversation
+import com.pismo.messenger.data.model.GroupSummary
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.desktop.PismoPalette
 import kotlinx.coroutines.Dispatchers
@@ -59,57 +58,54 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Главное окно: слева список диалогов, справа переписка.
- *
- * Данные целиком из общих репозиториев — тех же, что у телефона. Здесь
- * только раскладка и ввод.
+ * Главное окно: слева список — группы и личные диалоги, как на телефоне, —
+ * справа переписка. Данные целиком из общих репозиториев; здесь только
+ * раскладка и ввод.
  */
 @Composable
 fun ChatsScreen(onLogout: () -> Unit) {
 
-    val conversations = remember { mutableStateListOf<Conversation>() }
+    var conversations by remember { mutableStateOf<List<Conversation>>(emptyList()) }
+    var groups by remember { mutableStateOf<List<GroupSummary>>(emptyList()) }
     var pins by remember { mutableStateOf<Set<Int>>(emptySet()) }
-    var selected by remember { mutableStateOf<Conversation?>(null) }
+    var selected by remember { mutableStateOf<ChatTarget?>(null) }
     var filter by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(true) }
-    val scope = rememberCoroutineScope()
+    val ui = rememberCoroutineScope()
 
-    suspend fun refresh() {
-        val list = withContext(Dispatchers.IO) { runCatching { ChatRepository.loadConversations() }.getOrNull() }
-        val p = withContext(Dispatchers.IO) { runCatching { ChatRepository.loadChatPins() }.getOrNull() }
-        if (list != null) { conversations.clear(); conversations.addAll(list) }
-        if (p != null) pins = p
+    suspend fun reload() {
+        withContext(Dispatchers.IO) {
+            runCatching { ChatRepository.loadConversations() }.getOrNull()?.let { conversations = it }
+            runCatching { ChatRepository.loadGroups() }.getOrNull()?.let { groups = it }
+            runCatching { ChatRepository.loadChatPins() }.getOrNull()?.let { pins = it }
+        }
         loading = false
     }
 
-    // Список обновляем сам, как на телефоне: своего бэкенда нет, о новых
-    // сообщениях никто не сообщает, узнать о них можно только спросив.
+    // Список обновляем сам: своего бэкенда нет, о новом никто не сообщает,
+    // узнать можно только спросив. Закрепы входят в ту же проверку — их
+    // меняют и на другом устройстве.
     LaunchedEffect(Unit) {
-        refresh()
+        reload()
         while (isActive) {
-            delay(5_000)
-            refresh()
+            delay(2_500)
+            reload()
         }
     }
 
-    val shown = remember(conversations.toList(), pins, filter) {
-        val f = filter.trim().lowercase()
-        conversations
-            .filter { f.isEmpty() || it.name.lowercase().contains(f) || it.login.lowercase().contains(f) }
-            // Закреплённые — наверх. Закрепления лежат в базе, поэтому
-            // порядок здесь тот же, что на телефоне и на ПК.
-            .sortedWith(
-                compareByDescending<Conversation> { it.userId in pins }
-                    .thenByDescending { it.lastTimeMs ?: 0L }
-            )
-    }
+    val f = filter.trim().lowercase()
+    val shownGroups = groups.filter { f.isEmpty() || it.name.lowercase().contains(f) }
+    val shownChats = conversations
+        .filter { f.isEmpty() || it.name.lowercase().contains(f) || it.login.lowercase().contains(f) }
+        // Закреплённые — наверх. Закрепы лежат в базе и общие с телефоном и ПК.
+        .sortedWith(
+            compareByDescending<Conversation> { it.userId in pins }
+                .thenByDescending { it.lastTimeMs ?: 0L }
+        )
 
     Row(Modifier.fillMaxSize()) {
 
-        // ── Список диалогов ──────────────────────────────────────────────
-        Column(
-            Modifier.width(300.dp).fillMaxHeight().background(PismoPalette.Surface)
-        ) {
+        Column(Modifier.width(300.dp).fillMaxHeight().background(PismoPalette.Surface)) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -119,9 +115,10 @@ fun ChatsScreen(onLogout: () -> Unit) {
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),
                 )
-                IconButton(onClick = onLogout) {
-                    Icon(Icons.Default.Logout, contentDescription = "Выйти")
+                IconButton(onClick = { ui.launch { reload() } }) {
+                    Icon(Icons.Default.Refresh, "Обновить")
                 }
+                IconButton(onClick = onLogout) { Icon(Icons.Default.Logout, "Выйти") }
             }
             OutlinedTextField(
                 value = filter,
@@ -132,32 +129,57 @@ fun ChatsScreen(onLogout: () -> Unit) {
             )
             Spacer(Modifier.height(8.dp))
 
-            if (loading && conversations.isEmpty()) {
+            if (loading && conversations.isEmpty() && groups.isEmpty()) {
                 Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
             }
 
             LazyColumn(Modifier.fillMaxSize()) {
-                items(shown, key = { it.userId }) { c ->
-                    ConversationRow(
-                        c = c,
+                if (shownGroups.isNotEmpty()) {
+                    item("hdr-groups") { SectionHeader("ГРУППЫ") }
+                    items(count = shownGroups.size, key = { "g" + shownGroups[it].id }) { i ->
+                        val g = shownGroups[i]
+                        ListRow(
+                            title = g.name,
+                            preview = g.lastMessage,
+                            timeMs = g.lastTimeMs,
+                            unread = g.unread,
+                            colorSeed = g.id,
+                            isGroup = true,
+                            pinned = false,
+                            active = selected?.isGroup == true && selected?.id == g.id,
+                            onClick = { selected = ChatTarget(g.id, g.name, isGroup = true) },
+                            onTogglePin = null,
+                        )
+                    }
+                    item("hdr-chats") { SectionHeader("ЛИЧНЫЕ СООБЩЕНИЯ") }
+                }
+                items(count = shownChats.size, key = { "d" + shownChats[it].userId }) { i ->
+                    val c = shownChats[i]
+                    ListRow(
+                        title = c.name,
+                        preview = c.lastMessage,
+                        timeMs = c.lastTimeMs,
+                        unread = c.unread,
+                        colorSeed = c.userId,
+                        isGroup = false,
                         pinned = c.userId in pins,
-                        active = selected?.userId == c.userId,
+                        active = selected?.isGroup == false && selected?.id == c.userId,
                         onClick = {
-                            selected = c
-                            scope.launch {
+                            selected = ChatTarget(c.userId, c.name, isGroup = false)
+                            ui.launch {
                                 withContext(Dispatchers.IO) {
                                     runCatching { ChatRepository.markAsRead(c.userId) }
                                 }
                             }
                         },
                         onTogglePin = {
-                            val nowPinned = c.userId !in pins
-                            pins = if (nowPinned) pins + c.userId else pins - c.userId
-                            scope.launch {
+                            val now = c.userId !in pins
+                            pins = if (now) pins + c.userId else pins - c.userId
+                            ui.launch {
                                 withContext(Dispatchers.IO) {
-                                    runCatching { ChatRepository.setChatPin(c.userId, nowPinned) }
+                                    runCatching { ChatRepository.setChatPin(c.userId, now) }
                                 }
                             }
                         },
@@ -166,34 +188,42 @@ fun ChatsScreen(onLogout: () -> Unit) {
             }
         }
 
-        Divider(
-            Modifier.fillMaxHeight().width(1.dp),
-            color = PismoPalette.Divider,
-        )
+        Divider(Modifier.fillMaxHeight().width(1.dp), color = PismoPalette.Divider)
 
-        // ── Переписка ────────────────────────────────────────────────────
         Box(Modifier.weight(1f).fillMaxHeight().background(PismoPalette.Background)) {
-            val partner = selected
-            if (partner == null) {
-                Text(
-                    "Выберите диалог",
-                    color = PismoPalette.OnMuted,
-                    modifier = Modifier.align(Alignment.Center),
-                )
+            val t = selected
+            if (t == null) {
+                Text("Выберите диалог", color = PismoPalette.OnMuted, modifier = Modifier.align(Alignment.Center))
             } else {
-                ChatPane(partner)
+                ChatPane(t)
             }
         }
     }
 }
 
 @Composable
-private fun ConversationRow(
-    c: Conversation,
+private fun SectionHeader(text: String) {
+    Text(
+        text,
+        fontSize = 10.sp,
+        color = PismoPalette.OnMuted,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(start = 14.dp, top = 10.dp, bottom = 4.dp),
+    )
+}
+
+@Composable
+private fun ListRow(
+    title: String,
+    preview: String,
+    timeMs: Long?,
+    unread: Int,
+    colorSeed: Int,
+    isGroup: Boolean,
     pinned: Boolean,
     active: Boolean,
     onClick: () -> Unit,
-    onTogglePin: () -> Unit,
+    onTogglePin: (() -> Unit)?,
 ) {
     Row(
         Modifier
@@ -204,61 +234,49 @@ private fun ConversationRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            Modifier.size(36.dp).clip(CircleShape).background(avatarColor(c.userId)),
+            Modifier.size(36.dp).clip(CircleShape).background(avatarColor(colorSeed)),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                c.name.trim().take(1).uppercase().ifEmpty { "?" },
-                color = Color.White,
-                fontWeight = FontWeight.SemiBold,
+            if (isGroup) Icon(Icons.Default.Groups, null, tint = Color.White, modifier = Modifier.size(18.dp))
+            else Text(
+                title.trim().take(1).uppercase().ifEmpty { "?" },
+                color = Color.White, fontWeight = FontWeight.SemiBold,
             )
         }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (pinned) {
-                    Icon(
-                        Icons.Default.PushPin,
-                        contentDescription = null,
-                        tint = PismoPalette.OnMuted,
-                        modifier = Modifier.size(12.dp),
-                    )
+                    Icon(Icons.Default.PushPin, null, tint = PismoPalette.OnMuted,
+                         modifier = Modifier.size(12.dp))
                     Spacer(Modifier.width(4.dp))
                 }
-                Text(
-                    c.name,
-                    maxLines = 1,
-                    fontWeight = if (c.unread > 0) FontWeight.SemiBold else FontWeight.Normal,
-                )
+                Text(title, maxLines = 1,
+                     fontWeight = if (unread > 0) FontWeight.SemiBold else FontWeight.Normal)
             }
-            Text(
-                c.lastMessage,
-                maxLines = 1,
-                fontSize = 12.sp,
-                color = PismoPalette.OnMuted,
-            )
+            Text(preview, maxLines = 1, fontSize = 12.sp, color = PismoPalette.OnMuted)
         }
         Column(horizontalAlignment = Alignment.End) {
-            c.lastTimeMs?.let {
-                Text(shortTime(it), fontSize = 11.sp, color = PismoPalette.OnMuted)
-            }
-            if (c.unread > 0) {
+            timeMs?.let { Text(shortTime(it), fontSize = 11.sp, color = PismoPalette.OnMuted) }
+            if (unread > 0) {
                 Spacer(Modifier.height(2.dp))
-                Badge { Text(c.unread.coerceAtMost(99).toString()) }
+                Badge { Text(unread.coerceAtMost(99).toString()) }
             }
         }
-        IconButton(onClick = onTogglePin, modifier = Modifier.size(24.dp)) {
-            Icon(
-                Icons.Default.PushPin,
-                contentDescription = if (pinned) "Открепить" else "Закрепить",
-                tint = if (pinned) MaterialTheme.colorScheme.primary else PismoPalette.Divider,
-                modifier = Modifier.size(14.dp),
-            )
+        if (onTogglePin != null) {
+            IconButton(onClick = onTogglePin, modifier = Modifier.size(24.dp)) {
+                Icon(
+                    Icons.Default.PushPin,
+                    if (pinned) "Открепить" else "Закрепить",
+                    tint = if (pinned) MaterialTheme.colorScheme.primary else PismoPalette.Divider,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
         }
     }
 }
 
-/** Цвет кружка с буквой — стабильный для человека, как на телефоне. */
+/** Цвет кружка — стабильный для собеседника, как на телефоне. */
 internal fun avatarColor(id: Int): Color {
     val palette = listOf(
         Color(0xFF5865F2), Color(0xFF3BA55D), Color(0xFFFAA61A),
