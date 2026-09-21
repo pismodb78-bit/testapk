@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=PISMO
+Comment=Мессенджер PISMO
+Exec=/opt/pismo/bin/pismo
+Icon=pismo
+Terminal=false
+Categories=Network;InstantMessaging;
+StartupWMClass=pismo

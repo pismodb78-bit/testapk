@@ -1,0 +1,58 @@
+# Maintainer: PISMO
+#
+# Сборка PISMO для Arch Linux из исходников.
+#
+# Почему не .deb: он для Debian и Ubuntu, а в Arch ставить его нечем —
+# debtap и подобное превращают чужой пакет в местный наугад и ломают
+# зависимости. Здесь обычный PKGBUILD: собирает тем же Gradle, что и CI,
+# и кладёт приложение в /opt, как принято для программ со своей средой
+# выполнения.
+#
+#   makepkg -si
+#
+pkgname=pismo
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="PISMO — мессенджер (настольная версия)"
+arch=('x86_64')
+url="https://github.com/pismodb78-bit/testapk"
+license=('custom')
+# Своя JVM едет внутри пакета (её кладёт jpackage), поэтому java в
+# зависимостях нет — нужна только на время сборки.
+depends=('hicolor-icon-theme')
+makedepends=('jdk17-openjdk' 'git')
+options=('!strip')   # трогать чужую JVM не надо
+
+_branch=claude/pismo-android-version-qd5fxr
+source=("git+https://github.com/pismodb78-bit/testapk.git#branch=${_branch}"
+        "pismo.desktop")
+sha256sums=('SKIP' 'SKIP')
+
+build() {
+    cd "$srcdir/testapk"
+    # -PdesktopOnly=true убирает из сборки андроидный модуль: ему нужен
+    # Android SDK и доступ к Google Maven, а настольной версии — нет.
+    JAVA_HOME=/usr/lib/jvm/java-17-openjdk \
+        ./gradlew :desktop:createDistributable -PdesktopOnly=true --no-daemon
+}
+
+package() {
+    cd "$srcdir/testapk"
+    local app="desktop/build/compose/binaries/main/app/pismo"
+
+    install -d "$pkgdir/opt/pismo"
+    cp -a "$app/." "$pkgdir/opt/pismo/"
+
+    install -d "$pkgdir/usr/bin"
+    ln -s /opt/pismo/bin/pismo "$pkgdir/usr/bin/pismo"
+
+    install -Dm644 "$srcdir/pismo.desktop" \
+        "$pkgdir/usr/share/applications/pismo.desktop"
+
+    # Значок кладём, только если он вообще собрался: без него ярлык
+    # покажется со стандартным, и это не повод валить установку.
+    if [ -f "$app/lib/pismo.png" ]; then
+        install -Dm644 "$app/lib/pismo.png" \
+            "$pkgdir/usr/share/icons/hicolor/256x256/apps/pismo.png"
+    fi
+}

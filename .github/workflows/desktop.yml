@@ -6,10 +6,13 @@
 #
 # Что получается на выходе:
 #   pismo-linux-deb      — пакет для Debian/Ubuntu/Mint, ставится двойным щелчком
-#   pismo-linux-appimage — каталог с запускаемым приложением, без установки
+#   pismo-linux-tar      — один архив с готовым приложением: распаковал и запустил
 #
-# Обе сборки несут внутри свою JVM (jpackage кладёт урезанную среду рядом),
-# поэтому на машине пользователя Java ставить не нужно.
+# Архив — для всего остального, Arch в том числе: .deb туда ставить нечем, а
+# распакованному каталогу дистрибутив безразличен. Обе сборки несут внутри
+# свою JVM (jpackage кладёт урезанную среду рядом), поэтому на машине
+# пользователя Java ставить не нужно. Для Arch есть ещё PKGBUILD —
+# desktop/arch, он собирает из исходников и ставит как обычный пакет.
 name: Сборка (Linux)
 
 on:
@@ -54,8 +57,19 @@ jobs:
           path: desktop/build/compose/binaries/main/deb/*.deb
           if-no-files-found: error
 
+      # Каталог приложения кладём ОДНИМ архивом.
+      #
+      # Раньше он уезжал как есть, а это сотни файлов: GitHub отдаёт их
+      # своим zip, внутри которого теряются права на запуск — скачавший
+      # получал каталог, где bin/pismo не запускается. tar права сохраняет.
+      - name: Упаковать каталог приложения
+        run: |
+          cd desktop/build/compose/binaries/main/app
+          tar -czf "$GITHUB_WORKSPACE/pismo-linux-x64.tar.gz" pismo
+          ls -la "$GITHUB_WORKSPACE/pismo-linux-x64.tar.gz"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: pismo-linux-appimage
-          path: desktop/build/compose/binaries/main/app/**
+          name: pismo-linux-tar
+          path: pismo-linux-x64.tar.gz
           if-no-files-found: error
