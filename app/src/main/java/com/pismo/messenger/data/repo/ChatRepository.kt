@@ -560,6 +560,10 @@ object ChatRepository {
                 me, targetId,
             )
         }
+        // И сообщаем остальным устройствам. Закрепы чатов общие, и второй
+        // вход должен переставить список сразу, а не ждать, пока кто-нибудь
+        // напишет сообщение.
+        runCatching { SignalingClient.send("chatpin", 0, targetId, "") }
     }
 
     suspend fun unreadBySender(): Map<Int, Int> {

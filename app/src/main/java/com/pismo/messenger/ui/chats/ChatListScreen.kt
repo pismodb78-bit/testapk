@@ -179,8 +179,19 @@ fun ChatListScreen(
             runCatching {
                 val unread = ChatRepository.unreadBySender()
                 val groupMax = ChatRepository.groupMaxIncoming()
+                // Закрепы чатов — в признак изменения.
+                //
+                // Их здесь не было, а перечитываются они только внутри
+                // перезагрузки списка, которая идёт лишь при изменении
+                // непрочитанного. Поэтому открепление, сделанное на
+                // компьютере, на телефоне не появлялось вовсе, пока кто-нибудь
+                // не напишет или пока не нажмёшь «обновить». Запрос лёгкий:
+                // одна строка на закреплённый чат.
+                val pins = runCatching { ChatRepository.loadChatPins() }
+                    .getOrDefault(pinnedIds)
                 val signature = unread.toSortedMap().toString() +
-                        groupMax.mapValues { it.value.first }.toSortedMap().toString()
+                        groupMax.mapValues { it.value.first }.toSortedMap().toString() +
+                        pins.sorted().toString()
                 if (signature != lastSignature) {
                     lastSignature = signature
                     reload()
@@ -192,6 +203,9 @@ fun ChatListScreen(
     DisposableEffect(Unit) {
         val listener: (String, Int, Int, String) -> Unit = { type, _, _, _ ->
             if (type == "new_message") scope.launch { reload() }
+            // Закрепили или открепили чат на другом устройстве — переставляем
+            // список сразу, не дожидаясь сверки.
+            if (type == "chatpin") scope.launch { reload() }
         }
         SignalingClient.addListener(listener)
         onDispose { SignalingClient.removeListener(listener) }
