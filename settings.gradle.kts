@@ -24,11 +24,7 @@ pluginManagement {
     plugins {
         id("com.android.application") version "8.7.3"
         id("org.jetbrains.kotlin.android") version "2.0.21"
-        id("org.jetbrains.kotlin.jvm") version "2.0.21"
         id("org.jetbrains.kotlin.plugin.compose") version "2.0.21"
-        // Compose Multiplatform — тот же Compose, что на телефоне, только
-        // для настольной JVM. 1.7.3 собрана под Kotlin 2.0.21.
-        id("org.jetbrains.compose") version "1.7.3"
     }
 }
 
@@ -47,12 +43,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "PISMO"
 
-// -PdesktopOnly=true — собирать только настольную версию.
-//
-// Нужно там, где нет Android SDK или доступа к Google Maven: сборка Linux к
-// ним отношения не имеет, но Gradle настраивает ВСЕ модули подряд и без
-// этого спотыкался бы об андроидный плагин.
-if (providers.gradleProperty("desktopOnly").orNull != "true") include(":app")
-// Настольная сборка (Linux и всё, где есть JVM). Компилирует общий слой
-// данных из :app — см. пояснение в desktop/build.gradle.kts.
-include(":desktop")
+include(":app")

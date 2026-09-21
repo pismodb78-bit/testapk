@@ -9,7 +9,6 @@
 .cxx
 local.properties
 /app/build/
-/desktop/build/
 /app/release/
 *.apk
 *.aab
