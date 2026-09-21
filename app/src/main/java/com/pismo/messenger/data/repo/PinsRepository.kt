@@ -78,7 +78,13 @@ object PinsRepository {
      * Закрепов единицы, так что пересчёт по таблице дёшев.
      */
     suspend fun fingerprint(): String = runCatching {
-        Db.queryFirst("SELECT COUNT(*) AS n, COALESCE(SUM(message_id),0) AS s FROM pinned_messages") { rs ->
+        // CAST обязателен: SUM() от целой колонки MySQL возвращает DECIMAL.
+        // JDBC его к long приводит сам, но на ПК тот же запрос читался строго
+        // и падал — пусть тип будет одинаковым и однозначным на обеих сторонах.
+        Db.queryFirst(
+            "SELECT COUNT(*) AS n, CAST(COALESCE(SUM(message_id),0) AS SIGNED) AS s " +
+                "FROM pinned_messages"
+        ) { rs ->
             rs.getLong("n").toString() + ":" + rs.getLong("s")
         } ?: ""
     }.getOrDefault("")
