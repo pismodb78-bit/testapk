@@ -637,7 +637,18 @@ fun MessageBubble(
                     DropdownMenuItem(
                         text = { Text("📌  Закрепить / открепить") },
                         onClick = {
-                            scope.launch { PinsRepository.toggle(msg.id, scopeKind) }
+                            scope.launch {
+                                PinsRepository.toggle(msg.id, scopeKind)
+                                // Не получилось — говорим об этом. Раньше неудача
+                                // выглядела как «ничего не произошло», и отличить
+                                // её от обычного открепления было нельзя.
+                                PinsRepository.lastError?.let {
+                                    android.widget.Toast.makeText(
+                                        context, "Закрепление не прошло: $it",
+                                        android.widget.Toast.LENGTH_LONG,
+                                    ).show()
+                                }
+                            }
                             menuOpen = false
                         },
                     )

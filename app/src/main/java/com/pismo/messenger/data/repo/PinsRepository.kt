@@ -22,8 +22,22 @@ object PinsRepository {
         )
     }.getOrDefault(false)
 
+    /**
+     * Почему последняя операция не удалась, или null.
+     *
+     * Здесь всё завёрнуто в runCatching и возвращает false — закреп не то,
+     * ради чего стоит ронять экран. Но «не удалось» и «открепил» выглядели
+     * СНАРУЖИ одинаково: нажал «Закрепить», ничего не произошло, и понять, в
+     * чём дело — нет прав на таблицу, нет самой таблицы, нет связи, — было
+     * нельзя ни по чему.
+     */
+    @Volatile
+    var lastError: String? = null
+        private set
+
     /** Тумблер закрепа. true — после операции сообщение закреплено. */
     suspend fun toggle(messageId: Int, scope: Scope): Boolean = runCatching {
+        lastError = null
         val nowPinned = if (isPinned(messageId, scope)) {
             Db.exec("DELETE FROM pinned_messages WHERE message_id=? AND scope=?", messageId, scope.db)
             false
@@ -36,7 +50,7 @@ object PinsRepository {
         }
         announce(messageId)
         nowPinned
-    }.getOrDefault(false)
+    }.getOrElse { e -> lastError = e.message ?: e.toString(); false }
 
     /**
      * Сказать остальным, что закрепы изменились.
