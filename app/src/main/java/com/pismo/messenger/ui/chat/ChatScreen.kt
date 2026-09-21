@@ -590,6 +590,15 @@ fun ChatScreen(
         }
     }
 
+    // Приход по сокету — подпись в шапке меняется сразу, а не со следующей
+    // сверкой: собеседник отошёл от компьютера, и это видно тут же.
+    LaunchedEffect(targetId, isGroup) {
+        if (isGroup) return@LaunchedEffect
+        PresenceRepository.updates.collect {
+            PresenceRepository.cached(targetId)?.let { peerPresence = it }
+        }
+    }
+
     // Опрос по числу сообщений — тот же приём, что PollTick на ПК.
     //
     // Плюс отдельно следим за числом СВОИХ непрочитанных: прочтение количества

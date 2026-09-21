@@ -3,7 +3,9 @@ package com.pismo.messenger.core
 import android.app.Activity
 import android.app.Application
 import android.os.Bundle
+import com.pismo.messenger.data.model.Presence
 import com.pismo.messenger.data.repo.PresenceRepository
+import com.pismo.messenger.net.SignalingClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -26,6 +28,13 @@ import kotlinx.coroutines.launch
  * ввод в чужих окнах. Ближайший честный аналог: приложение открыто на
  * экране ЛИБО идёт звонок. Свёрнутое приложение шлёт только last_seen —
  * это ровно то же, что делает ПК при простое: «в сети, но бездействует».
+ *
+ * КАК СТАТУС ДОХОДИТ ДО ОСТАЛЬНЫХ. Двумя путями сразу. Через базу — как
+ * было: heartbeat раз в шесть секунд, собеседник читает своей сверкой.
+ * И по сокету — сразу же, но только когда статус ИЗМЕНИЛСЯ. Через базу
+ * изменение шло двумя шагами по сети, и на каждом могло задержаться или
+ * не дойти; по сокету оно приходит мгновенно, а база остаётся
+ * подстраховкой для тех, кто сейчас не на связи.
  */
 object PresenceReporter {
 
@@ -41,6 +50,55 @@ object PresenceReporter {
     @Volatile var inCall: Boolean = false
 
     val isForeground: Boolean get() = startedActivities > 0
+
+    /** Когда в последний раз были активны. Обновляется, пока экран открыт. */
+    @Volatile private var lastActiveAt = System.currentTimeMillis()
+
+    /** Свой статус, разосланный по сокету последним, и когда это было. */
+    @Volatile private var broadcastStatus = -1
+    @Volatile private var broadcastAt = 0L
+
+    /** Простой в секундах — ровно то же, что GetLastInputInfo даёт на ПК. */
+    private fun idleSeconds(): Int {
+        if (isForeground || inCall) {
+            lastActiveAt = System.currentTimeMillis()
+            return 0
+        }
+        return ((System.currentTimeMillis() - lastActiveAt) / 1000).toInt()
+    }
+
+    /**
+     * Рассылает СВОЙ статус по сокету, когда он изменился.
+     *
+     * Зачем, если есть heartbeat в базе. Оттуда статус доходит двумя шагами:
+     * сначала я должен записать (до 6 секунд), потом собеседник должен
+     * прочитать (ещё до 6 секунд), и каждый шаг — запрос к базе на другом
+     * конце сети. Любой из них может не успеть; тогда новый статус появлялся
+     * только со следующей сверкой. По сокету то же изменение приходит сразу
+     * и всем. База остаётся источником правды для тех, кто подключился
+     * позже или до кого сообщение не дошло.
+     *
+     * Шлём по изменению плюс раз в 30 секунд — иначе каждый клиент каждые
+     * шесть секунд слал бы всем остальным одно и то же.
+     */
+    private fun announce(idleSec: Int) {
+        if (!SignalingClient.isConnected) return
+        val status = if (idleSec > Presence.ACTIVE_IDLE_SEC) 1 else 2
+        val now = System.currentTimeMillis()
+        if (status == broadcastStatus && now - broadcastAt < 30_000L) return
+        broadcastStatus = status
+        broadcastAt = now
+        // sessionId — статус, payload — реальный простой: из него получатель
+        // сразу строит «бездействует 5 мин», не дожидаясь ответа базы.
+        SignalingClient.send("presence", 0, status, idleSec.toString())
+    }
+
+    /** Выход из аккаунта — сразу сообщаем «не в сети», не дожидаясь таймаута. */
+    fun announceOffline() {
+        runCatching { SignalingClient.send("presence", 0, 0, "0") }
+        broadcastStatus = -1
+        broadcastAt = 0L
+    }
 
     fun start(app: Application) {
         if (job?.isActive == true) return
@@ -58,10 +116,20 @@ object PresenceReporter {
             override fun onActivityDestroyed(activity: Activity) {}
         })
 
+        // Чужие статусы применяем мгновенно, из одного места на всё
+        // приложение: экраны читают их из общей памяти.
+        SignalingClient.addListener { type, senderId, sessionId, payload ->
+            if (type == "presence") {
+                PresenceRepository.applyPush(senderId, sessionId, payload.toIntOrNull() ?: 0)
+            }
+        }
+
         job = CoroutineScope(Dispatchers.IO).launch {
             while (isActive) {
                 if (UserSession.effectiveId > 0) {
-                    runCatching { PresenceRepository.heartbeat(active = isForeground || inCall) }
+                    val idle = idleSeconds()
+                    announce(idle)
+                    runCatching { PresenceRepository.heartbeat(idle) }
                 }
                 delay(TICK_MS)
             }
@@ -70,6 +138,7 @@ object PresenceReporter {
 
     /** Выход из аккаунта: перестаём отмечаться, чтобы не «висеть в сети». */
     fun stop() {
+        announceOffline()
         job?.cancel()
         job = null
         inCall = false

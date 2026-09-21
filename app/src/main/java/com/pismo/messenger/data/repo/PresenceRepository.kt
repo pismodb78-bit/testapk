@@ -6,6 +6,8 @@ import com.pismo.messenger.data.db.bool
 import com.pismo.messenger.data.db.str
 import com.pismo.messenger.data.model.Presence
 import com.pismo.messenger.data.model.VoiceParticipant
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Онлайн-статусы пользователей и присутствие в голосовых каналах —
@@ -16,19 +18,30 @@ object PresenceRepository {
     /** Запись «жива», если heartbeat был не давнее 20 секунд (как на ПК). */
     private const val FRESH_SECONDS = 20
 
+    /** Сколько времени приход по сокету старше снимка из базы. */
+    private const val PUSH_WINS_MS = 10_000L
+
     @Volatile private var voiceTableOk = true
 
     // ── Присутствие пользователя ──────────────────────────────────────
 
     /**
-     * Heartbeat. [active] = пользователь реально что-то делает (иначе
-     * обновляем только last_seen, и статус уезжает в «не активен»).
+     * Heartbeat. [idleSec] — сколько секунд человек ничего не делает.
+     *
+     * Пишем НАСТОЯЩИЙ момент последней активности, а не «был ли активен
+     * только что». Раньше было last_active = IF(активен, NOW(), как было),
+     * и метка ещё какое-то время после ухода подтягивалась к текущему
+     * времени: порог «90 секунд без действий» срабатывал заметно позже
+     * девяноста секунд. GREATEST — чтобы метка не поехала назад.
      */
-    suspend fun heartbeat(active: Boolean) {
+    suspend fun heartbeat(idleSec: Int) {
         runCatching {
             Db.exec(
-                "UPDATE users SET last_seen=NOW(), last_active=IF(?=1, NOW(), last_active) WHERE id=?",
-                active, UserSession.effectiveId
+                "UPDATE users SET last_seen=NOW(), " +
+                        "last_active = GREATEST(COALESCE(last_active, '1970-01-02'), " +
+                        "                       NOW() - INTERVAL ? SECOND) " +
+                        "WHERE id=?",
+                maxOf(idleSec, 0), UserSession.effectiveId
             )
         }
     }
@@ -58,6 +71,36 @@ object PresenceRepository {
      */
     private val cache = HashMap<Int, Presence>()
 
+    /** Когда по сокету последний раз приходил статус этого человека. */
+    private val pushedAt = HashMap<Int, Long>()
+
+    /**
+     * Счётчик изменений. Экраны подписываются и перечитывают статусы из
+     * памяти, когда приходит событие по сокету, — без запроса к базе.
+     */
+    private val _updates = MutableStateFlow(0L)
+    val updates: StateFlow<Long> = _updates
+
+    /**
+     * Пришёл чужой статус по сокету — применяем немедленно.
+     *
+     * [status] 0 не в сети, 1 бездействует, 2 в сети; [idleSec] — реальный
+     * простой, из него строится «бездействует 5 мин» без ответа базы.
+     */
+    fun applyPush(userId: Int, status: Int, idleSec: Int) {
+        if (userId <= 0 || status !in 0..2) return
+        val p = when (status) {
+            0 -> Presence(userId, Presence.SEEN_OFFLINE_SEC + 1, Int.MAX_VALUE)
+            1 -> Presence(userId, 0, maxOf(idleSec, Presence.ACTIVE_IDLE_SEC + 1))
+            else -> Presence(userId, 0, 0)
+        }
+        synchronized(cache) {
+            cache[userId] = p
+            pushedAt[userId] = System.currentTimeMillis()
+        }
+        _updates.value = _updates.value + 1
+    }
+
     /** Мгновенное чтение из памяти, без обращения к базе. */
     fun cached(userId: Int): Presence? = synchronized(cache) { cache[userId] }
 
@@ -82,7 +125,22 @@ object PresenceRepository {
                     seenAgoSec = rs.getInt("seen_ago").let { if (rs.wasNull()) Int.MAX_VALUE else it },
                     activeAgoSec = rs.getInt("active_ago").let { if (rs.wasNull()) Int.MAX_VALUE else it },
                 )
-            }.toMap().also { fresh -> synchronized(cache) { cache.putAll(fresh) } }
+            }.toMap().let { fresh ->
+                // Запрос к базе ушёл раньше, чем пришёл ответ, и за это время
+                // человек успел отойти от телефона. Снимок из базы — уже
+                // устаревший — затирал только что полученный по сокету статус,
+                // и точка на несколько секунд возвращалась к прежнему цвету.
+                // Про себя клиент знает точнее любой строки в базе.
+                val now = System.currentTimeMillis()
+                synchronized(cache) {
+                    val merged = fresh.mapValues { (id, dbValue) ->
+                        val pushed = pushedAt[id] ?: 0L
+                        if (now - pushed < PUSH_WINS_MS) cache[id] ?: dbValue else dbValue
+                    }
+                    cache.putAll(merged)
+                    merged
+                }
+            }
         }.getOrElse {
             // Связь моргнула — отдаём последнее известное вместо пустоты,
             // иначе все точки разом гаснут на одном неудачном запросе.

@@ -72,6 +72,13 @@ fun UserProfileDialog(
         loading = false
     }
 
+    // Статус, пришедший по сокету, — сразу в открытом профиле.
+    LaunchedEffect(userId) {
+        PresenceRepository.updates.collect {
+            PresenceRepository.cached(userId)?.let { presence = it }
+        }
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,

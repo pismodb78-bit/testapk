@@ -39,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.pismo.messenger.core.PresenceReporter
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.db.Db
@@ -349,6 +350,10 @@ fun ProfileScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit) {
             onClick = {
                 scope.launch {
                     runCatching { PresenceRepository.markOffline() }
+                    // Сообщить «не в сети» надо ДО закрытия сокета — после
+                    // него отправлять уже некуда, и собеседники ждали бы
+                    // таймаута heartbeat, глядя на зелёную точку.
+                    PresenceReporter.announceOffline()
                     SignalingClient.disconnect()
                     Db.closeAll()
                     // Память чатов, статусов и профилей — чужой переписке

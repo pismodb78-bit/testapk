@@ -121,6 +121,20 @@ fun ServerMembersScreen(serverId: Int, onBack: () -> Unit) {
         }
     }
 
+    // Приход по сокету — перечитываем статусы из общей памяти, без запроса
+    // к базе. Иначе изменение, доставленное мгновенно, ждало бы на экране
+    // следующей шестисекундной сверки.
+    LaunchedEffect(presenceKey) {
+        PresenceRepository.updates.collect {
+            val ids = members.map { it.userId }
+            // Пустую карту не ставим: StateFlow отдаёт текущее значение сразу
+            // при подписке, и на пустой памяти это стёрло бы то, что опрос
+            // только что прочитал из базы.
+            PresenceRepository.cachedFor(ids)
+                .takeIf { it.isNotEmpty() }?.let { presence = it }
+        }
+    }
+
     Scaffold(
         containerColor = PismoColors.BgSidebar,
         topBar = {
