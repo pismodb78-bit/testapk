@@ -73,6 +73,30 @@ object Notifications {
         )
     }
 
+    /**
+     * Открывает системные настройки ИМЕННО канала «Фоновая работа».
+     *
+     * Зачем это нужно. Приложение не может скрыть своё уведомление о фоновой
+     * службе — Android не даёт такой возможности принципиально. Но человек
+     * может: если выключить канал в системных настройках, уведомление из
+     * шторки пропадает, а служба продолжает работать как работала. Это
+     * единственный способ получить и фоновую проверку, и чистую шторку
+     * одновременно, и сделать это может только владелец телефона.
+     *
+     * Кнопка ведёт прямо в нужный экран, чтобы не объяснять словами, где
+     * искать: приложение → уведомления → категория → выключатель.
+     */
+    fun channelSettingsIntent(context: Context): Intent =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                .putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, CHANNEL_SERVICE)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        else
+            Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(android.net.Uri.parse("package:" + context.packageName))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
     private fun openAppIntent(context: Context, extras: Bundle? = null): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -227,6 +251,10 @@ object Notifications {
                 .setAction(PollingActionReceiver.ACTION_DISABLE),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        val hide = PendingIntent.getActivity(
+            context, 1, channelSettingsIntent(context),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
         return NotificationCompat.Builder(context, CHANNEL_SERVICE)
             .setSmallIcon(R.mipmap.ic_launcher)
@@ -241,6 +269,10 @@ object Notifications {
                     else -> "Непрочитанных: $unread"
                 }
             )
+            // Две разные кнопки для двух разных желаний.
+            // «Скрыть» — фоновая проверка остаётся, уведомление уходит.
+            // «Отключить» — уходит и то и другое.
+            .addAction(0, "Скрыть", hide)
             .addAction(0, "Отключить", disable)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setSilent(true)
