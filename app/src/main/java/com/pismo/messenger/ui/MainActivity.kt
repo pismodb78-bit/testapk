@@ -70,6 +70,9 @@ class MainActivity : ComponentActivity() {
                         // запускал — отсюда и «уведомления не приходят
                         // вообще, тем более в свёрнутом состоянии».
                         PollingService.start(this@MainActivity)
+                        // Адрес для push. Без настроек Firebase молча ничего
+                        // не делает — см. PushTokens.
+                        com.pismo.messenger.service.PushTokens.register()
                     }
                 }
 
@@ -106,6 +109,7 @@ class MainActivity : ComponentActivity() {
                             onLoggedIn = {
                                 SignalingClient.connect(UserSession.effectiveId)
                                 PollingService.start(this@MainActivity)
+                                com.pismo.messenger.service.PushTokens.register()
                                 navController.navigate(Routes.CHATS) {
                                     popUpTo(Routes.LOGIN) { inclusive = true }
                                 }
@@ -160,6 +164,10 @@ class MainActivity : ComponentActivity() {
                             onSettings = { navController.navigate(Routes.SETTINGS) },
                             onLoggedOut = {
                                 PollingService.stop(this@MainActivity)
+                                // Снимаем свой адрес: иначе после смены
+                                // пользователя на этот телефон будут приходить
+                                // чужие сообщения.
+                                com.pismo.messenger.service.PushTokens.unregister()
                                 com.pismo.messenger.call.IncomingCallMonitor.reset()
                                 navController.navigate(Routes.LOGIN) {
                                     popUpTo(Routes.CHATS) { inclusive = true }

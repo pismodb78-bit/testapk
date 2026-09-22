@@ -122,6 +122,16 @@
             </intent-filter>
         </receiver>
 
+        <!-- Приём push. Работает только если рядом лежит google-services.json;
+             без него Firebase не поднимается и служба просто не вызывается. -->
+        <service
+            android:name=".service.PushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <!-- Кнопка «Отключить» на уведомлении фоновой проверки. -->
         <receiver
             android:name=".service.PollingActionReceiver"

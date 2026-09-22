@@ -1,8 +1,19 @@
+// Есть ли настройки Firebase. Файл приватный (в нём идентификаторы проекта
+// и ключ отправителя), в репозиторий он не коммитится, и на машине сборки
+// его нет. Поэтому push — не обязательная часть: без файла приложение
+// собирается и работает как раньше, на фоновой проверке.
+val firebaseConfig = file("google-services.json")
+val hasFirebase = firebaseConfig.exists()
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+// Плагин применяем условно, а не через блок plugins: он требует
+// google-services.json и падает без него ещё до начала сборки.
+if (hasFirebase) apply(plugin = "com.google.gms.google-services")
 
 android {
     namespace = "com.pismo.messenger"
@@ -12,6 +23,8 @@ android {
         applicationId = "com.pismo.messenger"
         minSdk = 24
         targetSdk = 35
+        // Чтобы код не гадал, а знал: собрано с настройками Firebase или без.
+        buildConfigField("boolean", "HAS_FIREBASE", hasFirebase.toString())
         // versionCode ОБЯЗАН расти с каждой сборкой: Android ставит поверх
         // старой только версию с бо́льшим номером, и на равном откажет молча.
         // versionName — то, что видит человек.
@@ -98,6 +111,13 @@ android {
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
     implementation(composeBom)
+
+    // Push-уведомления. Библиотеку подключаем ВСЕГДА — иначе код, который
+    // её использует, просто не скомпилируется, — а вот настройки проекта
+    // могут отсутствовать. Без них Firebase не поднимается, наш код это
+    // видит и молча остаётся на фоновой проверке. См. PushTokens.
+    implementation(platform("com.google.firebase:firebase-bom:33.5.1"))
+    implementation("com.google.firebase:firebase-messaging")
 
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")

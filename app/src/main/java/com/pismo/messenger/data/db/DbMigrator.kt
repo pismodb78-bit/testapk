@@ -254,6 +254,23 @@ object DbMigrator {
                 addUniqueIndex(c, "call_participants", "uq_call_participant", "(call_id, user_id)")
             }
         },
+
+        Migration(22, "device_tokens: адреса устройств для push") { c ->
+            // Ключ — сам токен, а НЕ пользователь. На одном телефоне могут по
+            // очереди войти двое: строка обязана переехать к новому, а не
+            // размножиться, иначе на этот телефон посыплются чужие сообщения.
+            exec(
+                c,
+                "CREATE TABLE IF NOT EXISTS device_tokens (" +
+                    "token VARCHAR(255) NOT NULL, " +
+                    "user_id INT NOT NULL, " +
+                    "platform VARCHAR(16) NOT NULL DEFAULT 'android', " +
+                    "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP " +
+                    "ON UPDATE CURRENT_TIMESTAMP, " +
+                    "PRIMARY KEY (token), KEY idx_dt_user (user_id)" +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+            )
+        },
     )
 
     /**
