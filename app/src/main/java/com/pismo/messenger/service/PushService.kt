@@ -4,6 +4,7 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.PushLog
+import com.pismo.messenger.data.repo.CallRepository
 import com.pismo.messenger.core.UserSession
 
 /**
@@ -71,6 +72,27 @@ class PushService : FirebaseMessagingService() {
                 }
                 Notifications.showGroupMessage(this, gid, name, "Новое сообщение")
                 PushLog.add("  показано: группа $gid")
+            }
+            "call" -> {
+                // Звонок. Раньше о нём в закрытом приложении узнавала только
+                // фоновая служба — та самая, ради уведомления которой всё и
+                // затевалось. Карточку берём из базы: push несёт номер, а не
+                // содержимое.
+                val callId = data["call"]?.toIntOrNull() ?: 0
+                if (callId <= 0) {
+                    PushLog.add("  пропущено: в push нет номера звонка")
+                    return
+                }
+                val call = runCatching {
+                    kotlinx.coroutines.runBlocking { CallRepository.incomingCall(callId) }
+                }.getOrNull()
+                if (call == null) {
+                    // Успели ответить или сбросить, пока push шёл.
+                    PushLog.add("  пропущено: звонок $callId уже не звонит")
+                    return
+                }
+                CallNotifier.showIncoming(this, call)
+                PushLog.add("  показано: звонок $callId от ${call.callerName}")
             }
             "channel" -> {
                 val cid = data["channel"]?.toIntOrNull() ?: 0

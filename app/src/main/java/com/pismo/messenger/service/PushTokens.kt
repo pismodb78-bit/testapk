@@ -3,6 +3,7 @@ package com.pismo.messenger.service
 import android.util.Log
 import com.google.firebase.messaging.FirebaseMessaging
 import com.pismo.messenger.BuildConfig
+import com.pismo.messenger.PismoApp
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.PushLog
 import com.pismo.messenger.core.UserSession
@@ -89,11 +90,29 @@ object PushTokens {
                     token, me
                 )
                 PushLog.add("адрес записан за пользователем $me")
+                takeOverFromPolling()
             }.onFailure {
                 Log.w(TAG, "не записали токен: ${it.message}")
                 PushLog.add("адрес НЕ записан в базу: ${it.message}")
             }
         }
+    }
+
+    /**
+     * Push заработал — фоновая проверка больше не нужна, и вместе с ней
+     * уходит постоянное уведомление в шторке.
+     *
+     * Ровно один раз, при первой удачной записи адреса. Дальше выключателем
+     * распоряжается человек: если он вернёт фоновую проверку, мы её больше
+     * не тронем.
+     */
+    private fun takeOverFromPolling() {
+        if (Prefs.pushTookOver) return
+        Prefs.pushTookOver = true
+        if (!Prefs.backgroundPolling) return
+        Prefs.backgroundPolling = false
+        runCatching { PollingService.stop(PismoApp.appContext) }
+        PushLog.add("фоновая проверка выключена: сообщения и звонки теперь приносит push")
     }
 
     /**

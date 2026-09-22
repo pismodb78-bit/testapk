@@ -339,29 +339,43 @@ fun SettingsScreen(onBack: () -> Unit) {
             SwitchRow("Фронтальная камера по умолчанию", frontCamera) { frontCamera = it }
             SwitchRow("Фоновая проверка сообщений", bgPolling) { bgPolling = it }
 
-            // Самый частый вопрос про это уведомление — «как его убрать». Ответ
-            // неочевидный и не в нашей власти, поэтому он тут, рядом с
-            // переключателем, а не в голове у того, кто это писал.
-            Text(
-                "Пока фоновая проверка включена, Android показывает постоянное " +
-                        "уведомление «PISMO» — так он сообщает, что программа работает " +
-                        "за спиной. Скрыть его приложению не разрешено, а вам — можно: " +
-                        "выключите категорию «Фоновая работа», и уведомление уйдёт, а " +
-                        "проверка останется.",
-                color = PismoColors.TextMuted, fontSize = 12.sp,
-            )
-            Spacer(Modifier.height(6.dp))
-            Button(
-                onClick = {
-                    runCatching {
-                        ctx.startActivity(
-                            com.pismo.messenger.service.Notifications.channelSettingsIntent(ctx)
-                        )
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = PismoColors.BgElevated),
-                shape = RoundedCornerShape(8.dp),
-            ) { Text("Скрыть уведомление фоновой работы", color = PismoColors.TextPrimary) }
+            // Текст зависит от того, работает ли push. Пока он работает,
+            // фоновая проверка не нужна вовсе — и вместе с ней уходит
+            // постоянное уведомление, про которое спрашивают чаще всего.
+            if (Prefs.pushUserId > 0) {
+                Text(
+                    "Уведомления приносит система: сообщения, звонки и каналы " +
+                            "доходят, даже когда приложение закрыто, и постоянного " +
+                            "уведомления в шторке нет. Фоновая проверка для этого " +
+                            "больше не нужна — включайте её, только если " +
+                            "уведомления перестали приходить.",
+                    color = PismoColors.TextMuted, fontSize = 12.sp,
+                )
+            } else {
+                // Самый частый вопрос про это уведомление — «как его убрать».
+                // Ответ неочевидный и не в нашей власти, поэтому он тут, рядом
+                // с переключателем, а не в голове у того, кто это писал.
+                Text(
+                    "Пока фоновая проверка включена, Android показывает постоянное " +
+                            "уведомление «PISMO» — так он сообщает, что программа работает " +
+                            "за спиной. Скрыть его приложению не разрешено, а вам — можно: " +
+                            "выключите категорию «Фоновая работа», и уведомление уйдёт, а " +
+                            "проверка останется.",
+                    color = PismoColors.TextMuted, fontSize = 12.sp,
+                )
+                Spacer(Modifier.height(6.dp))
+                Button(
+                    onClick = {
+                        runCatching {
+                            ctx.startActivity(
+                                com.pismo.messenger.service.Notifications.channelSettingsIntent(ctx)
+                            )
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = PismoColors.BgElevated),
+                    shape = RoundedCornerShape(8.dp),
+                ) { Text("Скрыть уведомление фоновой работы", color = PismoColors.TextPrimary) }
+            }
 
             // Карточки ссылок стоят похода на сам сайт — об этом честнее
             // сказать прямо здесь, а не прятать в согласии при установке.

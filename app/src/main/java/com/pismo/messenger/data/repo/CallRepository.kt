@@ -93,6 +93,40 @@ object CallRepository {
         }.getOrDefault(emptyList())
     }
 
+    /**
+     * Одна карточка звонка по номеру — для push.
+     *
+     * Отдельно от incomingCalls() потому, что тот опирается на текущего
+     * пользователя в памяти, а push приходит в выгруженное приложение, где
+     * памяти нет: система подняла процесс заново, входа в аккаунт не было.
+     * Здесь ничего своего не спрашиваем — номер звонка пришёл в самом push,
+     * и его достаточно.
+     */
+    suspend fun incomingCall(sessionId: Int): CallSessionRow? {
+        if (sessionId <= 0) return null
+        val sql = """
+            SELECT cs.id, cs.caller_id, cs.has_video, cs.group_id, cs.callee_id,
+                   TRIM(CONCAT(u.Name,' ',u.Surname)) AS caller_name, u.login
+            FROM call_sessions cs
+            JOIN users u ON u.id = cs.caller_id
+            WHERE cs.id = ? AND cs.status = 'ringing'
+        """.trimIndent()
+
+        return runCatching {
+            Db.query(sql, sessionId) { rs ->
+                CallSessionRow(
+                    id = rs.getInt("id"),
+                    callerId = rs.getInt("caller_id"),
+                    callerName = rs.str("caller_name").trim().ifBlank { rs.str("login") },
+                    calleeId = rs.getInt("callee_id").takeIf { !rs.wasNull() },
+                    groupId = rs.getInt("group_id").takeIf { !rs.wasNull() },
+                    status = "ringing",
+                    hasVideo = rs.bool("has_video"),
+                )
+            }.firstOrNull()
+        }.getOrNull()
+    }
+
     suspend fun status(sessionId: Int): String =
         Db.scalarString("SELECT status FROM call_sessions WHERE id=?", sessionId).orEmpty()
 
