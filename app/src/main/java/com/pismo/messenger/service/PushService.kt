@@ -40,7 +40,10 @@ class PushService : FirebaseMessagingService() {
 
         val data = message.data
         val kind = data["kind"] ?: "message"
-        val fromId = data["from"]?.toIntOrNull() ?: 0
+        // Поле зовётся sender, а НЕ from: "from" зарезервировано в FCM
+        // наряду с message_type, notification и всем на google/gcm — Google
+        // отвергает такое сообщение целиком, с messaging/invalid-argument.
+        val fromId = data["sender"]?.toIntOrNull() ?: 0
         val name = data["name"].orEmpty().ifBlank { "Новое сообщение" }
 
         when (kind) {
