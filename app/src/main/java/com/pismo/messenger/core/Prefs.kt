@@ -164,18 +164,36 @@ object Prefs {
      * хочу слышать» — дело этого устройства. Ключ включает id аккаунта,
      * чтобы настройки разных пользователей на одном телефоне не смешивались.
      */
-    private fun ignoreKey() = "ignored_users_${UserSession.effectiveId}"
+    private fun ignoreKey(ownerId: Int = UserSession.effectiveId) = "ignored_users_$ownerId"
 
     fun isUserIgnored(userId: Int): Boolean {
         if (userId <= 0) return false
         return ignoredUsers().contains(userId)
     }
 
-    fun ignoredUsers(): Set<Int> =
-        sp.getString(ignoreKey(), "").orEmpty()
+    /**
+     * Список заглушённых. Владельца можно назвать явно — это нужно приёму
+     * push: система будит выгруженное приложение в НОВОМ процессе, где
+     * UserSession пуст, и ключ без явного id указал бы на несуществующий
+     * аккаунт 0, то есть заглушённые снова начали бы шуметь.
+     */
+    fun ignoredUsers(ownerId: Int = UserSession.effectiveId): Set<Int> =
+        sp.getString(ignoreKey(ownerId), "").orEmpty()
             .split(',')
             .mapNotNull { it.trim().toIntOrNull() }
             .toSet()
+
+    /**
+     * Чей адрес для push записан с этого телефона.
+     *
+     * UserSession живёт только в памяти и при выгрузке приложения пропадает
+     * вместе с процессом, а push приходит именно тогда. Здесь id переживает
+     * перезапуск — иначе приём push молча отбрасывал бы всё, ради чего он и
+     * заводился.
+     */
+    var pushUserId: Int
+        get() = sp.getInt("push_user_id", 0)
+        set(v) = sp.edit().putInt("push_user_id", v).apply()
 
     /**
      * От кого не принимаем ЗВОНКИ. В отличие от игнора, сообщения и уведомления

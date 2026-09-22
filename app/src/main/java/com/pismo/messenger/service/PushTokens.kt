@@ -3,6 +3,7 @@ package com.pismo.messenger.service
 import android.util.Log
 import com.google.firebase.messaging.FirebaseMessaging
 import com.pismo.messenger.BuildConfig
+import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.db.Db
 import kotlinx.coroutines.CoroutineScope
@@ -64,6 +65,9 @@ object PushTokens {
         val me = UserSession.effectiveId
         if (me <= 0) return
         lastToken = token
+        // Пережившая перезапуск процесса пометка «адрес записан за этим».
+        // Читает её приём push: там UserSession уже пуст.
+        runCatching { Prefs.pushUserId = me }
         CoroutineScope(Dispatchers.IO).launch {
             runCatching {
                 // REPLACE, а не INSERT: если этот телефон раньше принадлежал
@@ -85,6 +89,7 @@ object PushTokens {
     fun unregister() {
         val token = lastToken ?: return
         lastToken = null
+        runCatching { Prefs.pushUserId = 0 }
         CoroutineScope(Dispatchers.IO).launch {
             runCatching { Db.exec("DELETE FROM device_tokens WHERE token=?", token) }
         }

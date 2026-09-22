@@ -28,7 +28,15 @@ class PushService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         if (!Prefs.notificationsEnabled) return
-        if (UserSession.effectiveId <= 0) return
+
+        // Кто мы — из памяти, а если её нет, из настроек.
+        //
+        // Ради выгруженного приложения push и заводился, но именно тогда
+        // система поднимает НОВЫЙ процесс: onCreate приложения отработал,
+        // а входа в аккаунт не было, и UserSession пуст. Проверка на него
+        // отбрасывала ровно тот случай, ради которого всё делалось.
+        val me = UserSession.effectiveId.takeIf { it > 0 } ?: Prefs.pushUserId
+        if (me <= 0) return
 
         val data = message.data
         val kind = data["kind"] ?: "message"
@@ -48,7 +56,7 @@ class PushService : FirebaseMessagingService() {
                 if (fromId <= 0) return
                 // Заглушённых не беспокоим и здесь: список местный, сервер о
                 // нём не знает и знать не должен.
-                if (fromId in Prefs.ignoredUsers()) return
+                if (fromId in Prefs.ignoredUsers(me)) return
                 Notifications.showMessage(this, fromId, name, "Новое сообщение")
             }
         }
