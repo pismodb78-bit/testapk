@@ -68,6 +68,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -91,6 +92,7 @@ import com.pismo.messenger.call.IncomingCallMonitor
 import com.pismo.messenger.call.LiveKitToken
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
+import com.pismo.messenger.core.formatDuration
 import com.pismo.messenger.data.repo.CallRepository
 import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.components.LetterAvatar
@@ -99,6 +101,7 @@ import com.pismo.messenger.ui.theme.PismoColors
 import com.pismo.messenger.ui.theme.PismoTheme
 import io.livekit.android.renderer.TextureViewRenderer
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -437,6 +440,18 @@ private fun CallScreen(
     val state by engine.state.collectAsState()
     val error by engine.error.collectAsState()
 
+    // Сколько идёт разговор. Отсчёт живёт в ActiveCall, а не здесь: окно
+    // звонка можно закрыть и открыть заново, разговор при этом продолжается,
+    // и таймер обязан продолжаться вместе с ним, а не начинаться заново.
+    val callInfo by ActiveCall.current.collectAsState()
+    var elapsed by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(callInfo?.startedAtMs) {
+        while (isActive) {
+            elapsed = callInfo?.elapsedSeconds ?: 0L
+            delay(1000)
+        }
+    }
+
     var showShareOptions by remember { mutableStateOf(false) }
     var denoise by remember { mutableStateOf(Prefs.noiseSuppression) }
     var shareAudio by remember { mutableStateOf(Prefs.shareScreenAudio) }
@@ -542,9 +557,22 @@ private fun CallScreen(
         Text(
             when (state) {
                 CallEngine.State.CONNECTING -> "Подключение…"
-                CallEngine.State.CONNECTED ->
-                    if (participants.size <= 1) "Ожидание собеседника…"
-                    else "В звонке: ${participants.size}"
+                CallEngine.State.CONNECTED -> {
+                    // «Ожидание собеседника» уместно ровно в одном случае:
+                    // личный звонок, на который ещё не ответили. В голосовом
+                    // канале ждать некого — туда заходят и сидят, часто
+                    // первым; там нужен секундомер, как в доке и как на ПК
+                    // (там трёхминутное ожидание тоже только для личных
+                    // звонков, см. CallForm.Designer.cs, условие _groupId < 0).
+                    // Групповой звонок — то же самое.
+                    val personal = callInfo?.isVoiceChannel != true &&
+                            (callInfo?.groupId ?: -1) < 0
+                    when {
+                        personal && participants.size <= 1 -> "Ожидание собеседника…"
+                        participants.size <= 1 -> formatDuration(elapsed)
+                        else -> "В звонке: ${participants.size} · ${formatDuration(elapsed)}"
+                    }
+                }
                 CallEngine.State.FAILED -> error ?: "Ошибка подключения"
                 CallEngine.State.DISCONNECTED -> "Звонок завершён"
                 else -> ""
