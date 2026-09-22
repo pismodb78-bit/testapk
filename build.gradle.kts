@@ -5,25 +5,22 @@
 // применяют. В корневом `plugins { … apply false }` Gradle разрешал бы каждый
 // при настройке сборки, независимо от того, нужен он кому-нибудь или нет.
 
-buildscript {
-    // Плагин Firebase — здесь, а не в pluginManagement.
+plugins {
+    // Единственное исключение из правила выше — плагин Firebase, и вот почему.
     //
-    // Он применяется условно (`apply(plugin = …)` в app/build.gradle.kts),
-    // потому что без google-services.json роняет сборку. А условное
-    // применение через apply() берёт плагин С CLASSPATH сборочного скрипта:
-    // версия, объявленная в pluginManagement, для него не действует — она
-    // работает только для блока `plugins {}`. Без этих строк сборка с
-    // настройками Firebase падала бы на «Plugin with id … not found».
+    // Применяется он условно, через apply() в app/build.gradle.kts: без
+    // google-services.json он роняет сборку, а файл этот приватный. Но
+    // объявить его можно ТОЛЬКО здесь.
     //
-    // Само объявление тоже условное: у кого файла нет, тот и плагин не
-    // качает.
-    if (file("app/google-services.json").exists()) {
-        repositories {
-            google()
-            mavenCentral()
-        }
-        dependencies {
-            classpath("com.google.gms:google-services:4.4.2")
-        }
-    }
+    // Через buildscript не выходит: там он попадает в отдельный загрузчик
+    // классов и не видит Android-плагин, который приезжает блоком plugins.
+    // Сборка падает на «Could not generate a decorated class for type
+    // GoogleServicesPlugin > com/android/build/api/variant/Variant» — то
+    // есть плагин Firebase не нашёл классов AGP. Объявление здесь кладёт оба
+    // в одну область, и apply() в модуле находит нужный.
+    //
+    // Цена: сам артефакт плагина скачивается даже там, где Firebase не
+    // настроен. Он маленький и лежит на том же Google Maven, без которого
+    // Android-сборки всё равно не бывает.
+    id("com.google.gms.google-services") version "4.4.2" apply false
 }
