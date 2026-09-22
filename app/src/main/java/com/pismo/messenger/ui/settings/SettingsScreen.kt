@@ -52,6 +52,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pismo.messenger.core.CrashLog
+import com.pismo.messenger.core.PushLog
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.Updater
 import com.pismo.messenger.data.ChatDiskCache
@@ -734,6 +735,33 @@ fun SettingsScreen(onBack: () -> Unit) {
                     }
                     TextButton(onClick = { CrashLog.clear(); crash = null }) {
                         Text("Убрать", color = PismoColors.TextMuted)
+                    }
+                }
+            }
+
+            // Журнал push. На сервере каждое решение видно в логе, а на
+            // телефоне push приходит в выгруженное приложение, и всё, что
+            // происходит дальше, не видно никак: уведомления либо нет, либо
+            // нет. Отличить «не дошло» от «дошло и молча отброшено» было
+            // нечем — а причин для второго хватает, и все они тихие.
+            var pushLog by remember { mutableStateOf(PushLog.last()) }
+            if (pushLog != null) {
+                Spacer(Modifier.height(20.dp))
+                Section("Журнал уведомлений")
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 220.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Text(pushLog!!, color = PismoColors.TextSecondary, fontSize = 12.sp)
+                }
+                Row(Modifier.fillMaxWidth()) {
+                    TextButton(onClick = { pushLog = PushLog.last() }) {
+                        Text("Обновить", color = PismoColors.Blurple)
+                    }
+                    TextButton(onClick = { PushLog.clear(); pushLog = null }) {
+                        Text("Очистить", color = PismoColors.TextMuted)
                     }
                 }
             }

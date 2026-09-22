@@ -3,6 +3,7 @@ package com.pismo.messenger.service
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.pismo.messenger.core.Prefs
+import com.pismo.messenger.core.PushLog
 import com.pismo.messenger.core.UserSession
 
 /**
@@ -27,17 +28,6 @@ class PushService : FirebaseMessagingService() {
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
-        if (!Prefs.notificationsEnabled) return
-
-        // Кто мы — из памяти, а если её нет, из настроек.
-        //
-        // Ради выгруженного приложения push и заводился, но именно тогда
-        // система поднимает НОВЫЙ процесс: onCreate приложения отработал,
-        // а входа в аккаунт не было, и UserSession пуст. Проверка на него
-        // отбрасывала ровно тот случай, ради которого всё делалось.
-        val me = UserSession.effectiveId.takeIf { it > 0 } ?: Prefs.pushUserId
-        if (me <= 0) return
-
         val data = message.data
         val kind = data["kind"] ?: "message"
         // Поле зовётся sender, а НЕ from: "from" зарезервировано в FCM
@@ -46,21 +36,64 @@ class PushService : FirebaseMessagingService() {
         val fromId = data["sender"]?.toIntOrNull() ?: 0
         val name = data["name"].orEmpty().ifBlank { "Новое сообщение" }
 
+        // Каждое решение — в журнал. Push приходит в выгруженное приложение,
+        // и без записи «дошло и молча отброшено» ничем не отличается от «не
+        // дошло вовсе»; причин для первого хватает, и все они тихие.
+        PushLog.add("пришло: вид=$kind, от=$fromId")
+
+        if (!Prefs.notificationsEnabled) {
+            PushLog.add("  пропущено: уведомления выключены в настройках")
+            return
+        }
+        if (!Notifications.allowed(this)) {
+            PushLog.add("  пропущено: Android не разрешил уведомления")
+            return
+        }
+
+        // Кто мы — из памяти, а если её нет, из настроек.
+        //
+        // Ради выгруженного приложения push и заводился, но именно тогда
+        // система поднимает НОВЫЙ процесс: onCreate приложения отработал,
+        // а входа в аккаунт не было, и UserSession пуст. Проверка на него
+        // отбрасывала ровно тот случай, ради которого всё делалось.
+        //
+        // Пустой id больше не повод молчать: он нужен только чтобы найти
+        // список заглушённых. Не нашли — лучше показать лишнее, чем
+        // проглотить сообщение.
+        val me = UserSession.effectiveId.takeIf { it > 0 } ?: Prefs.pushUserId
+
         when (kind) {
             "group" -> {
-                val gid = data["group"]?.toIntOrNull() ?: return
+                val gid = data["group"]?.toIntOrNull() ?: 0
+                if (gid <= 0) {
+                    PushLog.add("  пропущено: в push нет номера группы")
+                    return
+                }
                 Notifications.showGroupMessage(this, gid, name, "Новое сообщение")
+                PushLog.add("  показано: группа $gid")
             }
             "channel" -> {
-                val cid = data["channel"]?.toIntOrNull() ?: return
+                val cid = data["channel"]?.toIntOrNull() ?: 0
+                if (cid <= 0) {
+                    PushLog.add("  пропущено: в push нет номера канала")
+                    return
+                }
                 Notifications.showChannelMessage(this, cid, name, mentions = 0)
+                PushLog.add("  показано: канал $cid")
             }
             else -> {
-                if (fromId <= 0) return
+                if (fromId <= 0) {
+                    PushLog.add("  пропущено: в push нет отправителя")
+                    return
+                }
                 // Заглушённых не беспокоим и здесь: список местный, сервер о
                 // нём не знает и знать не должен.
-                if (fromId in Prefs.ignoredUsers(me)) return
+                if (me > 0 && fromId in Prefs.ignoredUsers(me)) {
+                    PushLog.add("  пропущено: отправитель заглушён")
+                    return
+                }
                 Notifications.showMessage(this, fromId, name, "Новое сообщение")
+                PushLog.add("  показано: сообщение от $fromId")
             }
         }
     }

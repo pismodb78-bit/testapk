@@ -299,6 +299,13 @@ object Notifications {
             .setContentIntent(openAppIntent(context))
             .build()
 
+    /**
+     * Разрешил ли Android показывать уведомления. Наружу — чтобы приёмник
+     * push мог записать причину отказа, а не молчать: без этого «дошло, но
+     * не показано» ничем не отличается от «не дошло».
+     */
+    fun allowed(context: Context): Boolean = hasPermission(context)
+
     private fun hasPermission(context: Context): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
         return androidx.core.content.ContextCompat.checkSelfPermission(

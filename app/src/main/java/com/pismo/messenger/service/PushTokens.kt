@@ -4,6 +4,7 @@ import android.util.Log
 import com.google.firebase.messaging.FirebaseMessaging
 import com.pismo.messenger.BuildConfig
 import com.pismo.messenger.core.Prefs
+import com.pismo.messenger.core.PushLog
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.db.Db
 import kotlinx.coroutines.CoroutineScope
@@ -44,12 +45,21 @@ object PushTokens {
      * пользователем. Вызывать после входа.
      */
     fun register() {
-        if (!configured) return
-        if (UserSession.effectiveId <= 0) return
+        if (!configured) {
+            PushLog.add("адрес не запрошен: сборка без настроек Firebase")
+            return
+        }
+        if (UserSession.effectiveId <= 0) {
+            PushLog.add("адрес не запрошен: вход в аккаунт не выполнен")
+            return
+        }
         runCatching {
             FirebaseMessaging.getInstance().token
                 .addOnSuccessListener { token -> save(token) }
-                .addOnFailureListener { e -> Log.w(TAG, "токен не выдан: ${e.message}") }
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "токен не выдан: ${e.message}")
+                    PushLog.add("адрес не выдан: ${e.message}")
+                }
         }.onFailure {
             // Firebase не поднялся (нет настроек) — это не ошибка, а
             // ожидаемое состояние сборки без google-services.json.
@@ -78,7 +88,11 @@ object PushTokens {
                     "REPLACE INTO device_tokens (token, user_id, platform) VALUES (?, ?, 'android')",
                     token, me
                 )
-            }.onFailure { Log.w(TAG, "не записали токен: ${it.message}") }
+                PushLog.add("адрес записан за пользователем $me")
+            }.onFailure {
+                Log.w(TAG, "не записали токен: ${it.message}")
+                PushLog.add("адрес НЕ записан в базу: ${it.message}")
+            }
         }
     }
 

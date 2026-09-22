@@ -7,6 +7,7 @@ import com.pismo.messenger.core.CrashLog
 import com.pismo.messenger.core.EmojiCatalog
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.PresenceReporter
+import com.pismo.messenger.core.PushLog
 import com.pismo.messenger.data.ChatDiskCache
 import com.pismo.messenger.data.ChatListMemory
 import com.pismo.messenger.data.MediaCache
@@ -23,6 +24,7 @@ class PismoApp : Application() {
         // будет некому, а именно оно и оставляет человека с пустым экраном.
         CrashLog.install(this)
         Prefs.init(this)
+        PushLog.init(this)
         MediaCache.init(this)
         com.pismo.messenger.data.LinkPreviews.init(this)
         // Кеш переписок и раскладки серверов теперь переживает закрытие
