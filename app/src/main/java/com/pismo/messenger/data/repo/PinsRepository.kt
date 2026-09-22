@@ -59,32 +59,43 @@ object PinsRepository {
      * закреплённых, — и каждое пришлось бы помнить об этом отдельно. Здесь
      * место одно, и забыть негде.
      *
-     * Широковещательно, как new_message: получателю всё равно перечитывать
-     * закрепы своего открытого чата, кто бы их ни тронул.
+     * Широковещательно, как new_message: закреп сообщения виден обеим
+     * сторонам переписки, и перечитать его должен каждый, у кого этот чат
+     * открыт. (В отличие от закреплённых ЧАТОВ — те личные, и событие о них
+     * уходит только своим же устройствам.)
      */
     private fun announce(messageId: Int) {
         runCatching { SignalingClient.send("pin", 0, messageId, "") }
     }
 
     /**
-     * Отпечаток закрепов — чтобы опрос замечал правку, до которой событие не
-     * дошло.
+     * Отпечаток закрепов ОТКРЫТОГО чата — чтобы опрос замечал правку, до
+     * которой событие не дошло (клиент мог быть не на связи в этот момент).
      *
-     * Дойти оно может не всегда: ws-сервер держит по ОДНОМУ соединению на
-     * пользователя, и свой же второй вход (телефон рядом с компьютером) событий
-     * не получает вовсе. А это и есть самый частый случай: открепил там — хочу
-     * видеть здесь.
+     * Считается по одному чату, а не по всей таблице. Общий отпечаток менялся
+     * от любого закрепа любого человека в любой переписке, и каждый, у кого
+     * открыт хоть какой-то чат, получал полную перезагрузку — из-за события,
+     * которое его не касается.
      *
-     * Закрепов единицы, так что пересчёт по таблице дёшев.
+     * CAST обязателен: SUM() от целой колонки MySQL возвращает DECIMAL. JDBC
+     * его к long приводит сам, но на ПК тот же запрос читался строго и падал —
+     * пусть тип будет одинаковым и однозначным на обеих сторонах.
      */
-    suspend fun fingerprint(): String = runCatching {
-        // CAST обязателен: SUM() от целой колонки MySQL возвращает DECIMAL.
-        // JDBC его к long приводит сам, но на ПК тот же запрос читался строго
-        // и падал — пусть тип будет одинаковым и однозначным на обеих сторонах.
-        Db.queryFirst(
-            "SELECT COUNT(*) AS n, CAST(COALESCE(SUM(message_id),0) AS SIGNED) AS s " +
-                "FROM pinned_messages"
-        ) { rs ->
+    suspend fun fingerprint(scope: Scope, chatId: Int): String = runCatching {
+        val head = "SELECT COUNT(*) AS n, CAST(COALESCE(SUM(p.message_id),0) AS SIGNED) AS s " +
+                "FROM pinned_messages p JOIN ${scope.table} t ON t.id = p.message_id WHERE p.scope=? AND "
+        // Чем чат опознаётся в своей таблице: у группы и канала это одна
+        // колонка, у переписки — пара отправитель/получатель в обе стороны.
+        val sql = when (scope) {
+            Scope.GROUP -> head + "t.group_id=?"
+            Scope.SERVER -> head + "t.channel_id=?"
+            Scope.DM -> head + "((t.sender_id=? AND t.receiver_id=?) OR (t.sender_id=? AND t.receiver_id=?))"
+        }
+        val args: Array<Any> = when (scope) {
+            Scope.DM -> arrayOf(scope.db, UserSession.effectiveId, chatId, chatId, UserSession.effectiveId)
+            else -> arrayOf(scope.db, chatId)
+        }
+        Db.queryFirst(sql, *args) { rs ->
             rs.getLong("n").toString() + ":" + rs.getLong("s")
         } ?: ""
     }.getOrDefault("")

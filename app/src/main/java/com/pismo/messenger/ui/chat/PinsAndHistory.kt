@@ -107,7 +107,9 @@ fun PinnedMessagesDialog(
         var last: String? = null
         while (true) {
             delay(2_500)
-            val now = runCatching { PinsRepository.fingerprint() }.getOrDefault("")
+            val now = runCatching {
+                PinsRepository.fingerprint(scopeKind, targetId)
+            }.getOrDefault("")
             if (now.isEmpty()) continue
             if (last != null && now != last) reload()
             last = now

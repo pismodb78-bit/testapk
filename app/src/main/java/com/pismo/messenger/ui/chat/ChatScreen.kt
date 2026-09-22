@@ -627,11 +627,13 @@ fun ChatScreen(
                 else ChatRepository.directMessageCount(targetId)
 
                 // Закрепы. Теперь они видны прямо на пузыре, так что сверять
-                // их стало зачем. Событие по ws до своего же второго входа не
-                // доходит — сервер держит одно соединение на пользователя, —
-                // а «открепил на компьютере, смотрю на телефоне» это именно
-                // тот случай, поэтому отпечаток сверяем и опросом.
-                val pins = runCatching { PinsRepository.fingerprint() }.getOrDefault("")
+                // их стало зачем. Событие по ws может и не дойти — клиент мог
+                // быть не на связи в этот момент, — поэтому отпечаток сверяем
+                // и опросом. Только по ОТКРЫТОМУ чату: общий по всей таблице
+                // срабатывал на чужие закрепы в чужих переписках.
+                val pins = runCatching {
+                    PinsRepository.fingerprint(scopeKind, targetId)
+                }.getOrDefault("")
                 val pinsChanged = lastPins != null && pins.isNotEmpty() && pins != lastPins
                 if (pins.isNotEmpty()) lastPins = pins
 
