@@ -49,3 +49,63 @@ jobs:
           name: pismo-debug-apk
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+  # Отдельная проверка сборки С настройками Firebase.
+  #
+  # Зачем она нужна. Плагин Firebase применяется только когда рядом лежит
+  # google-services.json, а в репозитории его нет — значит, обычная сборка
+  # этот путь не проходит ВООБЩЕ и сломаться он может незаметно. Ровно так
+  # и вышло: условное apply() брало плагин с classpath, которого никто не
+  # наполнял, и сборка с настоящим ключом упала бы на «Plugin not found».
+  #
+  # Ключ тут ненастоящий и нарочно: плагину нужна структура файла и
+  # совпадение имени пакета, а не действующий проект. Отправлять push с
+  # такой сборки нельзя — она только доказывает, что путь собирается.
+  firebase-path:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - run: chmod +x ./gradlew
+
+      - name: Подставить ненастоящие настройки Firebase
+        run: |
+          cat > app/google-services.json <<'JSON'
+          {
+            "project_info": {
+              "project_number": "000000000000",
+              "project_id": "pismo-ci-check",
+              "storage_bucket": "pismo-ci-check.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+                  "android_client_info": { "package_name": "com.pismo.messenger" }
+                },
+                "oauth_client": [],
+                "api_key": [ { "current_key": "AIzaSyCI00000000000000000000000000000000" } ],
+                "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          JSON
+
+      - name: Собрать debug с Firebase
+        run: |
+          set -o pipefail
+          ./gradlew assembleDebug --no-daemon 2>&1 | tee firebase.log
+
+      - name: Ошибки компиляции
+        if: failure()
+        run: |
+          echo "──────── сборка с Firebase ────────"
+          grep -E "^e: |FAILURE|What went wrong" -A 5 firebase.log | head -60

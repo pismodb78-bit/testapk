@@ -25,12 +25,11 @@ pluginManagement {
         id("com.android.application") version "8.7.3"
         id("org.jetbrains.kotlin.android") version "2.0.21"
         id("org.jetbrains.kotlin.plugin.compose") version "2.0.21"
-        // Плагин Firebase. Применяется ТОЛЬКО когда рядом лежит
-        // google-services.json — см. app/build.gradle.kts. Без файла он
-        // роняет сборку с «File google-services.json is missing», а файл
-        // этот приватный и в репозитории его нет и не будет.
-        id("com.google.gms.google-services") version "4.4.2"
     }
+    // Плагина Firebase здесь нет намеренно: он применяется условно, через
+    // apply() в app/build.gradle.kts, а тот берёт плагин с classpath
+    // сборочного скрипта — версия отсюда для него не действует. Объявление
+    // лежит в корневом build.gradle.kts, в блоке buildscript.
 }
 
 dependencyResolutionManagement {
