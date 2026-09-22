@@ -163,6 +163,17 @@ fun SettingsScreen(onBack: () -> Unit) {
         Prefs.voiceAutoSensitivity = voiceAuto
         Prefs.voiceThresholdDb = voiceThreshold.toInt()
         Prefs.voiceOutputGain = voiceOutGain.toInt()
+        // Переключатель фоновой проверки обязан подействовать сразу.
+        //
+        // Раньше он только записывал настройку, а работающую службу не трогал:
+        // человек выключал фоновую проверку, а уведомление продолжало висеть —
+        // до перезапуска приложения. Со стороны это выглядит как «переключатель
+        // не работает», и мешает ровно то, ради чего его и нажали.
+        runCatching {
+            if (bgPolling) com.pismo.messenger.service.PollingService.start(ctx)
+            else com.pismo.messenger.service.PollingService.stop(ctx)
+        }
+
         scope.launch { Db.closeAll() }
         status = "Настройки сохранены."
     }

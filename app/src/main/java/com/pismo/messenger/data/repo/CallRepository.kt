@@ -126,8 +126,17 @@ object CallRepository {
 
     // ── Участники ─────────────────────────────────────────────────────
 
+    /**
+     * Вход в звонок. Сначала убираем свою прежнюю строку, потом добавляем
+     * новую: уникального ключа на (call_id, user_id) в таблице не было, и
+     * повторный вход показывал одного человека в списке дважды.
+     */
     suspend fun join(sessionId: Int) {
         runCatching {
+            Db.exec(
+                "DELETE FROM call_participants WHERE call_id=? AND user_id=?",
+                sessionId, UserSession.effectiveId
+            )
             Db.exec(
                 "INSERT INTO call_participants (call_id, user_id, joined_at) VALUES (?, ?, NOW())",
                 sessionId, UserSession.effectiveId
@@ -152,9 +161,14 @@ object CallRepository {
 
     suspend fun participants(sessionId: Int): List<String> = runCatching {
         Db.query(
-            "SELECT TRIM(CONCAT(u.Name, ' ', u.Surname)) AS user_name, u.login " +
+            // GROUP BY по человеку: в таблице могли остаться повторы, и один
+            // участник считался за нескольких.
+            "SELECT TRIM(CONCAT(u.Name, ' ', u.Surname)) AS user_name, u.login, " +
+                    "       MIN(cp.joined_at) AS first_join " +
                     "FROM call_participants cp JOIN users u ON u.id = cp.user_id " +
-                    "WHERE cp.call_id=? ORDER BY cp.joined_at ASC",
+                    "WHERE cp.call_id=? AND cp.left_at IS NULL " +
+                    "GROUP BY cp.user_id, u.Name, u.Surname, u.login " +
+                    "ORDER BY first_join ASC",
             sessionId
         ) { rs -> rs.str("user_name").trim().ifBlank { rs.str("login") } }
     }.getOrDefault(emptyList())

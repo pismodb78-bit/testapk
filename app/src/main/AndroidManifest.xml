@@ -122,6 +122,15 @@
             </intent-filter>
         </receiver>
 
+        <!-- Кнопка «Отключить» на уведомлении фоновой проверки. -->
+        <receiver
+            android:name=".service.PollingActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.pismo.messenger.POLLING_DISABLE" />
+            </intent-filter>
+        </receiver>
+
         <receiver
             android:name=".service.CallActionReceiver"
             android:exported="false">

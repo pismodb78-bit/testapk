@@ -226,6 +226,34 @@ object DbMigrator {
                 addIndex(c, t, "idx_file_sha", "(sender_id, file_sha)")
             }
         },
+
+        Migration(21, "call_participants: один человек — одна строка в звонке") { c ->
+            // В окне звонка один и тот же человек показывался дважды, а
+            // счётчик участников был больше, чем людей.
+            //
+            // Строку добавлял простой INSERT, а уникального ключа на
+            // (call_id, user_id) в таблице нет. Удаляет её только штатный
+            // выход; после закрытия приложения, падения или обрыва сети
+            // удалять её некому — и повторный вход в тот же звонок добавлял
+            // вторую. Вход с двух своих устройств давал то же самое.
+            //
+            // Клиенты теперь убирают свою прежнюю строку перед вставкой, но
+            // опираться на это нельзя: дубликаты уже лежат в базе, и рядом
+            // работают старые сборки. Ключ ставит запрет там, где его не
+            // обойти.
+            if (tableExists(c, "call_participants")) {
+                // Чистим накопленное, иначе UNIQUE не встанет. Оставляем самую
+                // раннюю запись — она помнит, когда человек вошёл на самом деле.
+                exec(
+                    c,
+                    "DELETE cp FROM call_participants cp " +
+                        "JOIN call_participants keep " +
+                        "  ON keep.call_id = cp.call_id AND keep.user_id = cp.user_id " +
+                        " AND keep.id < cp.id"
+                )
+                addUniqueIndex(c, "call_participants", "uq_call_participant", "(call_id, user_id)")
+            }
+        },
     )
 
     /**
@@ -296,6 +324,19 @@ object DbMigrator {
      * уходит наверх, миграция не отмечается применённой и повторится при
      * следующем запуске; до тех пор индексы кладутся руками скриптом из sql/.
      */
+    /**
+     * То же, что addIndex, но ключ уникальный. Отдельной функцией, а не
+     * флагом: уникальный ключ падает ещё и на 1062 — когда дубликаты
+     * остались. Это НЕ «уже есть», и молчать об этом нельзя.
+     */
+    private fun addUniqueIndex(c: Connection, table: String, name: String, columns: String) {
+        try {
+            exec(c, "ALTER TABLE `$table` ADD UNIQUE INDEX `$name` $columns")
+        } catch (e: SQLException) {
+            if (e.errorCode != 1061) throw e
+        }
+    }
+
     private fun addIndex(c: Connection, table: String, name: String, columns: String) {
         try {
             exec(c, "ALTER TABLE `$table` ADD INDEX `$name` $columns")

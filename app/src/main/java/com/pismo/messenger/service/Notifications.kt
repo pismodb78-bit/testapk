@@ -199,21 +199,49 @@ object Notifications {
     }
 
     /**
-     * Уведомление фонового сервиса — то, что должно мозолить глаза как можно
-     * меньше.
+     * Уведомление фонового сервиса.
      *
-     * Строчка «Проверка новых сообщений» убрана: она ничего не сообщала, а
-     * висела всегда. Заголовок оставлен один — совсем без текста уведомление
-     * показывать нельзя, да и понимать, чьё оно, всё-таки нужно.
+     * ПОЧЕМУ ОНО ВООБЩЕ ЕСТЬ. Пока работает фоновая служба, Android ОБЯЗАН
+     * показывать уведомление — это его способ сообщить, что программа
+     * работает за спиной. Скрыть его приложению не дано никак; выбор только
+     * между «оно есть» и «фоновой проверки нет вовсе».
+     *
+     * ЧТО БЫЛО НЕ ТАК. В нём остался один заголовок «PISMO» и ни строчки
+     * текста — прошлая правка убрала бесполезное «Проверка новых
+     * сообщений», и вышло пустое место, которое висит всегда. Пустое
+     * раздражает сильнее подробного: непонятно даже, зачем оно.
+     *
+     * ЧТО ТЕПЕРЬ. Во-первых, текст говорит дело: сколько непрочитанных.
+     * Взгляд в шторку отвечает на вопрос, ради которого иначе пришлось бы
+     * открывать приложение. Во-вторых, кнопка «Отключить» — одно нажатие
+     * там же, где раздражает, вместо похода в настройки.
      *
      * FOREGROUND_SERVICE_DEFERRED (Android 12 и новее) откладывает показ на
      * десять секунд: короткий заход в фон успевает закончиться раньше, чем
      * уведомление появится, и человек его не увидит вовсе.
      */
-    fun serviceNotification(context: Context): android.app.Notification =
-        NotificationCompat.Builder(context, CHANNEL_SERVICE)
+    fun serviceNotification(context: Context, unread: Int = -1): android.app.Notification {
+        val disable = PendingIntent.getBroadcast(
+            context, 0,
+            Intent(context, PollingActionReceiver::class.java)
+                .setAction(PollingActionReceiver.ACTION_DISABLE),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        return NotificationCompat.Builder(context, CHANNEL_SERVICE)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("PISMO")
+            .setContentText(
+                when {
+                    // −1 значит «ещё не считали»: первый показ бывает раньше
+                    // первого опроса, и писать «нет непрочитанных», не
+                    // проверив, нельзя — это была бы неправда.
+                    unread < 0 -> "Следит за новыми сообщениями"
+                    unread == 0 -> "Новых сообщений нет"
+                    else -> "Непрочитанных: $unread"
+                }
+            )
+            .addAction(0, "Отключить", disable)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setSilent(true)
             .setShowWhen(false)
@@ -221,6 +249,7 @@ object Notifications {
             .setOngoing(true)
             .setContentIntent(openAppIntent(context))
             .build()
+    }
 
     /**
      * Уведомление для foreground-сервиса демонстрации экрана.

@@ -26,6 +26,9 @@ import kotlinx.coroutines.launch
 class PollingService : LifecycleService() {
 
     private val previousUnread = HashMap<Int, Int>()
+
+    /** Сколько непрочитанных уже написано в своём уведомлении. −1 — ещё нисколько. */
+    private var shownUnread = -1
     private val previousGroupMax = HashMap<Int, Int>()
     private val previousChannelMax = HashMap<Int, Int>()
     private var groupBaselineReady = false
@@ -152,6 +155,19 @@ class PollingService : LifecycleService() {
         }
         previousUnread.clear()
         previousUnread.putAll(unread)
+
+        // Своё же уведомление держим в курсе: раз уж оно всё равно висит,
+        // пусть отвечает на вопрос, ради которого иначе надо открывать
+        // приложение. Перерисовываем ТОЛЬКО когда число изменилось — иначе
+        // система переставляет запись в шторке каждые десять секунд.
+        val total = unread.values.sum()
+        if (total != shownUnread) {
+            shownUnread = total
+            runCatching {
+                androidx.core.app.NotificationManagerCompat.from(this)
+                    .notify(Notifications.ID_SERVICE, Notifications.serviceNotification(this, total))
+            }
+        }
 
         // Групповые: у групп нет отметки прочтения на пользователя, поэтому
         // базовую точку держим в памяти — как _prevGroupMax на ПК.
