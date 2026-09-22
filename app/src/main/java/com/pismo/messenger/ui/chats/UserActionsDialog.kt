@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.sp
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.ui.profile.UserProfileDialog
 import com.pismo.messenger.core.UserSession
+import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.data.model.Conversation
 import com.pismo.messenger.data.repo.ChatRepository
 import com.pismo.messenger.data.repo.FriendsRepository
@@ -192,6 +193,9 @@ fun UserActionsDialog(
                     Action("👤  Войти за пользователя", color = PismoColors.Cyan) {
                         UserSession.impersonatedId = conversation.userId
                         UserSession.impersonatedName = conversation.name
+                        // Сокет был зарегистрирован за админом: пока он такой,
+                        // всё в релей уходит с его id, а не того, за кого пишем.
+                        SignalingClient.reconnectAs(UserSession.effectiveId)
                         onChanged()
                     }
                 }

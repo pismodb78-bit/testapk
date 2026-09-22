@@ -225,6 +225,7 @@ fun ProfileScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit) {
             Button(
                 onClick = {
                     UserSession.stopImpersonating()
+                    SignalingClient.reconnectAs(UserSession.effectiveId)
                     report("Вернулись в свой аккаунт.", false)
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = PismoColors.Red),

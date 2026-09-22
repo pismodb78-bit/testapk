@@ -75,6 +75,22 @@ object SignalingClient {
         }
     }
 
+    /**
+     * Переподключиться под другим id — вход «за пользователя» и выход из него.
+     *
+     * Простой connect() здесь не годится: при живом сокете он выходит первой
+     * же строкой, и соединение остаётся зарегистрированным за прежним
+     * человеком. Всё, что уходит в релей, продолжало бы ехать с чужим
+     * userId — например, событие о новом сообщении приходило бы от админа,
+     * а не от того, за кого он пишет.
+     */
+    fun reconnectAs(userId: Int) {
+        if (userId <= 0) return
+        if (myUserId == userId && ws != null) return
+        disconnect()
+        connect(userId)
+    }
+
     fun disconnect() {
         wantConnection = false
         runCatching { ws?.close(1000, "bye") }
