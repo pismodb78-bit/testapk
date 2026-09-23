@@ -187,9 +187,26 @@ object IncomingCallMonitor {
     fun rejected(context: Context, call: CallSessionRow) {
         _incoming.value = null
         CallNotifier.cancelIncoming(context)
+
+        // В ГРУППЕ отказ касается только меня.
+        //
+        // Раньше он ставил всей сессии статус 'rejected', и звонок обрывался
+        // у всех разом: опрос входящих ищет только 'ringing', значит остальные
+        // переставали звонить, а те, кто уже разговаривал, оставались в
+        // вызове, помеченном отклонённым. Один человек, не желавший
+        // разговаривать, вешал трубку за всю группу.
+        //
+        // Поэтому в группе не трогаем ни статус, ни звонящего: гасим звонок
+        // только на своих устройствах. Повторно он здесь не всплывёт — номер
+        // уже в списке показанных.
+        val inGroup = (call.groupId ?: 0) > 0
+
         CoroutineScope(Dispatchers.IO).launch {
-            runCatching { CallRepository.reject(call.id) }
-            SignalingClient.send("call_status", call.callerId, call.id, "rejected")
+            if (!inGroup) {
+                runCatching { CallRepository.reject(call.id) }
+                SignalingClient.send("call_status", call.callerId, call.id, "rejected")
+            }
+            // Своим остальным устройствам — там звонит такой же входящий.
             SignalingClient.send("call_status", UserSession.effectiveId, call.id, "rejected")
         }
     }

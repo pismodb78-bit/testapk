@@ -210,11 +210,23 @@ class CallActivity : ComponentActivity() {
                             joinRoom(peerId, groupId, peerName, withVideo, isCaller)
                         },
                         onReject = {
-                            IncomingCallMonitor.incoming.value?.let {
-                                IncomingCallMonitor.rejected(this@CallActivity, it)
+                            // Отказ шёл ДВАЖДЫ: через монитор и тут же напрямую
+                            // в базу. Второй путь проверок монитора не знал и в
+                            // группе ставил всей сессии 'rejected' — то есть
+                            // вешал трубку за всех, сколько бы человек ни
+                            // ждали разговора.
+                            val known = IncomingCallMonitor.incoming.value
+                            if (known != null) {
+                                IncomingCallMonitor.rejected(this@CallActivity, known)
                             }
                             lifecycleScope.launch {
-                                runCatching { if (sessionId > 0) CallRepository.reject(sessionId) }
+                                // Запасной путь — когда монитор о вызове не
+                                // знает: окно могли открыть из шторки в новом
+                                // процессе. В группе статус всё равно не
+                                // трогаем.
+                                if (known == null && sessionId > 0 && groupId < 0) {
+                                    runCatching { CallRepository.reject(sessionId) }
+                                }
                                 finish()
                             }
                         },
