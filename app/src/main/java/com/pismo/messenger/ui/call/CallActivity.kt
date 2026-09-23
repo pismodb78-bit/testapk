@@ -326,7 +326,18 @@ class CallActivity : ComponentActivity() {
                 }
             }
 
-            if (sessionId > 0) CallRepository.join(sessionId)
+            if (sessionId > 0) {
+                CallRepository.join(sessionId)
+                // Своим остальным устройствам: разговор теперь здесь.
+                //
+                // Полагаться на то, что LiveKit сам выбьет прежнее соединение
+                // с тем же именем, нельзя — в одну сторону срабатывало, в
+                // другую нет, и человек оказывался в звонке с двух устройств
+                // сразу. Говорим об этом явно.
+                SignalingClient.send(
+                    "call_status", UserSession.effectiveId, sessionId, "taken"
+                )
+            }
 
             // Док активного звонка на остальных экранах узнаёт о звонке отсюда.
             ActiveCall.start(

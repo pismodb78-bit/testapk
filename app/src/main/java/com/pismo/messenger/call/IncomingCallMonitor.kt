@@ -69,6 +69,12 @@ object IncomingCallMonitor {
                 if (type == "incoming_call") pushed = true
                 if (type == "call_status") {
                     pushed = true
+                    // Разговор перехвачен другим моим устройством — уходим
+                    // отсюда, но тихо: в базе ничего не трогаем, иначе
+                    // выкинули бы из звонка того, кто только что вошёл.
+                    if (payload == "taken" && ActiveCall.current.value?.sessionId == session) {
+                        ActiveCall.handedOver()
+                    }
                     // Гасим показанный звонок СРАЗУ, а не ждём опроса. Опрос при
                     // живом сокете разрежен до ~6 секунд, и всё это время телефон
                     // продолжал звонить после того, как трубку взяли на ПК.
