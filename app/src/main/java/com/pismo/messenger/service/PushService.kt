@@ -6,6 +6,8 @@ import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.PushLog
 import com.pismo.messenger.call.IncomingCallMonitor
 import com.pismo.messenger.data.repo.AuthRepository
+import com.pismo.messenger.data.repo.ChatRepository
+import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.core.UserSession
 
 /**
@@ -43,6 +45,21 @@ class PushService : FirebaseMessagingService() {
         }.getOrDefault(false)
     }
 
+    /**
+     * Текст для шторки — из базы.
+     *
+     * Push его не несёт и нести не должен: сообщения лежат зашифрованными, а
+     * ключ есть только у клиентов. Расшифровать на сервере было бы можно, но
+     * тогда он начал бы читать переписку. Поэтому push — это повод сходить в
+     * базу, а не сама доставка.
+     *
+     * Не получилось — показываем без текста. Уведомление без содержимого
+     * хуже, чем с ним, но лучше, чем ничего.
+     */
+    private fun preview(load: suspend () -> String): String = runCatching {
+        kotlinx.coroutines.runBlocking { load() }
+    }.getOrNull()?.takeIf { it.isNotBlank() } ?: "Новое сообщение"
+
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
         val kind = data["kind"] ?: "message"
@@ -66,16 +83,16 @@ class PushService : FirebaseMessagingService() {
             return
         }
 
-        // Кто мы — из памяти, а если её нет, из настроек.
+        // Возвращаем вход в аккаунт, если процесс подняли push'ем с нуля.
         //
-        // Ради выгруженного приложения push и заводился, но именно тогда
-        // система поднимает НОВЫЙ процесс: onCreate приложения отработал,
-        // а входа в аккаунт не было, и UserSession пуст. Проверка на него
-        // отбрасывала ровно тот случай, ради которого всё делалось.
+        // Нужен он для текста: push несёт только «кто и куда написал», а сам
+        // текст лежит в базе, зашифрованным, и достать его может лишь тот,
+        // кто вошёл. Без входа уведомление получается безликим — «Новое
+        // сообщение» вместо самого сообщения.
         //
-        // Пустой id больше не повод молчать: он нужен только чтобы найти
-        // список заглушённых. Не нашли — лучше показать лишнее, чем
-        // проглотить сообщение.
+        // Неудача здесь не повод молчать: покажем без текста, как и раньше.
+        // Для списка заглушённых хватит пометки с номером.
+        restoreSession()
         val me = UserSession.effectiveId.takeIf { it > 0 } ?: Prefs.pushUserId
 
         when (kind) {
@@ -85,7 +102,8 @@ class PushService : FirebaseMessagingService() {
                     PushLog.add("  пропущено: в push нет номера группы")
                     return
                 }
-                Notifications.showGroupMessage(this, gid, name, "Новое сообщение")
+                val text = preview { ChatRepository.previewOfLatestInGroup(gid) }
+                Notifications.showGroupMessage(this, gid, name, text)
                 PushLog.add("  показано: группа $gid")
             }
             "call" -> {
@@ -98,15 +116,13 @@ class PushService : FirebaseMessagingService() {
                     PushLog.add("  пропущено: в push нет номера звонка")
                     return
                 }
-                // Звонку нужна НАСТОЯЩАЯ сессия, а не пометка с id.
+                // Звонку сессия ОБЯЗАТЕЛЬНА, в отличие от сообщения.
                 //
-                // Push поднимает выгруженное приложение в новом процессе, где
-                // входа в аккаунт не было. Для уведомления о сообщении хватает
-                // одного номера, а разговор без своего имени и id собрать
-                // нельзя: в комнате оказывался один участник вместо двух, а
-                // имя показывалось как «0». Такой звонок открыть можно, но
-                // говорить в нём не с кем.
-                if (!restoreSession()) {
+                // Уведомление без текста — это неудобно, а разговор без своего
+                // id собрать нельзя вовсе: в комнате оказывается один участник
+                // вместо двух, а имя показывается как «0». Открыть такой
+                // звонок можно, но говорить в нём не с кем.
+                if (UserSession.effectiveId <= 0) {
                     PushLog.add("  пропущено: не удалось войти в аккаунт для звонка")
                     return
                 }
@@ -126,7 +142,10 @@ class PushService : FirebaseMessagingService() {
                     PushLog.add("  пропущено: в push нет номера канала")
                     return
                 }
-                Notifications.showChannelMessage(this, cid, name, mentions = 0)
+                Notifications.showChannelMessage(
+                    this, cid, name, mentions = 0,
+                    preview = preview { ServerRepository.previewOfLatestInChannel(cid) },
+                )
                 PushLog.add("  показано: канал $cid")
             }
             else -> {
@@ -140,7 +159,15 @@ class PushService : FirebaseMessagingService() {
                     PushLog.add("  пропущено: отправитель заглушён")
                     return
                 }
-                Notifications.showMessage(this, fromId, name, "Новое сообщение")
+                // Текст и счётчик — ровно как это делал опрос базы, чтобы в
+                // шторке было видно, ЧТО прислали, а не безликое «новое
+                // сообщение».
+                val text = preview {
+                    val p = ChatRepository.previewOfLatestFrom(fromId)
+                    val unread = ChatRepository.unreadBySender()[fromId] ?: 0
+                    if (unread > 1) "$p  ·  ещё ${unread - 1}" else p
+                }
+                Notifications.showMessage(this, fromId, name, text)
                 PushLog.add("  показано: сообщение от $fromId")
             }
         }
