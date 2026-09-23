@@ -5,6 +5,7 @@ import com.google.firebase.messaging.RemoteMessage
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.PushLog
 import com.pismo.messenger.call.IncomingCallMonitor
+import com.pismo.messenger.data.repo.AuthRepository
 import com.pismo.messenger.core.UserSession
 
 /**
@@ -26,6 +27,20 @@ class PushService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         PushTokens.onNewToken(token)
+    }
+
+    /**
+     * Вернуть вход в аккаунт, если процесс поднят push'ем с нуля.
+     *
+     * Ничего своего не изобретаем: autoLogin — ровно то, чем входит обычный
+     * запуск приложения, вместе с его правилом «только если человек просил
+     * запомнить». Если данных нет, вход не подделываем.
+     */
+    private fun restoreSession(): Boolean {
+        if (UserSession.effectiveId > 0) return true
+        return runCatching {
+            kotlinx.coroutines.runBlocking { AuthRepository.autoLogin() }
+        }.getOrDefault(false)
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
@@ -83,6 +98,19 @@ class PushService : FirebaseMessagingService() {
                     PushLog.add("  пропущено: в push нет номера звонка")
                     return
                 }
+                // Звонку нужна НАСТОЯЩАЯ сессия, а не пометка с id.
+                //
+                // Push поднимает выгруженное приложение в новом процессе, где
+                // входа в аккаунт не было. Для уведомления о сообщении хватает
+                // одного номера, а разговор без своего имени и id собрать
+                // нельзя: в комнате оказывался один участник вместо двух, а
+                // имя показывалось как «0». Такой звонок открыть можно, но
+                // говорить в нём не с кем.
+                if (!restoreSession()) {
+                    PushLog.add("  пропущено: не удалось войти в аккаунт для звонка")
+                    return
+                }
+
                 // Через монитор, а НЕ напрямую: у него есть защиты, которых
                 // здесь быть не должно во второй раз — «уже идёт разговор»,
                 // «этот вызов уже показывали», заглушённые и запреты на

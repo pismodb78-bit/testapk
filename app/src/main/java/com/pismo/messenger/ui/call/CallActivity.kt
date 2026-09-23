@@ -143,6 +143,30 @@ class CallActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         showOverLockScreen()
 
+        // Без своего id разговор собрать нельзя.
+        //
+        // Окно открывается из шторки, а шторку мог наполнить push — тогда
+        // приложение подняли в новом процессе, и входа в аккаунт в нём не
+        // было. Раньше такое окно открывалось молча и выглядело как звонок,
+        // которым не является: имя «0», один участник вместо двух, и никого
+        // не слышно. Лучше отправить человека через обычный запуск — он умеет
+        // и войти по сохранённым данным, и показать вход, если их нет. Вызов
+        // при этом продолжает звонить, и ответить на него можно из самого
+        // приложения.
+        if (UserSession.effectiveId <= 0) {
+            runCatching {
+                startActivity(
+                    android.content.Intent(this, com.pismo.messenger.ui.MainActivity::class.java)
+                        .addFlags(
+                            android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                                android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        )
+                )
+            }
+            finish()
+            return
+        }
+
         // Звонок уже идёт — значит окно просто открыли заново из дока.
         // Берём ЖИВОЙ движок и ни в какую комнату повторно не заходим.
         // Область корутин у движка процессная (ActiveCall.scope), а не
