@@ -195,7 +195,19 @@ object CallRepository {
                 "DELETE FROM call_participants WHERE call_id=? AND user_id=?",
                 sessionId, UserSession.effectiveId
             )
-            val left = Db.scalarInt("SELECT COUNT(*) FROM call_participants WHERE call_id=?", sessionId)
+            // Считаем только ЖИВЫХ. Раньше считались все строки подряд, а
+            // строка исчезает лишь при штатном выходе: упало приложение,
+            // пропала сеть, сняли из недавних — она остаётся навсегда. Тогда
+            // в звонке вечно «кто-то есть», сессия не закрывается, и следующий
+            // вошедший присоединяется к мёртвому звонку.
+            val left = Db.scalarInt(
+                "SELECT COUNT(*) FROM call_participants cp " +
+                        "JOIN users u ON u.id = cp.user_id " +
+                        "WHERE cp.call_id=? AND cp.left_at IS NULL " +
+                        "AND u.last_seen IS NOT NULL " +
+                        "AND TIMESTAMPDIFF(SECOND, u.last_seen, NOW()) <= 60",
+                sessionId
+            )
             if (left == 0) end(sessionId)
         }
     }
@@ -208,6 +220,13 @@ object CallRepository {
                     "       MIN(cp.joined_at) AS first_join " +
                     "FROM call_participants cp JOIN users u ON u.id = cp.user_id " +
                     "WHERE cp.call_id=? AND cp.left_at IS NULL " +
+                    // Участник должен быть ЖИВ. left_at проставляется только
+                    // при штатном выходе: упало приложение, пропала сеть,
+                    // сняли из недавних — строка остаётся навсегда, и человек
+                    // «сидит» в звонке вечно. Тот же last_seen, по которому
+                    // считается «в сети».
+                    "AND u.last_seen IS NOT NULL " +
+                    "AND TIMESTAMPDIFF(SECOND, u.last_seen, NOW()) <= 60 " +
                     "GROUP BY cp.user_id, u.Name, u.Surname, u.login " +
                     "ORDER BY first_join ASC",
             sessionId
