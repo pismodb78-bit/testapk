@@ -236,6 +236,11 @@ class CallActivity : ComponentActivity() {
                     CallScreen(
                         engine = engine,
                         peerName = peerName,
+                        // Личный ли это разговор, известно ЗДЕСЬ, из самого
+                        // вызова окна. Раньше экран выяснял это у ActiveCall,
+                        // а тот в первые мгновения пуст — и групповой звонок
+                        // успевал показать «Ожидание собеседника».
+                        personalCall = groupId < 0 && channelId < 0,
                         onHangup = { finishCall() },
                     )
                 }
@@ -470,6 +475,8 @@ private fun RingingScreen(
 private fun CallScreen(
     engine: CallEngine,
     peerName: String,
+    /** Личный разговор один на один: не группа и не голосовой канал. */
+    personalCall: Boolean,
     onHangup: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -507,7 +514,6 @@ private fun CallScreen(
     // Групповые звонки и голосовые каналы так НЕ делают, и это намеренно:
     // там нормально сидеть одному и ждать, пока подтянутся остальные, — как
     // в голосовом канале сервера.
-    val personalCall = callInfo?.isVoiceChannel != true && (callInfo?.groupId ?: -1) < 0
     val hasRemote = participants.any { !it.isLocal }
     // «Был и пропал», а не просто «нет»: в начале личного звонка собеседника
     // ещё нет, и без этой памяти окно закрывалось бы само на первом же гудке.
@@ -640,10 +646,8 @@ private fun CallScreen(
                     // (там трёхминутное ожидание тоже только для личных
                     // звонков, см. CallForm.Designer.cs, условие _groupId < 0).
                     // Групповой звонок — то же самое.
-                    val personal = callInfo?.isVoiceChannel != true &&
-                            (callInfo?.groupId ?: -1) < 0
                     when {
-                        personal && participants.size <= 1 -> "Ожидание собеседника…"
+                        personalCall && participants.size <= 1 -> "Ожидание собеседника…"
                         participants.size <= 1 -> formatDuration(elapsed)
                         else -> "В звонке: ${participants.size} · ${formatDuration(elapsed)}"
                     }
