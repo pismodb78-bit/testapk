@@ -136,6 +136,22 @@ class PushService : FirebaseMessagingService() {
                 if (why.isEmpty()) PushLog.add("  показано: звонок $callId")
                 else PushLog.add("  пропущено: $why")
             }
+            "friend" -> {
+                if (fromId <= 0) {
+                    PushLog.add("  пропущено: в push нет отправителя заявки")
+                    return
+                }
+                // «Принял» показываем тем же уведомлением, но другим текстом:
+                // отдельный канал заводить незачем, повод один — кто-то
+                // сделал шаг навстречу.
+                if (data["state"] == "accepted") {
+                    Notifications.showFriendAccepted(this, fromId, name)
+                    PushLog.add("  показано: заявку принял $fromId")
+                } else {
+                    Notifications.showFriendRequest(this, fromId, name)
+                    PushLog.add("  показано: заявка в друзья от $fromId")
+                }
+            }
             "channel" -> {
                 val cid = data["channel"]?.toIntOrNull() ?: 0
                 if (cid <= 0) {

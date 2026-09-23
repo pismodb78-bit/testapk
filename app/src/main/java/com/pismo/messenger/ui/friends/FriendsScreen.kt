@@ -28,12 +28,14 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import com.pismo.messenger.net.SignalingClient
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -86,6 +88,18 @@ fun FriendsScreen(onOpenChat: (Int, String) -> Unit) {
     }
 
     LaunchedEffect(Unit) { reload() }
+
+    // Заявка приходит событием, а не находится опросом: опроса больше нет, он
+    // ушёл вместе с фоновой службой. Список обновляем сразу, как только
+    // событие дошло, — иначе заявку было бы видно только после выхода с
+    // экрана и возвращения на него.
+    DisposableEffect(Unit) {
+        val listener: (String, Int, Int, String) -> Unit = { type, _, _, _ ->
+            if (type == "friend") scope.launch { reload() }
+        }
+        SignalingClient.addListener(listener)
+        onDispose { SignalingClient.removeListener(listener) }
+    }
 
     // Ключ — сам список идентификаторов, а НЕ Unit. С Unit цикл стартовал
     // один раз, когда список ещё пуст: первый проход не делал ничего и

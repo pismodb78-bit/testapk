@@ -218,6 +218,29 @@ object Notifications {
         }
     }
 
+    /**
+     * Заявку приняли. Повод тот же, что и у самой заявки, поэтому канал и
+     * вид те же — меняется только текст.
+     */
+    fun showFriendAccepted(context: Context, fromId: Int, fromName: String) {
+        if (!Prefs.notificationsEnabled) return
+        if (!hasPermission(context)) return
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("Заявка принята")
+            .setContentText("$fromName теперь у вас в друзьях")
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(openAppIntent(context, Bundle().apply { putBoolean("open_friends", true) }))
+            .build()
+
+        runCatching {
+            NotificationManagerCompat.from(context)
+                .notify(ID_MESSAGE_BASE + 400_000 + fromId, notification)
+        }
+    }
+
     fun cancelMessage(context: Context, senderId: Int) {
         runCatching { NotificationManagerCompat.from(context).cancel(ID_MESSAGE_BASE + senderId) }
     }

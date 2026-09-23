@@ -2,6 +2,7 @@ package com.pismo.messenger.data.repo
 
 import com.pismo.messenger.core.RateLimiter
 import com.pismo.messenger.core.UserSession
+import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.core.buildName
 import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.data.db.str
@@ -81,6 +82,11 @@ object FriendsRepository {
             "INSERT IGNORE INTO friends (user_id, friend_id, status) VALUES (?, ?, 0)",
             UserSession.effectiveId, targetId
         )
+        // Заявку находил только опрос базы, а его больше нет — вместе с
+        // фоновой службой ушло и это. Теперь говорим адресату сами: список у
+        // него обновится сразу, а если он не на связи, релей превратит
+        // событие в push.
+        SignalingClient.send("friend", targetId, UserSession.effectiveId, "request")
     }
 
     /** Принять входящую заявку от requesterId. */
@@ -89,6 +95,9 @@ object FriendsRepository {
             "UPDATE friends SET status=1 WHERE user_id=? AND friend_id=?",
             requesterId, UserSession.effectiveId
         )
+        // Тому, кто звал: заявка принята. Без этого он узнавал бы об этом,
+        // только открыв список друзей.
+        SignalingClient.send("friend", requesterId, UserSession.effectiveId, "accepted")
     }
 
     /** Отклонить входящую заявку. */
