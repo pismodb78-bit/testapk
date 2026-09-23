@@ -476,6 +476,34 @@ private fun CallScreen(
         }
     }
 
+    // В ЛИЧНОМ звонке уходим следом за собеседником.
+    //
+    // Раньше окно оставалось висеть после того, как вторая сторона положила
+    // трубку: разговаривать уже не с кем, а выходить приходилось руками.
+    //
+    // Групповые звонки и голосовые каналы так НЕ делают, и это намеренно:
+    // там нормально сидеть одному и ждать, пока подтянутся остальные, — как
+    // в голосовом канале сервера.
+    val personalCall = callInfo?.isVoiceChannel != true && (callInfo?.groupId ?: -1) < 0
+    val hasRemote = participants.any { !it.isLocal }
+    // «Был и пропал», а не просто «нет»: в начале личного звонка собеседника
+    // ещё нет, и без этой памяти окно закрывалось бы само на первом же гудке.
+    var peerWasHere by remember { mutableStateOf(false) }
+    LaunchedEffect(personalCall, hasRemote) {
+        if (!personalCall) return@LaunchedEffect
+        if (hasRemote) {
+            peerWasHere = true
+            return@LaunchedEffect
+        }
+        if (!peerWasHere) return@LaunchedEffect
+        // Пауза перед выходом: короткий разрыв связи у собеседника выглядит
+        // ровно как уход, и без неё разговор обрывался бы на каждой заминке
+        // сети. Две секунды переживает переподключение, но не заставляют
+        // сидеть в пустой комнате.
+        delay(2000)
+        if (!engine.hasRemote) onHangup()
+    }
+
     var showShareOptions by remember { mutableStateOf(false) }
     var denoise by remember { mutableStateOf(Prefs.noiseSuppression) }
     var shareAudio by remember { mutableStateOf(Prefs.shareScreenAudio) }
