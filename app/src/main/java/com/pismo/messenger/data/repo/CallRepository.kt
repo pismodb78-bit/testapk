@@ -62,7 +62,8 @@ object CallRepository {
         val sql = """
             SELECT cs.id, cs.caller_id, cs.has_video, cs.group_id, cs.callee_id,
                    TRIM(CONCAT(u.Name,' ',u.Surname)) AS caller_name, u.login,
-                   COALESCE(gc.name, '') AS group_name
+                   COALESCE(gc.name, '') AS group_name,
+                   COALESCE(gc.avatar_color, '') AS group_color
             FROM call_sessions cs
             JOIN users u ON u.id = cs.caller_id
             LEFT JOIN group_chats gc ON gc.id = cs.group_id
@@ -91,6 +92,7 @@ object CallRepository {
                     status = "ringing",
                     hasVideo = rs.bool("has_video"),
                     groupName = rs.str("group_name"),
+                    groupColor = rs.str("group_color"),
                 )
             }
         }.getOrDefault(emptyList())
@@ -110,7 +112,8 @@ object CallRepository {
         val sql = """
             SELECT cs.id, cs.caller_id, cs.has_video, cs.group_id, cs.callee_id,
                    TRIM(CONCAT(u.Name,' ',u.Surname)) AS caller_name, u.login,
-                   COALESCE(gc.name, '') AS group_name
+                   COALESCE(gc.name, '') AS group_name,
+                   COALESCE(gc.avatar_color, '') AS group_color
             FROM call_sessions cs
             JOIN users u ON u.id = cs.caller_id
             LEFT JOIN group_chats gc ON gc.id = cs.group_id
@@ -135,6 +138,7 @@ object CallRepository {
                     status = "ringing",
                     hasVideo = rs.bool("has_video"),
                     groupName = rs.str("group_name"),
+                    groupColor = rs.str("group_color"),
                 )
             }.firstOrNull()
         }.getOrNull()

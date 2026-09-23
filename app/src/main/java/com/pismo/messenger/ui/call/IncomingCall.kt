@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pismo.messenger.call.IncomingCallMonitor
 import com.pismo.messenger.data.model.CallSessionRow
+import com.pismo.messenger.ui.components.GroupAvatar
 import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.theme.PismoColors
 
@@ -60,14 +61,36 @@ fun IncomingCallDialog() {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                UserAvatar(current.callerId, current.callerName, 72.dp)
+                // Групповой вызов — это сбор, а не звонок одного человека.
+                // Раньше окно показывало только звонящего, и понять, зовут ли
+                // тебя лично или всю группу, можно было лишь приняв вызов.
+                val gid = current.groupId ?: 0
+                val inGroup = gid > 0
+                val groupName = current.groupName.ifBlank { "Группа" }
+
+                if (inGroup) GroupAvatar(gid, groupName, current.groupColor, 72.dp)
+                else UserAvatar(current.callerId, current.callerName, 72.dp)
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    current.callerName, color = PismoColors.TextPrimary, fontSize = 20.sp,
+                    if (inGroup) "👥 $groupName" else current.callerName,
+                    color = PismoColors.TextPrimary, fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                 )
+                if (inGroup) {
+                    // Кто именно позвал — вторым планом: знать это важно, но
+                    // главное здесь сама группа.
+                    Text(
+                        current.callerName.ifBlank { "Кто-то" } + " зовёт в группу",
+                        color = PismoColors.TextSecondary, fontSize = 14.sp,
+                    )
+                }
                 Text(
-                    if (current.hasVideo) "Входящий видеозвонок" else "Входящий звонок",
+                    when {
+                        inGroup && current.hasVideo -> "Групповой видеозвонок"
+                        inGroup -> "Групповой звонок"
+                        current.hasVideo -> "Входящий видеозвонок"
+                        else -> "Входящий звонок"
+                    },
                     color = PismoColors.TextMuted, fontSize = 13.sp,
                 )
             }
