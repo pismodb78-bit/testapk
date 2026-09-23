@@ -116,6 +116,8 @@ class CallActivity : ComponentActivity() {
         const val EXTRA_PEER_ID = "peer_id"
         const val EXTRA_GROUP_ID = "group_id"
         const val EXTRA_PEER_NAME = "peer_name"
+        /** Название группы — чтобы входящий из группы не выглядел личным. */
+        const val EXTRA_GROUP_NAME = "group_name"
         const val EXTRA_WITH_VIDEO = "with_video"
         const val EXTRA_IS_CALLER = "is_caller"
         const val EXTRA_CHANNEL_ID = "channel_id"
@@ -177,6 +179,7 @@ class CallActivity : ComponentActivity() {
         val peerId = intent.getIntExtra(EXTRA_PEER_ID, -1)
         val groupId = intent.getIntExtra(EXTRA_GROUP_ID, -1)
         val peerName = intent.getStringExtra(EXTRA_PEER_NAME).orEmpty()
+        val groupName = intent.getStringExtra(EXTRA_GROUP_NAME).orEmpty()
         val withVideo = intent.getBooleanExtra(EXTRA_WITH_VIDEO, false)
         val isCaller = intent.getBooleanExtra(EXTRA_IS_CALLER, false)
         sessionId = intent.getIntExtra(EXTRA_SESSION_ID, -1)
@@ -197,6 +200,7 @@ class CallActivity : ComponentActivity() {
                 if (!answered) {
                     RingingScreen(
                         callerName = peerName,
+                        groupName = groupName,
                         hasVideo = withVideo,
                         onAccept = {
                             answered = true
@@ -390,10 +394,16 @@ class CallActivity : ComponentActivity() {
 @Composable
 private fun RingingScreen(
     callerName: String,
+    groupName: String,
     hasVideo: Boolean,
     onAccept: () -> Unit,
     onReject: () -> Unit,
 ) {
+    // Групповой вызов — это сбор, а не звонок одного человека. Раньше экран
+    // был одинаковым, и понять, зовут ли тебя лично или всю группу, можно
+    // было только приняв вызов.
+    val inGroup = groupName.isNotBlank()
+
     Column(
         Modifier
             .fillMaxSize()
@@ -402,14 +412,27 @@ private fun RingingScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        LetterAvatar(0, callerName, 96.dp)
+        LetterAvatar(0, if (inGroup) groupName else callerName, 96.dp)
         Spacer(Modifier.height(20.dp))
         Text(
-            callerName.ifBlank { "Входящий звонок" },
+            if (inGroup) "👥 $groupName" else callerName.ifBlank { "Входящий звонок" },
             color = PismoColors.TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold,
         )
+        if (inGroup) {
+            // Кто именно позвал — вторым планом: в группе это важно знать, но
+            // главное здесь сама группа.
+            Text(
+                callerName.ifBlank { "Кто-то" } + " зовёт в группу",
+                color = PismoColors.TextSecondary, fontSize = 15.sp,
+            )
+        }
         Text(
-            if (hasVideo) "Входящий видеозвонок" else "Входящий звонок",
+            when {
+                inGroup && hasVideo -> "Групповой видеозвонок"
+                inGroup -> "Групповой звонок"
+                hasVideo -> "Входящий видеозвонок"
+                else -> "Входящий звонок"
+            },
             color = PismoColors.TextMuted, fontSize = 14.sp,
         )
         Spacer(Modifier.height(48.dp))

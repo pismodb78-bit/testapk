@@ -39,6 +39,7 @@ object CallNotifier {
             putExtra(CallActivity.EXTRA_PEER_ID, call.callerId)
             putExtra(CallActivity.EXTRA_GROUP_ID, call.groupId ?: -1)
             putExtra(CallActivity.EXTRA_PEER_NAME, call.callerName)
+            putExtra(CallActivity.EXTRA_GROUP_NAME, call.groupName)
             putExtra(CallActivity.EXTRA_WITH_VIDEO, call.hasVideo)
             putExtra(CallActivity.EXTRA_IS_CALLER, false)
             putExtra(CallActivity.EXTRA_RINGING, true)
@@ -49,10 +50,22 @@ object CallNotifier {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // Групповой вызов — это сбор, а не звонок одного человека. В шторке
+        // это тем более важно: раньше «Иванов · Входящий звонок» одинаково
+        // означало и личный вызов, и зов всей группы.
+        val inGroup = call.groupName.isNotBlank()
+        val title = if (inGroup) "👥 " + call.groupName else call.callerName
+        val text = when {
+            inGroup && call.hasVideo -> call.callerName + " зовёт в групповой видеозвонок"
+            inGroup -> call.callerName + " зовёт в групповой звонок"
+            call.hasVideo -> "Входящий видеозвонок"
+            else -> "Входящий звонок"
+        }
+
         val builder = NotificationCompat.Builder(context, Notifications.CHANNEL_CALLS)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(call.callerName)
-            .setContentText(if (call.hasVideo) "Входящий видеозвонок" else "Входящий звонок")
+            .setContentTitle(title)
+            .setContentText(text)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setOngoing(true)
@@ -89,6 +102,7 @@ object CallNotifier {
             putExtra(CallActivity.EXTRA_PEER_ID, call.callerId)
             putExtra(CallActivity.EXTRA_GROUP_ID, call.groupId ?: -1)
             putExtra(CallActivity.EXTRA_PEER_NAME, call.callerName)
+            putExtra(CallActivity.EXTRA_GROUP_NAME, call.groupName)
             putExtra(CallActivity.EXTRA_WITH_VIDEO, call.hasVideo)
             putExtra(CallActivity.EXTRA_IS_CALLER, false)
             putExtra(CallActivity.EXTRA_ACCEPT_NOW, true)

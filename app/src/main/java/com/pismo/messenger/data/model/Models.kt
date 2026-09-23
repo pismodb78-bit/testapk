@@ -187,6 +187,8 @@ data class CallSessionRow(
     val groupId: Int?,
     val status: String,
     val hasVideo: Boolean,
+    /** Название группы для группового вызова. Для личного пусто. */
+    val groupName: String = "",
 )
 
 // ── Прочее ─────────────────────────────────────────────────────────────

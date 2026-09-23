@@ -61,9 +61,11 @@ object CallRepository {
         if (me <= 0) return emptyList()
         val sql = """
             SELECT cs.id, cs.caller_id, cs.has_video, cs.group_id, cs.callee_id,
-                   TRIM(CONCAT(u.Name,' ',u.Surname)) AS caller_name, u.login
+                   TRIM(CONCAT(u.Name,' ',u.Surname)) AS caller_name, u.login,
+                   COALESCE(gc.name, '') AS group_name
             FROM call_sessions cs
             JOIN users u ON u.id = cs.caller_id
+            LEFT JOIN group_chats gc ON gc.id = cs.group_id
             LEFT JOIN group_members gm ON gm.group_id = cs.group_id AND gm.user_id = ?
             WHERE (cs.callee_id = ? OR gm.user_id = ?)
               AND cs.status = 'ringing'
@@ -88,6 +90,7 @@ object CallRepository {
                     groupId = rs.getInt("group_id").takeIf { !rs.wasNull() },
                     status = "ringing",
                     hasVideo = rs.bool("has_video"),
+                    groupName = rs.str("group_name"),
                 )
             }
         }.getOrDefault(emptyList())
@@ -106,9 +109,11 @@ object CallRepository {
         if (sessionId <= 0) return null
         val sql = """
             SELECT cs.id, cs.caller_id, cs.has_video, cs.group_id, cs.callee_id,
-                   TRIM(CONCAT(u.Name,' ',u.Surname)) AS caller_name, u.login
+                   TRIM(CONCAT(u.Name,' ',u.Surname)) AS caller_name, u.login,
+                   COALESCE(gc.name, '') AS group_name
             FROM call_sessions cs
             JOIN users u ON u.id = cs.caller_id
+            LEFT JOIN group_chats gc ON gc.id = cs.group_id
             WHERE cs.id = ? AND cs.status = 'ringing'
               -- Звонящий должен быть ЖИВ — та же проверка, что в
               -- incomingCalls(). Статус 'ringing' снимает только ответ, отказ
@@ -129,6 +134,7 @@ object CallRepository {
                     groupId = rs.getInt("group_id").takeIf { !rs.wasNull() },
                     status = "ringing",
                     hasVideo = rs.bool("has_video"),
+                    groupName = rs.str("group_name"),
                 )
             }.firstOrNull()
         }.getOrNull()
