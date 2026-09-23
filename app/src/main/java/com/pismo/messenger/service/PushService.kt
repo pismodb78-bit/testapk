@@ -4,7 +4,7 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.PushLog
-import com.pismo.messenger.data.repo.CallRepository
+import com.pismo.messenger.call.IncomingCallMonitor
 import com.pismo.messenger.core.UserSession
 
 /**
@@ -83,16 +83,14 @@ class PushService : FirebaseMessagingService() {
                     PushLog.add("  пропущено: в push нет номера звонка")
                     return
                 }
-                val call = runCatching {
-                    kotlinx.coroutines.runBlocking { CallRepository.incomingCall(callId) }
-                }.getOrNull()
-                if (call == null) {
-                    // Успели ответить или сбросить, пока push шёл.
-                    PushLog.add("  пропущено: звонок $callId уже не звонит")
-                    return
-                }
-                CallNotifier.showIncoming(this, call)
-                PushLog.add("  показано: звонок $callId от ${call.callerName}")
+                // Через монитор, а НЕ напрямую: у него есть защиты, которых
+                // здесь быть не должно во второй раз — «уже идёт разговор»,
+                // «этот вызов уже показывали», заглушённые и запреты на
+                // вызовы. Прямой показ поднимал карточку поверх разговора и
+                // по второму разу на тот же вызов.
+                val why = IncomingCallMonitor.onPush(this, callId)
+                if (why.isEmpty()) PushLog.add("  показано: звонок $callId")
+                else PushLog.add("  пропущено: $why")
             }
             "channel" -> {
                 val cid = data["channel"]?.toIntOrNull() ?: 0

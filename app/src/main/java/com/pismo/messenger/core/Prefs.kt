@@ -208,6 +208,28 @@ object Prefs {
      * человек включает фоновую проверку обратно, а приложение при следующем
      * запуске снова её гасит.
      */
+    /**
+     * Запомнить, что карточку этого вызова уже показывали.
+     *
+     * @return true, если вызов новый и показывать НАДО; false, если его уже
+     *         показывали.
+     *
+     * Список в памяти здесь не годится: push поднимает выгруженное
+     * приложение заново, и память каждый раз пуста — то есть защиты нет
+     * ровно там, где она нужна. Держим последние два десятка: больше незачем,
+     * старые вызовы всё равно отсеет проверка «ещё звонит».
+     */
+    @Synchronized
+    fun rememberShownCall(callId: Int): Boolean {
+        if (callId <= 0) return false
+        val seen = sp.getString("shown_calls", "").orEmpty()
+            .split(',').mapNotNull { it.trim().toIntOrNull() }
+        if (callId in seen) return false
+        val kept = (seen + callId).takeLast(20)
+        sp.edit().putString("shown_calls", kept.joinToString(",")).apply()
+        return true
+    }
+
     var pushTookOver: Boolean
         get() = sp.getBoolean("push_took_over", false)
         set(v) = sp.edit().putBoolean("push_took_over", v).apply()

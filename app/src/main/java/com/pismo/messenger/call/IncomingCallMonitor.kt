@@ -136,6 +136,40 @@ object IncomingCallMonitor {
         }
     }
 
+    /**
+     * Звонок пришёл push'ем — приложение было выгружено.
+     *
+     * Идёт через ТЕ ЖЕ ворота, что и опрос, и это главное. Прямой показ в
+     * обход них поднимал карточку поверх уже идущего разговора и по второму
+     * разу на тот же вызов: звонящий нажимает «позвонить» несколько раз, на
+     * каждое нажатие заводится своя строка вызова, и каждая приходит своим
+     * push'ем. С той стороны это выглядит так, будто трубку невозможно снять.
+     *
+     * Отметка о показанных переживает перезапуск процесса: push поднимает
+     * приложение заново, и список в памяти каждый раз был бы пуст — то есть
+     * не защищал бы ровно в том случае, ради которого нужен.
+     */
+    fun onPush(context: Context, callId: Int): String {
+        if (callId <= 0) return "нет номера звонка"
+        if (inCall) return "уже идёт разговор"
+        if (_incoming.value != null) return "уже звонит другой вызов"
+        if (!Prefs.rememberShownCall(callId)) return "этот вызов уже показывали"
+        shownCallIds.add(callId)
+
+        val call = runCatching {
+            kotlinx.coroutines.runBlocking { CallRepository.incomingCall(callId) }
+        }.getOrNull() ?: return "вызов уже не звонит"
+
+        if (Prefs.isUserIgnored(call.callerId)) return "звонящий заглушён"
+        if (Prefs.isCallBlocked(call.callerId)) return "от звонящего не принимаем вызовы"
+        val gid = call.groupId ?: 0
+        if (gid > 0 && Prefs.isCallBlocked(Prefs.callGroupKey(gid))) return "от группы не принимаем вызовы"
+
+        _incoming.value = call
+        CallNotifier.showIncoming(context.applicationContext, call)
+        return ""
+    }
+
     /** Пользователь принял звонок (из окна или из уведомления). */
     fun accepted(context: Context, call: CallSessionRow) {
         _incoming.value = null

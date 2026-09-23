@@ -110,6 +110,13 @@ object CallRepository {
             FROM call_sessions cs
             JOIN users u ON u.id = cs.caller_id
             WHERE cs.id = ? AND cs.status = 'ringing'
+              -- Звонящий должен быть ЖИВ — та же проверка, что в
+              -- incomingCalls(). Статус 'ringing' снимает только ответ, отказ
+              -- или штатное завершение: если у звонящего упало приложение или
+              -- пропала сеть, строка остаётся в базе навсегда, и телефон
+              -- звонил бы по вызову, которого давно нет.
+              AND u.last_seen IS NOT NULL
+              AND TIMESTAMPDIFF(SECOND, u.last_seen, NOW()) <= 60
         """.trimIndent()
 
         return runCatching {
