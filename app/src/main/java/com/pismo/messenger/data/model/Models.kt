@@ -296,7 +296,11 @@ private fun seenStamp(secondsAgo: Int): String {
     val pattern =
         if (at.get(java.util.Calendar.YEAR) == now.get(java.util.Calendar.YEAR)) "dd.MM 'в' HH:mm"
         else "dd.MM.yyyy 'в' HH:mm"
-    return java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault()).format(at.time)
+    // Locale.ROOT, а не системная: на ПК формат строится по инвариантной
+    // культуре, а подписи присутствия у двух клиентов обязаны совпадать
+    // дословно. С системной локалью на экзотических языках сюда приехали бы
+    // другие цифры или другой календарь.
+    return java.text.SimpleDateFormat(pattern, java.util.Locale.ROOT).format(at.time)
 }
 
 private fun humanDur(seconds: Int): String {
