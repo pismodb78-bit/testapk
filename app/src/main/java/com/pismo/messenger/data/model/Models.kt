@@ -270,6 +270,28 @@ fun Presence.headerText(): String = when {
     else -> "● в сети"
 }
 
+/**
+ * Когда человек был в сети — датой и временем.
+ *
+ * Самой метки у нас нет, есть только «сколько секунд назад», и она считана
+ * по часам БАЗЫ. Восстанавливаем метку из неё: ошибка равна расхождению
+ * часов устройства и сервера, а это секунды — для подписи вида «23.09 в
+ * 15:07» незаметно. Зато не приходится тащить timestamp через модель и все
+ * запросы.
+ */
+private fun seenStamp(secondsAgo: Int): String {
+    val at = java.util.Calendar.getInstance().apply {
+        timeInMillis = System.currentTimeMillis() - secondsAgo * 1000L
+    }
+    val now = java.util.Calendar.getInstance()
+    // Год дописываем, только если он не нынешний: в обычном случае он лишний
+    // шум, а на переходе через новый год без него не понять, о чём речь.
+    val pattern =
+        if (at.get(java.util.Calendar.YEAR) == now.get(java.util.Calendar.YEAR)) "dd.MM 'в' HH:mm"
+        else "dd.MM.yyyy 'в' HH:mm"
+    return java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault()).format(at.time)
+}
+
 private fun humanDur(seconds: Int): String {
     if (seconds < 60) return "меньше минуты"
     val m = seconds / 60
@@ -279,11 +301,21 @@ private fun humanDur(seconds: Int): String {
     return "${h / 24} дн"
 }
 
+/**
+ * Дальше этого порога «сколько прошло» перестаёт что-либо значить: важно не
+ * «14 ч назад», а когда именно человек был. Показываем дату и время.
+ */
+private const val SEEN_STAMP_AFTER_SEC = 12 * 60 * 60
+
+/** Заведомо бессмысленный разрыв: last_seen пуст, человек не был в сети никогда. */
+private const val SEEN_NEVER_SEC = 10 * 365 * 24 * 60 * 60
+
 private fun humanAgo(seconds: Int): String {
+    if (seconds >= SEEN_NEVER_SEC) return "давно"
+    if (seconds >= SEEN_STAMP_AFTER_SEC) return seenStamp(seconds)
     if (seconds < 60) return "только что"
     val m = seconds / 60
     if (m < 60) return "$m мин назад"
-    val h = m / 60
-    if (h < 24) return "$h ч назад"
-    return "${h / 24} дн назад"
+    // Дальше двенадцати часов сюда уже не попадают — там дата и время.
+    return "${m / 60} ч назад"
 }
