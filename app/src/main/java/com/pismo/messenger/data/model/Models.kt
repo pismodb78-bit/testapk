@@ -265,10 +265,27 @@ data class PendingAttachment(
  * телефон и компьютер не расходились в том, кто когда «в сети».
  */
 fun Presence.headerText(): String = when {
-    seenAgoSec > Presence.SEEN_OFFLINE_SEC -> "был(а) в сети ${humanAgo(seenAgoSec)}"
+    seenAgoSec > Presence.SEEN_OFFLINE_SEC -> "был(а) в сети ${humanAgo(lastPresentAgoSec())}"
     activeAgoSec > Presence.ACTIVE_IDLE_SEC -> "● бездействует ${humanDur(activeAgoSec)}"
     else -> "● в сети"
 }
+
+/**
+ * Сколько прошло с тех пор, как человек в последний раз БЫЛ, — а не с тех
+ * пор, как в последний раз отчиталось его приложение.
+ *
+ * Разница между этим не косметическая. Свёрнутое приложение шлёт heartbeat,
+ * пока живо, и last_seen обновляется всю ночь, пока владелец спит. Когда
+ * Android наконец выгружает процесс, человек показывается как «был в сети
+ * 4 минуты назад» — ровно на столько его приложение пережило хозяина. А в
+ * базе при этом видно правду: last_active шестнадцатичасовой давности.
+ *
+ * Поэтому для «был в сети» берём последнюю НАСТОЯЩУЮ активность. Она всегда
+ * не свежее heartbeat, так что хуже не станет; а если её нет вовсе (пустой
+ * last_active при заполненном last_seen), возвращаемся к heartbeat.
+ */
+private fun Presence.lastPresentAgoSec(): Int =
+    if (activeAgoSec > seenAgoSec && activeAgoSec < SEEN_NEVER_SEC) activeAgoSec else seenAgoSec
 
 /**
  * Когда человек был в сети — датой и временем.
