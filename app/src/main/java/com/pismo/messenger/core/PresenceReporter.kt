@@ -46,6 +46,22 @@ object PresenceReporter {
     /** Сколько активити сейчас на экране. Больше нуля — приложение видно. */
     @Volatile private var startedActivities = 0
 
+    /**
+     * Показывалось ли окно приложения хоть раз за жизнь ЭТОГО процесса.
+     *
+     * Процесс поднимает не только человек — его будит push, чтобы показать
+     * уведомление. Там всё выглядит как обычный запуск: подготовка приложения
+     * отрабатывает, вход в аккаунт восстанавливается, и heartbeat начинал
+     * писать last_seen. В итоге спящий человек показывался остальным как
+     * заходивший четыре минуты назад: last_seen свежий, а last_active —
+     * шестнадцатичасовой давности.
+     *
+     * Присутствие должно означать «человек здесь», а не «процесс существует».
+     * Свёрнутое приложение по-прежнему шлёт last_seen — но только если его
+     * открывал человек.
+     */
+    @Volatile private var everForeground = false
+
     /** Взводится звонком: разговор — это активность, даже со свёрнутым окном. */
     @Volatile var inCall: Boolean = false
 
@@ -104,7 +120,10 @@ object PresenceReporter {
         if (job?.isActive == true) return
 
         app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
-            override fun onActivityStarted(activity: Activity) { startedActivities++ }
+            override fun onActivityStarted(activity: Activity) {
+                startedActivities++
+                everForeground = true
+            }
             override fun onActivityStopped(activity: Activity) {
                 if (startedActivities > 0) startedActivities--
             }
@@ -126,7 +145,7 @@ object PresenceReporter {
 
         job = CoroutineScope(Dispatchers.IO).launch {
             while (isActive) {
-                if (UserSession.effectiveId > 0) {
+                if (everForeground && UserSession.effectiveId > 0) {
                     val idle = idleSeconds()
                     announce(idle)
                     runCatching { PresenceRepository.heartbeat(idle) }
