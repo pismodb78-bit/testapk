@@ -41,6 +41,23 @@ object PresenceReporter {
     /** Тот же период, что у _presenceTimer на ПК. */
     private const val TICK_MS = 6000L
 
+    /**
+     * Сколько после сворачивания приложение ещё считается «на связи».
+     *
+     * Отметка «в сети» не может опираться на то, что ПРОЦЕСС жив: на Android
+     * процесс существует сам по себе. Его будит система, поднимает push,
+     * оживляет окно пробуждения в глубоком сне — и каждый такой вздох писал
+     * «я в сети», пока хозяин спал. В базе это видно прямо: last_seen
+     * подскакивает раз в несколько минут, а last_active шестнадцатичасовой
+     * давности.
+     *
+     * Поэтому отмечаемся, пока окно на экране или идёт разговор, плюс эта
+     * отсрочка. Десять минут — чтобы переключение в браузер и обратно не
+     * выбрасывало человека из сети; дальше присутствие становится догадкой,
+     * а догадка, выданная за факт, и есть то, что вводит в заблуждение.
+     */
+    private const val BACKGROUND_GRACE_SEC = 10 * 60
+
     private var job: Job? = null
 
     /** Сколько активити сейчас на экране. Больше нуля — приложение видно. */
@@ -144,11 +161,23 @@ object PresenceReporter {
         }
 
         job = CoroutineScope(Dispatchers.IO).launch {
+            var reporting = false
             while (isActive) {
                 if (everForeground && UserSession.effectiveId > 0) {
                     val idle = idleSeconds()
-                    announce(idle)
-                    runCatching { PresenceRepository.heartbeat(idle) }
+                    // Человек либо здесь, либо свернул приложение только что.
+                    val present = isForeground || inCall || idle <= BACKGROUND_GRACE_SEC
+                    if (present) {
+                        announce(idle)
+                        runCatching { PresenceRepository.heartbeat(idle) }
+                        reporting = true
+                    } else if (reporting) {
+                        // Отсрочка вышла. Говорим «не в сети» ОДИН раз, вслух:
+                        // иначе собеседник ждал бы, пока протухнет последняя
+                        // отметка, и всё это время видел бы нас в сети.
+                        reporting = false
+                        announceOffline()
+                    }
                 }
                 delay(TICK_MS)
             }
