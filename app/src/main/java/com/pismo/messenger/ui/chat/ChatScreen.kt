@@ -724,11 +724,18 @@ fun ChatScreen(
                     val isImage = com.pismo.messenger.core.isImageName(name) ||
                             com.pismo.messenger.core.isGifName(name)
 
+                    // Картинку приводим к формату, который прочтут все клиенты.
+                    // Телефон открывает WebP и HEIC сам, а ПК — нет, и там она
+                    // превращалась в «Не удалось загрузить изображение».
+                    val (outBytes, outName) =
+                        if (isImage) com.pismo.messenger.core.toPortableImage(bytes, name)
+                        else bytes to name
+
                     // Файл НЕ отправляем сразу. На ПК вложение сначала
                     // прикрепляется, к нему можно дописать текст, и уходит всё
                     // одним сообщением; здесь же получалось два — сначала файл,
                     // потом отдельно подпись.
-                    added += PendingFile(bytes = bytes, fileName = name, isImage = isImage)
+                    added += PendingFile(bytes = outBytes, fileName = outName, isImage = isImage)
                 }
             }
             if (added.isNotEmpty()) pending = pending + added

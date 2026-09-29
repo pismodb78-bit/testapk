@@ -109,6 +109,68 @@ fun isGif(data: ByteArray?): Boolean =
     data != null && data.size >= 3 &&
             data[0] == 0x47.toByte() && data[1] == 0x49.toByte() && data[2] == 0x46.toByte()
 
+/**
+ * Картинка в формате, который прочтут ВСЕ клиенты.
+ *
+ * Определяем по сигнатуре файла, а не по расширению: расширение врёт легко —
+ * галерея отдаёт «.jpg», внутри которого лежит WebP.
+ */
+fun isPortableImage(data: ByteArray?): Boolean {
+    if (data == null || data.size < 4) return false
+    fun at(i: Int) = data[i].toInt() and 0xFF
+    return when {
+        at(0) == 0x89 && at(1) == 0x50 && at(2) == 0x4E && at(3) == 0x47 -> true  // PNG
+        at(0) == 0xFF && at(1) == 0xD8 && at(2) == 0xFF -> true                   // JPEG
+        at(0) == 0x47 && at(1) == 0x49 && at(2) == 0x46 -> true                   // GIF
+        at(0) == 0x42 && at(1) == 0x4D -> true                                    // BMP
+        else -> false
+    }
+}
+
+/**
+ * Приводит картинку к формату, который прочтут все клиенты.
+ *
+ * ЗАЧЕМ. Телефон декодирует WebP, HEIC и AVIF штатно, а ПК рисует картинки
+ * через GDI+ — тот знает только BMP, GIF, JPEG, PNG и TIFF. Отправленный с
+ * телефона WebP превращался на компьютере в «Не удалось загрузить
+ * изображение», хотя на самом телефоне открывался как ни в чём не бывало.
+ *
+ * Уже универсальное не трогаем: перекодирование стоит качества и времени, а
+ * не даёт ничего. GIF сюда тоже не попадает — и хорошо, иначе от анимации
+ * остался бы один кадр.
+ *
+ * Остальное пересобираем: в PNG, если есть прозрачность — JPEG её потеряет
+ * и зальёт чёрным, — иначе в JPEG, который для фотографии в разы меньше.
+ *
+ * Не смогли разобрать — отдаём как было. Пусть лучше не покажется на ПК,
+ * чем потеряется совсем.
+ */
+fun toPortableImage(data: ByteArray, fileName: String?): Pair<ByteArray, String> {
+    val name = fileName.orEmpty().ifBlank { "image" }
+    if (isPortableImage(data)) return data to name
+
+    val bmp = runCatching {
+        android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size)
+    }.getOrNull() ?: return data to name
+
+    return runCatching {
+        val out = java.io.ByteArrayOutputStream(data.size)
+        val png = bmp.hasAlpha()
+        if (png) bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+        else bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, out)
+        val converted = out.toByteArray()
+        if (converted.isEmpty()) data to name
+        else converted to withExt(name, if (png) "png" else "jpg")
+    }.getOrDefault(data to name).also { runCatching { bmp.recycle() } }
+}
+
+/** Меняет расширение имени файла, сохраняя основу. */
+private fun withExt(fileName: String, ext: String): String {
+    val dot = fileName.lastIndexOf('.')
+    val base = if (dot > 0) fileName.substring(0, dot) else fileName
+    return "$base.$ext"
+}
+
 fun isImageName(fileName: String?): Boolean =
     fileExt(fileName) in setOf("jpg", "jpeg", "png", "bmp", "webp")
 

@@ -426,9 +426,16 @@ fun ChannelChatScreen(
                         ?: return@runCatching
                     if (used + bytes.size > MAX_ATTACH_BYTES) { tooBig += name; return@runCatching }
                     used += bytes.size
+                    val isImg = com.pismo.messenger.core.isImageName(name) ||
+                            com.pismo.messenger.core.isGifName(name)
+                    // Тот же перевод в универсальный формат, что и в переписке:
+                    // WebP с телефона на ПК не открывался.
+                    val (outBytes, outName) =
+                        if (isImg) com.pismo.messenger.core.toPortableImage(bytes, name)
+                        else bytes to name
                     added += PendingFile(
-                        bytes = bytes,
-                        fileName = name,
+                        bytes = outBytes,
+                        fileName = outName,
                         isImage = com.pismo.messenger.core.isImageName(name) ||
                                 com.pismo.messenger.core.isGifName(name),
                     )
