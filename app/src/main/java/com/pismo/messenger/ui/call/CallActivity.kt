@@ -68,6 +68,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -494,6 +495,12 @@ private fun RingingScreen(
     }
 }
 
+/**
+ * Сколько ждём второго участника в личном звонке, прежде чем положить трубку.
+ * Три минуты — ровно столько же, сколько на ПК.
+ */
+private const val WAIT_FOR_PEER_SEC = 180
+
 @Composable
 private fun CallScreen(
     engine: CallEngine,
@@ -554,6 +561,30 @@ private fun CallScreen(
         // сидеть в пустой комнате.
         delay(2000)
         if (!engine.hasRemote) onHangup()
+    }
+
+    // Личный звонок, на который не ответили, не висит вечно.
+    //
+    // Порт трёхминутного таймера с ПК (CallForm.Designer.cs, условие
+    // _groupId < 0): там звонок в личке кладётся сам, если второй участник не
+    // присоединился. Здесь этого не было — окно ждало сколько угодно, и
+    // забытый вызов держал и микрофон, и комнату.
+    //
+    // Групп и голосовых каналов не касается, как и на ПК: там сидеть одному в
+    // ожидании остальных — обычное дело.
+    var waitLeftSec by remember { mutableIntStateOf(WAIT_FOR_PEER_SEC) }
+    LaunchedEffect(personalCall, hasRemote) {
+        // Собеседник зашёл — отсчёт снимаем. Если он потом уйдёт, трубку
+        // положит соседний эффект, и ждать его ещё три минуты незачем.
+        if (!personalCall || hasRemote || peerWasHere) {
+            waitLeftSec = WAIT_FOR_PEER_SEC
+            return@LaunchedEffect
+        }
+        while (isActive && waitLeftSec > 0) {
+            delay(1000)
+            waitLeftSec--
+        }
+        if (waitLeftSec <= 0) onHangup()
     }
 
     var showShareOptions by remember { mutableStateOf(false) }
@@ -670,7 +701,11 @@ private fun CallScreen(
                     // звонков, см. CallForm.Designer.cs, условие _groupId < 0).
                     // Групповой звонок — то же самое.
                     when {
-                        personalCall && participants.size <= 1 -> "Ожидание собеседника…"
+                        // С отсчётом, как на ПК: человек должен видеть, что
+                        // ожидание конечно, а не гадать, почему трубка вдруг
+                        // легла сама.
+                        personalCall && participants.size <= 1 ->
+                            "Ожидание собеседника… (${formatDuration(waitLeftSec.toLong())})"
                         participants.size <= 1 -> formatDuration(elapsed)
                         else -> "В звонке: ${participants.size} · ${formatDuration(elapsed)}"
                     }
