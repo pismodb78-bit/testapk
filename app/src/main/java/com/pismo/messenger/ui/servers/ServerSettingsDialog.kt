@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -20,17 +21,19 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.pismo.messenger.data.ServerMemory
 import com.pismo.messenger.data.model.ServerPermissions
 import com.pismo.messenger.data.repo.ServerRepository
@@ -70,13 +73,15 @@ fun ServerSettingsDialog(
     var confirmNewId by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf("") }
 
-    // Оформление: цвет значка и сама картинка. picture — локальная копия
-    // факта «картинка есть», чтобы значок в диалоге менялся сразу, не
-    // дожидаясь, пока обновится список серверов.
+    // Оформление до записи. У окна есть «Готово» и «Отмена», и если часть
+    // правок применяется мимо них, кнопки обманывают: «Отмена» уже ничего не
+    // отменяет. Поэтому выбранное держим здесь и пишем всё разом по «Готово».
     var color by remember(serverId) { mutableStateOf(avatarColor) }
-    var picture by remember(serverId) { mutableStateOf(hasAvatar) }
-    var look by remember(serverId) { mutableIntStateOf(0) }
+    var pendingPng by remember(serverId) { mutableStateOf<ByteArray?>(null) }
+    var dropPicture by remember(serverId) { mutableStateOf(false) }
     var cropUri by remember { mutableStateOf<Uri?>(null) }
+
+    val picture = pendingPng != null || (hasAvatar && !dropPicture)
 
     // Выбранный файл сначала идёт в обрезку — значок квадратный и мелкий,
     // заливать в базу оригинал с камеры незачем: его потом тянет каждый
@@ -91,14 +96,9 @@ fun ServerSettingsDialog(
             onCancel = { cropUri = null },
             onDone = { png ->
                 cropUri = null
-                scope.launch {
-                    if (ServerRepository.setServerLook(serverId, png, null)) {
-                        picture = true
-                        look++
-                        note = "Значок сервера обновлён."
-                        onChanged()
-                    } else note = "Не удалось сохранить: в базе нет колонок значка (нужна миграция)."
-                }
+                pendingPng = png
+                dropPicture = false
+                note = ""
             },
         )
         return
@@ -183,15 +183,29 @@ fun ServerSettingsDialog(
                 if (perms.isAdminLike) {
                     Spacer(Modifier.height(6.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        ServerAvatar(
-                            serverId = serverId,
-                            name = name.ifBlank { serverName },
-                            colorHex = color,
-                            hasAvatar = picture,
-                            size = 56.dp,
-                            shape = RoundedCornerShape(18.dp),
-                            version = look,
-                        )
+                        val chosen = pendingPng
+                        if (chosen != null) {
+                            // Только что выбранная картинка ещё не в базе —
+                            // показываем её из памяти, иначе до «Готово» была
+                            // бы видна прежняя.
+                            AsyncImage(
+                                model = chosen,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(RoundedCornerShape(18.dp)),
+                            )
+                        } else {
+                            ServerAvatar(
+                                serverId = serverId,
+                                name = name.ifBlank { serverName },
+                                colorHex = color,
+                                hasAvatar = hasAvatar && !dropPicture,
+                                size = 56.dp,
+                                shape = RoundedCornerShape(18.dp),
+                            )
+                        }
                         Spacer(Modifier.width(12.dp))
                         Column {
                             TextButton(onClick = { picker.launch("image/*") }) {
@@ -202,14 +216,9 @@ fun ServerSettingsDialog(
                             }
                             if (picture) {
                                 TextButton(onClick = {
-                                    scope.launch {
-                                        if (ServerRepository.clearServerAvatar(serverId)) {
-                                            picture = false
-                                            look++
-                                            note = "Картинка убрана."
-                                            onChanged()
-                                        } else note = "Не удалось убрать картинку — база не приняла запись."
-                                    }
+                                    pendingPng = null
+                                    dropPicture = true
+                                    note = ""
                                 }) {
                                     Text(
                                         "Убрать картинку",
@@ -228,22 +237,10 @@ fun ServerSettingsDialog(
                     Spacer(Modifier.height(6.dp))
                     ColorPalettePicker(
                         selected = color,
-                        onPick = { hex ->
-                            color = hex
-                            scope.launch {
-                                ServerRepository.setServerLook(serverId, null, hex)
-                                onChanged()
-                            }
-                        },
+                        onPick = { hex -> color = hex },
                     )
                     if (color.isNotBlank()) {
-                        TextButton(onClick = {
-                            color = ""
-                            scope.launch {
-                                ServerRepository.setServerLook(serverId, null, "")
-                                onChanged()
-                            }
-                        }) {
+                        TextButton(onClick = { color = "" }) {
                             Text(
                                 "Цвет по умолчанию",
                                 color = PismoColors.TextMuted, fontSize = 13.sp,
@@ -305,13 +302,28 @@ fun ServerSettingsDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                if (perms.isAdminLike && name.isNotBlank() && name != serverName) {
-                    scope.launch {
-                        ServerRepository.renameServer(serverId, name)
-                        onChanged()
-                        onDismiss()
+                scope.launch {
+                    val renamed = perms.isAdminLike && name.isNotBlank() && name != serverName
+                    val recolored = perms.isAdminLike && color != avatarColor
+                    val repictured = perms.isAdminLike && (pendingPng != null || dropPicture)
+
+                    if (renamed) ServerRepository.renameServer(serverId, name)
+
+                    // Цвет и картинка — одна и та же запись в servers; null
+                    // в картинке означает «убрать», поэтому разводим случаи.
+                    var ok = true
+                    if (recolored) ok = ServerRepository.setServerLook(serverId, null, color) && ok
+                    val png = pendingPng
+                    if (png != null) ok = ServerRepository.setServerLook(serverId, png, null) && ok
+                    else if (dropPicture) ok = ServerRepository.clearServerAvatar(serverId) && ok
+
+                    if (!ok) {
+                        note = "Не удалось сохранить значок: в базе нет его колонок (нужна миграция)."
+                        return@launch
                     }
-                } else onDismiss()
+                    if (renamed || recolored || repictured) onChanged()
+                    onDismiss()
+                }
             }) { Text("Готово", color = PismoColors.Cyan) }
         },
         dismissButton = {
