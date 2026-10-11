@@ -127,6 +127,18 @@ fun ServersScreen(
 
     suspend fun reloadChannels() {
         val s = selected ?: return
+
+        // Страховка на случай, когда событие об исключении не дошло: его
+        // некому было принять, если в тот момент приложение было закрыто.
+        // Спрашиваем базу при каждом заходе на сервер — это один лёгкий
+        // запрос, зато выгнанный не увидит ни каналов, ни сообщений.
+        if (!ServerRepository.stillMember(s.id)) {
+            selected = null
+            error = "Вас больше нет на этом сервере."
+            reloadServers()
+            return
+        }
+
         ServerMemory.putSelected(s.id)
 
         // Пока едут свежие каналы, показываем запомненные — но именно ЭТОГО
@@ -165,9 +177,24 @@ fun ServersScreen(
 
     // Чужие правки каналов раньше доезжали только к следующему опросу.
     DisposableEffect(Unit) {
-        val listener: (String, Int, Int, String) -> Unit = { type, _, session, _ ->
+        val listener: (String, Int, Int, String) -> Unit = { type, _, session, payload ->
             if (type == "channels_changed" && session == selected?.id) {
                 scope.launch { reloadChannels() }
+            }
+            // Меня выгнали с сервера. Релей шлёт это адресно, так что дошло —
+            // значит про меня.
+            //
+            // Раньше узнать об этом было неоткуда: список серверов берётся из
+            // базы при загрузке вкладки, а у открытого приложения такой
+            // загрузки не случается. Человек продолжал читать и писать там,
+            // откуда его выгнали.
+            if (type == "server_kick") {
+                scope.launch {
+                    if (selected?.id == session) selected = null
+                    error = if (payload == "ban") "Вас забанили на этом сервере."
+                            else "Вас исключили с этого сервера."
+                    reloadServers()
+                }
             }
         }
         SignalingClient.addListener(listener)
@@ -370,6 +397,16 @@ fun ServersScreen(
                             onJoin = {
                                 // Лимит вместимости (миграция 14): 0 — без ограничения.
                                 scope.launch {
+                                    // Проверяем перед самым входом, а не в
+                                    // heartbeat'е: тот бьётся каждые несколько
+                                    // секунд, и запрос к базе на каждый удар
+                                    // стоил бы дороже, чем даёт.
+                                    if (!ServerRepository.stillMember(s.id)) {
+                                        selected = null
+                                        error = "Вас больше нет на этом сервере."
+                                        reloadServers()
+                                        return@launch
+                                    }
                                     val already = PresenceRepository.amIInChannel(ch.id)
                                     val count = PresenceRepository.voiceCount(ch.id)
                                     if (ch.userLimit > 0 && !already && count >= ch.userLimit) {

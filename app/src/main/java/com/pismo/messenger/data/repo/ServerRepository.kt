@@ -3,6 +3,7 @@ package com.pismo.messenger.data.repo
 import com.pismo.messenger.core.Crypto
 import com.pismo.messenger.core.MessagePreview
 import com.pismo.messenger.core.UserSession
+import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.data.MediaCache
 import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.data.db.bool
@@ -363,6 +364,11 @@ object ServerRepository {
         onRowCreated: ((Int) -> Unit)? = null,
         onProgress: ((Float) -> Unit)? = null,
     ): Int {
+        // Заслон стоит ЗДЕСЬ, а не в экране: писать можно текстом, голосовым,
+        // вложением и пересылкой — через экран это четыре разные ветки, а
+        // через отправителя одна, и обойти её нечем.
+        if (!canPostToChannel(channelId)) return 0
+
         val me = UserSession.effectiveId
         val enc = Crypto.enc(text)
         if (hasReplyCol == null) hasReplyCol = columnExists("server_messages", "reply_to_id")
@@ -602,7 +608,43 @@ object ServerRepository {
                 Db.exec("INSERT IGNORE INTO server_bans (server_id,user_id) VALUES (?,?)", serverId, userId)
             }
         }
+        // Говорим изгнанному сразу.
+        //
+        // Из базы он бы узнал об этом только при следующей загрузке списка
+        // серверов — то есть у открытого приложения никогда. Человек
+        // продолжал читать и писать на сервере, с которого его выгнали, и
+        // заходить в голосовые каналы.
+        runCatching {
+            SignalingClient.send("server_kick", userId, serverId, if (alsoBan) "ban" else "kick")
+        }
     }
+
+    /**
+     * Можно ли мне писать в этот канал: состою ли я ещё на его сервере.
+     *
+     * Спрашиваем по каналу, потому что отправитель знает только его номер.
+     */
+    private suspend fun canPostToChannel(channelId: Int): Boolean {
+        val serverId = runCatching {
+            Db.scalarInt("SELECT server_id FROM server_channels WHERE id=?", channelId)
+        }.getOrDefault(0)
+        if (serverId <= 0) return true   // канал не нашёлся — не нам решать
+        return stillMember(serverId)
+    }
+
+    /**
+     * Остаюсь ли я участником сервера — и не забанен ли.
+     *
+     * Спрашиваем базу, а не память: состав мог измениться, пока окно открыто,
+     * и единственный надёжный ответ лежит там.
+     */
+    suspend fun stillMember(serverId: Int): Boolean = runCatching {
+        val me = UserSession.effectiveId
+        if (me <= 0) return@runCatching false
+        if (Db.exists("SELECT 1 FROM server_bans WHERE server_id=? AND user_id=?", serverId, me))
+            return@runCatching false
+        Db.exists("SELECT 1 FROM server_members WHERE server_id=? AND user_id=?", serverId, me)
+    }.getOrDefault(true)   // нет связи — не выгоняем себя сами
 
     suspend fun unban(serverId: Int, userId: Int) {
         runCatching { Db.exec("DELETE FROM server_bans WHERE server_id=? AND user_id=?", serverId, userId) }
