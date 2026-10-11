@@ -97,7 +97,7 @@ fun ServerSettingsDialog(
                         look++
                         note = "Значок сервера обновлён."
                         onChanged()
-                    } else note = "Не удалось сохранить значок."
+                    } else note = "Не удалось сохранить: в базе нет колонок значка (нужна миграция)."
                 }
             },
         )
@@ -208,7 +208,7 @@ fun ServerSettingsDialog(
                                             look++
                                             note = "Картинка убрана."
                                             onChanged()
-                                        } else note = "Не удалось убрать картинку."
+                                        } else note = "Не удалось убрать картинку — база не приняла запись."
                                     }
                                 }) {
                                     Text(

@@ -76,24 +76,61 @@ object ServerRepository {
     //  СЕРВЕРЫ
     // ════════════════════════════════════════════════════════════════
 
-    suspend fun myServers(): List<ServerSummary> = Db.query(
-        // Саму картинку НЕ тянем: она тяжёлая, а в списке нужен только факт
-        // её наличия. Иначе каждое обновление вкладки volokло бы из базы
-        // столько мегабайт, сколько серверов.
-        "SELECT s.id, s.name, s.owner_id, " +
-                "COALESCE(s.avatar_color,'') AS avatar_color, " +
-                "(s.avatar_data IS NOT NULL) AS has_avatar " +
-                "FROM servers s " +
-                "JOIN server_members m ON m.server_id=s.id WHERE m.user_id=? ORDER BY s.id",
-        UserSession.effectiveId
-    ) { rs ->
-        ServerSummary(
-            id = rs.getInt("id"),
-            name = rs.str("name"),
-            ownerId = rs.getInt("owner_id"),
-            avatarColor = rs.str("avatar_color"),
-            hasAvatar = rs.bool("has_avatar"),
-        )
+    /**
+     * Есть ли в servers колонки оформления (миграция 24).
+     *
+     * У учётной записи приложения может не быть прав ALTER — на боевом
+     * хостинге так и есть, и схему туда кладёт администратор отдельно. Пока
+     * этого не сделано, спрашивать колонки нельзя: запрос падает целиком, и
+     * человек остаётся БЕЗ СПИСКА СЕРВЕРОВ вообще. Отсюда запасной путь.
+     */
+    @Volatile private var lookColumnsOk = true
+
+    suspend fun myServers(): List<ServerSummary> {
+        if (lookColumnsOk) {
+            val rich = runCatching {
+                Db.query(
+                    // Саму картинку НЕ тянем: она тяжёлая, а в списке нужен
+                    // только факт её наличия. Иначе каждое обновление вкладки
+                    // волокло бы из базы столько мегабайт, сколько серверов.
+                    "SELECT s.id, s.name, s.owner_id, " +
+                            "COALESCE(s.avatar_color,'') AS avatar_color, " +
+                            "(s.avatar_data IS NOT NULL) AS has_avatar " +
+                            "FROM servers s " +
+                            "JOIN server_members m ON m.server_id=s.id " +
+                            "WHERE m.user_id=? ORDER BY s.id",
+                    UserSession.effectiveId
+                ) { rs ->
+                    ServerSummary(
+                        id = rs.getInt("id"),
+                        name = rs.str("name"),
+                        ownerId = rs.getInt("owner_id"),
+                        avatarColor = rs.str("avatar_color"),
+                        hasAvatar = rs.bool("has_avatar"),
+                    )
+                }
+            }
+            rich.onSuccess { return it }
+            // Нет колонки — больше не спрашиваем. Любая другая беда (нет
+            // связи) пусть идёт наверх как раньше: список серверов без связи
+            // и не должен подменяться пустым.
+            val e = rich.exceptionOrNull()
+            if (e?.message?.contains("Unknown column", true) != true) throw e!!
+            lookColumnsOk = false
+        }
+
+        return Db.query(
+            "SELECT s.id, s.name, s.owner_id FROM servers s " +
+                    "JOIN server_members m ON m.server_id=s.id " +
+                    "WHERE m.user_id=? ORDER BY s.id",
+            UserSession.effectiveId
+        ) { rs ->
+            ServerSummary(
+                id = rs.getInt("id"),
+                name = rs.str("name"),
+                ownerId = rs.getInt("owner_id"),
+            )
+        }
     }
 
     /**
@@ -153,9 +190,11 @@ object ServerRepository {
                 val (portable, _) = com.pismo.messenger.core.toPortableImage(avatar, "server")
                 Db.exec("UPDATE servers SET avatar_data=? WHERE id=?", portable, serverId)
                 rememberLook(serverId, portable)
+                lookColumnsOk = true
             }
             if (color != null) {
                 Db.exec("UPDATE servers SET avatar_color=? WHERE id=?", color, serverId)
+                lookColumnsOk = true
             }
             true
         }.getOrDefault(false)
