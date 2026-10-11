@@ -98,6 +98,18 @@ class MainActivity : ComponentActivity() {
                 // где его не повесили руками.
                 com.pismo.messenger.ui.call.IncomingCallDialog()
 
+                // Сообщение о бане — тоже в корне и по той же причине:
+                // выгнать могут на любом экране, в том числе из канала,
+                // который человек в этот момент читает.
+                com.pismo.messenger.ui.servers.ServerKickDialog(
+                    onLeaveServerScreens = {
+                        val route = navController.currentDestination?.route.orEmpty()
+                        if (route.startsWith("channel/") || route.startsWith("members/")) {
+                            navController.popBackStack(Routes.CHATS, false)
+                        }
+                    }
+                )
+
                 // Заставка «нет связи» — тоже в корне и тоже вне NavHost:
                 // обрыв случается на любом экране, а перекрывать она должна
                 // всё приложение целиком, как панель ConnectionGuard на ПК.

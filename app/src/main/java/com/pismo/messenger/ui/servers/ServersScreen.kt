@@ -185,7 +185,7 @@ fun ServersScreen(
 
     // Чужие правки каналов раньше доезжали только к следующему опросу.
     DisposableEffect(Unit) {
-        val listener: (String, Int, Int, String) -> Unit = { type, _, session, payload ->
+        val listener: (String, Int, Int, String) -> Unit = { type, _, session, _ ->
             if (type == "channels_changed" && session == selected?.id) {
                 scope.launch { reloadChannels() }
             }
@@ -198,9 +198,11 @@ fun ServersScreen(
             // откуда его выгнали.
             if (type == "server_kick") {
                 scope.launch {
+                    // Сказать об этом — забота окна в корне приложения
+                    // (ServerKickDialog): выгнать могут и с другого экрана.
+                    // Здесь только убираем сервер с глаз.
                     if (selected?.id == session) selected = null
-                    error = if (payload == "ban") "Вас забанили на этом сервере."
-                            else "Вас исключили с этого сервера."
+                    error = ""
                     reloadServers()
                 }
             }
