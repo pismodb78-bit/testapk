@@ -8,7 +8,6 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.net.Uri
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
@@ -33,12 +32,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pismo.messenger.ui.theme.PismoColors
@@ -47,6 +47,7 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /** Итоговая сторона аватара — та же, что OUT в AvatarCropForm.cs. */
 private const val OUT_SIZE = 256
@@ -204,22 +205,37 @@ private fun ImageCropDialog(
                             color = PismoColors.TextMuted, fontSize = 13.sp,
                         )
                         bmp == null -> CircularProgressIndicator(color = PismoColors.Blurple)
-                        else -> Image(
-                            bitmap = bmp.asImageBitmap(),
-                            contentDescription = null,
-                            contentScale = ContentScale.None,
-                            modifier = Modifier.graphicsLayer {
-                                // transformOrigin по умолчанию — центр, а нам
-                                // нужен угол: вся математика выше в координатах
-                                // «левый верхний угол картинки».
-                                transformOrigin = androidx.compose.ui.graphics
-                                    .TransformOrigin(0f, 0f)
-                                scaleX = scale
-                                scaleY = scale
-                                translationX = offX
-                                translationY = offY
-                            },
-                        )
+                        else -> {
+                            // Рисуем сами, а не через Image.
+                            //
+                            // Image кладёт картинку ПО ЦЕНТРУ своей области, и
+                            // наш сдвиг применялся уже к ней — то есть к offX
+                            // незаметно добавлялся ещё один отступ, (ширина
+                            // области − ширина картинки) / 2, да ещё и
+                            // умноженный на масштаб. Из-за него картинка
+                            // съезжала вбок при перетаскивании и при зуме, а
+                            // главное — показанное не совпадало с тем, что
+                            // сохранялось: renderCrop считает от левого
+                            // верхнего угла, честно по offX и offY.
+                            val image = remember(bmp) { bmp.asImageBitmap() }
+                            androidx.compose.foundation.Canvas(
+                                Modifier.matchParentSize()
+                            ) {
+                                drawImage(
+                                    image = image,
+                                    srcOffset = IntOffset.Zero,
+                                    srcSize = IntSize(bmp.width, bmp.height),
+                                    dstOffset = IntOffset(
+                                        offX.roundToInt(), offY.roundToInt()
+                                    ),
+                                    dstSize = IntSize(
+                                        (bmp.width * scale).roundToInt(),
+                                        (bmp.height * scale).roundToInt(),
+                                    ),
+                                    filterQuality = FilterQuality.Medium,
+                                )
+                            }
+                        }
                     }
                 }
 

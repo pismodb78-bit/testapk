@@ -196,6 +196,7 @@ object ServerRepository {
                 Db.exec("UPDATE servers SET avatar_color=? WHERE id=?", color, serverId)
                 lookColumnsOk = true
             }
+            announceLook(serverId)
             true
         }.getOrDefault(false)
 
@@ -203,8 +204,32 @@ object ServerRepository {
     suspend fun clearServerAvatar(serverId: Int): Boolean = runCatching {
         Db.exec("UPDATE servers SET avatar_data=NULL WHERE id=?", serverId)
         rememberLook(serverId, null)
+        announceLook(serverId)
         true
     }.getOrDefault(false)
+
+    /**
+     * Говорит остальным, что сервер сменил вид: название, цвет или картинку.
+     *
+     * Шлём широковещательно (кому = 0), как new_message: участников сервера
+     * клиент не знает, а релей и так разносит это всем, кто в сети. Лишним
+     * адресатам событие ничего не стоит — чужой сервер они просто не найдут
+     * у себя в списке.
+     *
+     * Без этого новый значок доезжал до остальных только когда у них
+     * протухнет картинка в памяти или перезапустится программа.
+     */
+    private fun announceLook(serverId: Int) {
+        runCatching { SignalingClient.send("server_look", 0, serverId, "look") }
+    }
+
+    /** Забыть картинку сервера — её только что сменили у кого-то другого. */
+    fun forgetLook(serverId: Int) {
+        synchronized(lookCache) {
+            lookCache.remove(serverId)
+            lookLoadedAt.remove(serverId)
+        }
+    }
 
     /**
      * Случайный номер сервера.
@@ -301,7 +326,10 @@ object ServerRepository {
     ) { rs -> rs.str("name") to rs.getInt("owner_id") }
 
     suspend fun renameServer(serverId: Int, name: String) {
-        runCatching { Db.exec("UPDATE servers SET name=? WHERE id=?", name.trim(), serverId) }
+        runCatching {
+            Db.exec("UPDATE servers SET name=? WHERE id=?", name.trim(), serverId)
+            announceLook(serverId)
+        }
     }
 
     /**

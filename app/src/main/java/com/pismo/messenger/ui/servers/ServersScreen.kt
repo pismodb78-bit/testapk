@@ -204,6 +204,16 @@ fun ServersScreen(
                     reloadServers()
                 }
             }
+            // Сервер сменил вид: название, цвет или картинку. Событие
+            // широковещательное, поэтому берём только свои серверы — чужие
+            // в списке всё равно не найдутся.
+            if (type == "server_look") {
+                scope.launch {
+                    ServerRepository.forgetLook(session)
+                    serverLook++
+                    reloadServers()
+                }
+            }
         }
         SignalingClient.addListener(listener)
         onDispose { SignalingClient.removeListener(listener) }
@@ -222,12 +232,24 @@ fun ServersScreen(
 
     // Присутствие в голосовых и бейджи обновляются часто — как на ПК.
     LaunchedEffect(selected?.id) {
+        var tick = 0
         while (isActive) {
             delay(5000)
             runCatching {
                 selected?.let { voice = PresenceRepository.voiceForServer(it.id) }
                 badges = ServerRepository.badges()
                 ServerMemory.putBadges(badges)
+
+                // Раз в полминуты перечитываем и сам список серверов.
+                // Событие по сокету могло не дойти — например, его послали,
+                // пока телефон был без сети, — и тогда это единственный
+                // способ узнать про бан, переименование или новый значок.
+                // Счётчик serverLook заставляет значки перечитать картинку,
+                // если она успела протухнуть в памяти.
+                if (++tick % 6 == 0) {
+                    reloadServers()
+                    serverLook++
+                }
             }
         }
     }
