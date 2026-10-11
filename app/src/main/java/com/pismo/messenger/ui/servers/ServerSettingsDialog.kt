@@ -3,18 +3,29 @@ package com.pismo.messenger.ui.servers
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -23,7 +34,10 @@ import androidx.compose.ui.unit.sp
 import com.pismo.messenger.data.ServerMemory
 import com.pismo.messenger.data.model.ServerPermissions
 import com.pismo.messenger.data.repo.ServerRepository
+import com.pismo.messenger.ui.components.ColorPalettePicker
+import com.pismo.messenger.ui.components.ServerAvatar
 import com.pismo.messenger.ui.login.PismoField
+import com.pismo.messenger.ui.profile.AvatarCropDialog
 import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.launch
 
@@ -39,9 +53,12 @@ fun ServerSettingsDialog(
     serverId: Int,
     serverName: String,
     perms: ServerPermissions,
+    avatarColor: String = "",
+    hasAvatar: Boolean = false,
     onDismiss: () -> Unit,
     onChanged: () -> Unit,
     onLeft: () -> Unit,
+    onIdChanged: (Int) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -50,7 +67,42 @@ fun ServerSettingsDialog(
     var muted by remember(serverId) { mutableStateOf(perms.mutedNotifications) }
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmLeave by remember { mutableStateOf(false) }
+    var confirmNewId by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf("") }
+
+    // Оформление: цвет значка и сама картинка. picture — локальная копия
+    // факта «картинка есть», чтобы значок в диалоге менялся сразу, не
+    // дожидаясь, пока обновится список серверов.
+    var color by remember(serverId) { mutableStateOf(avatarColor) }
+    var picture by remember(serverId) { mutableStateOf(hasAvatar) }
+    var look by remember(serverId) { mutableIntStateOf(0) }
+    var cropUri by remember { mutableStateOf<Uri?>(null) }
+
+    // Выбранный файл сначала идёт в обрезку — значок квадратный и мелкий,
+    // заливать в базу оригинал с камеры незачем: его потом тянет каждый
+    // участник сервера при каждой отрисовке рельса.
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri -> if (uri != null) cropUri = uri }
+
+    cropUri?.let { uri ->
+        AvatarCropDialog(
+            uri = uri,
+            onCancel = { cropUri = null },
+            onDone = { png ->
+                cropUri = null
+                scope.launch {
+                    if (ServerRepository.setServerLook(serverId, png, null)) {
+                        picture = true
+                        look++
+                        note = "Значок сервера обновлён."
+                        onChanged()
+                    } else note = "Не удалось сохранить значок."
+                }
+            },
+        )
+        return
+    }
 
     if (confirmDelete) {
         ConfirmDialog(
@@ -89,12 +141,35 @@ fun ServerSettingsDialog(
         return
     }
 
+    if (confirmNewId) {
+        ConfirmDialog(
+            title = "Сменить ID сервера?",
+            message = "Сервер получит новый случайный номер. По старому номеру " +
+                    "($serverId) войти больше не получится — разошлите новый тем, " +
+                    "кого ждёте. Участники, каналы и переписка останутся на месте.",
+            confirmText = "Сменить",
+            onConfirm = {
+                confirmNewId = false
+                scope.launch {
+                    val fresh = ServerRepository.changeServerId(serverId)
+                    if (fresh > 0) {
+                        ServerMemory.invalidate(serverId)
+                        note = "Новый ID: $fresh"
+                        onIdChanged(fresh)
+                    } else note = "Не удалось сменить ID."
+                }
+            },
+            onDismiss = { confirmNewId = false },
+        )
+        return
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,
         title = { Text("Настройки сервера", color = PismoColors.TextPrimary) },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 if (perms.isAdminLike) {
                     PismoField(name, { name = it }, "Название")
                     Spacer(Modifier.height(10.dp))
@@ -103,14 +178,98 @@ fun ServerSettingsDialog(
                     Spacer(Modifier.height(6.dp))
                 }
 
+                // Оформление меняет тот, кто и так распоряжается сервером:
+                // значок виден всем участникам в рельсе.
+                if (perms.isAdminLike) {
+                    Spacer(Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        ServerAvatar(
+                            serverId = serverId,
+                            name = name.ifBlank { serverName },
+                            colorHex = color,
+                            hasAvatar = picture,
+                            size = 56.dp,
+                            shape = RoundedCornerShape(18.dp),
+                            version = look,
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            TextButton(onClick = { picker.launch("image/*") }) {
+                                Text(
+                                    if (picture) "Сменить картинку" else "Загрузить картинку",
+                                    color = PismoColors.Cyan, fontSize = 13.sp,
+                                )
+                            }
+                            if (picture) {
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        if (ServerRepository.clearServerAvatar(serverId)) {
+                                            picture = false
+                                            look++
+                                            note = "Картинка убрана."
+                                            onChanged()
+                                        } else note = "Не удалось убрать картинку."
+                                    }
+                                }) {
+                                    Text(
+                                        "Убрать картинку",
+                                        color = PismoColors.TextMuted, fontSize = 13.sp,
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Цвет значка",
+                        color = PismoColors.TextSecondary, fontSize = 13.sp,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    ColorPalettePicker(
+                        selected = color,
+                        onPick = { hex ->
+                            color = hex
+                            scope.launch {
+                                ServerRepository.setServerLook(serverId, null, hex)
+                                onChanged()
+                            }
+                        },
+                    )
+                    if (color.isNotBlank()) {
+                        TextButton(onClick = {
+                            color = ""
+                            scope.launch {
+                                ServerRepository.setServerLook(serverId, null, "")
+                                onChanged()
+                            }
+                        }) {
+                            Text(
+                                "Цвет по умолчанию",
+                                color = PismoColors.TextMuted, fontSize = 13.sp,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
+
                 Text(
                     "ID для приглашения: $serverId",
                     color = PismoColors.Cyan, fontSize = 14.sp,
                 )
-                TextButton(onClick = {
-                    copyToClipboard(context, serverId.toString())
-                    note = "ID скопирован."
-                }) { Text("Скопировать ID", color = PismoColors.TextSecondary, fontSize = 13.sp) }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = {
+                        copyToClipboard(context, serverId.toString())
+                        note = "ID скопирован."
+                    }) {
+                        Text("Скопировать", color = PismoColors.TextSecondary, fontSize = 13.sp)
+                    }
+                    if (perms.isOwner) {
+                        TextButton(onClick = { confirmNewId = true }) {
+                            Text("Новый ID", color = PismoColors.Yellow, fontSize = 13.sp)
+                        }
+                    }
+                }
 
                 Spacer(Modifier.height(4.dp))
                 TextButton(onClick = {

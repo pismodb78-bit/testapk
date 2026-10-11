@@ -40,12 +40,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -62,6 +64,7 @@ import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.components.LetterAvatar
+import com.pismo.messenger.ui.components.ServerAvatar
 import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.components.Pill
 import com.pismo.messenger.ui.components.UnreadBadge
@@ -106,6 +109,11 @@ fun ServersScreen(
     var showCreate by remember { mutableStateOf(false) }
     var showJoin by remember { mutableStateOf(false) }
     var showAddChannel by remember { mutableStateOf(false) }
+    // Счётчик правок оформления: по нему значки перечитывают картинку из
+    // базы после того, как владелец её сменил.
+    var serverLook by remember { mutableIntStateOf(0) }
+    // Номер только что созданного сервера — показываем его один раз.
+    var createdId by remember { mutableIntStateOf(0) }
     var showServerSettings by remember { mutableStateOf(false) }
     var editChannel by remember { mutableStateOf<ServerChannel?>(null) }
     var error by remember { mutableStateOf("") }
@@ -242,22 +250,21 @@ fun ServersScreen(
                     val isSelected = selected?.id == s.id
 
                     Box(Modifier.padding(vertical = 6.dp)) {
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(if (isSelected) RoundedCornerShape(16.dp) else CircleShape)
-                                .background(
-                                    if (isSelected) PismoColors.Blurple else PismoColors.BgSidebar
-                                )
-                                .clickable { selected = s },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                s.name.take(2).uppercase(),
-                                color = if (isSelected) Color.White
-                                else PismoColors.TextPrimary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 15.sp,
+                        Box(Modifier.clickable { selected = s }) {
+                            ServerAvatar(
+                                serverId = s.id,
+                                name = s.name,
+                                colorHex = s.avatarColor,
+                                hasAvatar = s.hasAvatar,
+                                size = 48.dp,
+                                shape = if (isSelected) RoundedCornerShape(16.dp) else CircleShape,
+                                // Выбранный сервер подсвечиваем только тогда,
+                                // когда владелец не задал свой цвет: иначе
+                                // подсветка стирала бы его оформление, а
+                                // выбор и так виден по скруглению.
+                                plateColor = if (isSelected && s.avatarColor.isBlank())
+                                    PismoColors.Blurple else null,
+                                version = serverLook,
                             )
                         }
                         if (mentions > 0) {
@@ -431,8 +438,23 @@ fun ServersScreen(
                 serverId = s.id,
                 serverName = s.name,
                 perms = perms,
+                avatarColor = s.avatarColor,
+                hasAvatar = s.hasAvatar,
                 onDismiss = { showServerSettings = false },
-                onChanged = { scope.launch { reloadServers(); reloadChannels() } },
+                onChanged = {
+                    serverLook++
+                    scope.launch { reloadServers(); reloadChannels() }
+                },
+                onIdChanged = { fresh ->
+                    // Номер сменился — перечитываем список и переводим выбор
+                    // на ту же строку под новым номером, иначе экран остался
+                    // бы на сервере, которого по старому ID уже нет.
+                    scope.launch {
+                        reloadServers()
+                        selected = servers.firstOrNull { it.id == fresh } ?: servers.firstOrNull()
+                        reloadChannels()
+                    }
+                },
                 onLeft = {
                     showServerSettings = false
                     scope.launch {
@@ -473,8 +495,51 @@ fun ServersScreen(
                         val id = ServerRepository.createServer(name)
                         reloadServers()
                         selected = servers.firstOrNull { it.id == id } ?: selected
+                        // Номер теперь случайный, подряд идущий не угадать —
+                        // поэтому сразу показываем его: иначе пригласить
+                        // кого-то можно было бы только через настройки.
+                        if (id > 0) createdId = id
                     }.onFailure { error = it.message.orEmpty() }
                     showCreate = false
+                }
+            },
+        )
+    }
+
+    if (createdId > 0) {
+        val context = LocalContext.current
+        AlertDialog(
+            onDismissRequest = { createdId = 0 },
+            containerColor = PismoColors.BgSidebar,
+            title = { Text("Сервер создан", color = PismoColors.TextPrimary) },
+            text = {
+                Column {
+                    Text(
+                        "ID для приглашения:",
+                        color = PismoColors.TextSecondary, fontSize = 13.sp,
+                    )
+                    Text(
+                        createdId.toString(),
+                        color = PismoColors.Cyan,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        "Номер случайный — чужой сервер по нему не подобрать. " +
+                                "Он всегда под рукой в настройках сервера.",
+                        color = PismoColors.TextMuted, fontSize = 12.sp,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    copyServerId(context, createdId)
+                    createdId = 0
+                }) { Text("Скопировать", color = PismoColors.Cyan) }
+            },
+            dismissButton = {
+                TextButton(onClick = { createdId = 0 }) {
+                    Text("Закрыть", color = PismoColors.TextMuted)
                 }
             },
         )
@@ -753,4 +818,13 @@ private fun ChannelDialog(
             TextButton(onClick = onDismiss) { Text("Отмена", color = PismoColors.TextMuted) }
         },
     )
+}
+
+/** Номер сервера в буфер обмена — им приглашают, его диктуют и пересылают. */
+private fun copyServerId(context: android.content.Context, serverId: Int) {
+    runCatching {
+        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("PISMO", serverId.toString()))
+    }
 }

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -15,12 +16,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.pismo.messenger.data.model.Presence
 import com.pismo.messenger.data.repo.ProfileRepository
+import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.ui.theme.PismoColors
 
 /**
@@ -91,4 +96,67 @@ fun GroupAvatar(groupId: Int, name: String, colorHex: String, size: Dp = 40.dp) 
         size = size,
         color = com.pismo.messenger.core.parseHexColor(colorHex),
     )
+}
+
+/**
+ * Значок сервера: картинка из servers.avatar_data, если владелец её
+ * залил, иначе две буквы названия на выбранном им цвете.
+ *
+ * [plateColor] перебивает цвет — им рельс подсвечивает выбранный сервер.
+ * [version] — счётчик, по которому значок перечитывается после смены
+ * картинки: байты лежат в памяти, и без него остался бы прежний вид.
+ */
+@Composable
+fun ServerAvatar(
+    serverId: Int,
+    name: String,
+    colorHex: String = "",
+    hasAvatar: Boolean = false,
+    size: Dp = 48.dp,
+    shape: Shape = CircleShape,
+    plateColor: Color? = null,
+    version: Int = 0,
+) {
+    var bytes by remember(serverId) {
+        mutableStateOf(if (hasAvatar) ServerRepository.cachedServerAvatar(serverId) else null)
+    }
+
+    LaunchedEffect(serverId, hasAvatar, version) {
+        bytes = if (hasAvatar) {
+            runCatching { ServerRepository.serverAvatar(serverId) }.getOrNull()
+        } else null
+    }
+
+    val data = bytes
+    if (data != null && data.isNotEmpty()) {
+        AsyncImage(
+            model = data,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(size)
+                .clip(shape)
+                .background(PismoColors.BgElevated),
+        )
+        return
+    }
+
+    val plain = plateColor == null && colorHex.isBlank()
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(shape)
+            .background(
+                plateColor ?: if (colorHex.isBlank()) PismoColors.BgSidebar
+                else com.pismo.messenger.core.parseHexColor(colorHex)
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = name.take(2).uppercase(),
+            color = if (plain) PismoColors.TextPrimary else Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = (size.value * 0.31f).sp,
+        )
+    }
 }

@@ -104,6 +104,11 @@ data class ServerSummary(
     val ownerId: Int,
     val unread: Int = 0,
     val mentions: Int = 0,
+    /** Цвет буквенного значка. Пусто — общий по умолчанию. */
+    val avatarColor: String = "",
+    /** Есть ли у сервера картинка. Саму картинку тянем отдельно: она тяжёлая
+     *  и в списке нужна не всегда. */
+    val hasAvatar: Boolean = false,
 )
 
 enum class ChannelType { TEXT, VOICE;

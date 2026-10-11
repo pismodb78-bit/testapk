@@ -119,6 +119,11 @@ object ServerMemory {
                             id = o.optInt("id"),
                             name = o.optString("name"),
                             ownerId = o.optInt("owner"),
+                            // Оформление помним: без него рельс при запуске
+                            // на мгновение рисовал значки серыми буквами,
+                            // даже когда у сервера есть свой цвет и картинка.
+                            avatarColor = o.optString("col"),
+                            hasAvatar = o.optBoolean("ava"),
                         )
                     )
                 }
@@ -172,6 +177,8 @@ object ServerMemory {
                             .put("id", s.id)
                             .put("name", s.name)
                             .put("owner", s.ownerId)
+                            .put("col", s.avatarColor)
+                            .put("ava", s.hasAvatar)
                     )
                 }
 

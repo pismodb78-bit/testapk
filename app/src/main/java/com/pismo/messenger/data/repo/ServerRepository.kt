@@ -17,6 +17,7 @@ import com.pismo.messenger.data.model.ServerMemberRow
 import com.pismo.messenger.data.model.ServerPermissions
 import com.pismo.messenger.data.model.ServerRole
 import com.pismo.messenger.data.model.ServerSummary
+import kotlin.random.Random
 
 /**
  * Серверы, каналы, роли, баны и сообщения каналов — порт ServersForm.cs,
@@ -76,17 +77,149 @@ object ServerRepository {
     // ════════════════════════════════════════════════════════════════
 
     suspend fun myServers(): List<ServerSummary> = Db.query(
-        "SELECT s.id, s.name, s.owner_id FROM servers s " +
+        // Саму картинку НЕ тянем: она тяжёлая, а в списке нужен только факт
+        // её наличия. Иначе каждое обновление вкладки volokло бы из базы
+        // столько мегабайт, сколько серверов.
+        "SELECT s.id, s.name, s.owner_id, " +
+                "COALESCE(s.avatar_color,'') AS avatar_color, " +
+                "(s.avatar_data IS NOT NULL) AS has_avatar " +
+                "FROM servers s " +
                 "JOIN server_members m ON m.server_id=s.id WHERE m.user_id=? ORDER BY s.id",
         UserSession.effectiveId
     ) { rs ->
-        ServerSummary(rs.getInt("id"), rs.str("name"), rs.getInt("owner_id"))
+        ServerSummary(
+            id = rs.getInt("id"),
+            name = rs.str("name"),
+            ownerId = rs.getInt("owner_id"),
+            avatarColor = rs.str("avatar_color"),
+            hasAvatar = rs.bool("has_avatar"),
+        )
+    }
+
+    /**
+     * Картинка сервера. Тянем по требованию — см. myServers.
+     *
+     * Держим в памяти: значок рисуется в рельсе при каждом кадре, и без
+     * кэша база отдавала бы одну и ту же картинку заново на каждую
+     * перерисовку вкладки.
+     */
+    private val lookCache = HashMap<Int, ByteArray?>()
+    private val lookLoadedAt = HashMap<Int, Long>()
+
+    /**
+     * Срок годности картинки в памяти — как у аватаров пользователей.
+     * Владелец меняет значок у себя, а видят его все участники; без
+     * протухания они остались бы со старой картинкой до перезапуска.
+     */
+    private const val LOOK_TTL_MS = 3 * 60 * 1000L
+
+    suspend fun serverAvatar(serverId: Int): ByteArray? {
+        synchronized(lookCache) {
+            val at = lookLoadedAt[serverId] ?: 0L
+            if (lookCache.containsKey(serverId) &&
+                System.currentTimeMillis() - at < LOOK_TTL_MS
+            ) return lookCache[serverId]
+        }
+        val data = runCatching {
+            Db.scalarBytes("SELECT avatar_data FROM servers WHERE id=?", serverId)
+        }.getOrElse {
+            // Связь моргнула — пусть значок останется прежним, а не пропадёт.
+            return synchronized(lookCache) { lookCache[serverId] }
+        }
+        rememberLook(serverId, data)
+        return data
+    }
+
+    private fun rememberLook(serverId: Int, data: ByteArray?) {
+        synchronized(lookCache) {
+            lookCache[serverId] = data
+            lookLoadedAt[serverId] = System.currentTimeMillis()
+        }
+    }
+
+    /** Синхронное чтение из памяти — для отрисовки без обращения к базе. */
+    fun cachedServerAvatar(serverId: Int): ByteArray? =
+        synchronized(lookCache) { lookCache[serverId] }
+
+    /**
+     * Лицо сервера: картинка и цвет значка.
+     *
+     * Картинку приводим к универсальному формату той же дорогой, что и
+     * вложения: иначе выбранный на телефоне WebP не открылся бы на ПК.
+     */
+    suspend fun setServerLook(serverId: Int, avatar: ByteArray?, color: String?): Boolean =
+        runCatching {
+            if (avatar != null) {
+                val (portable, _) = com.pismo.messenger.core.toPortableImage(avatar, "server")
+                Db.exec("UPDATE servers SET avatar_data=? WHERE id=?", portable, serverId)
+                rememberLook(serverId, portable)
+            }
+            if (color != null) {
+                Db.exec("UPDATE servers SET avatar_color=? WHERE id=?", color, serverId)
+            }
+            true
+        }.getOrDefault(false)
+
+    /** Убрать картинку — остаётся буквенный значок. */
+    suspend fun clearServerAvatar(serverId: Int): Boolean = runCatching {
+        Db.exec("UPDATE servers SET avatar_data=NULL WHERE id=?", serverId)
+        rememberLook(serverId, null)
+        true
+    }.getOrDefault(false)
+
+    /**
+     * Случайный номер сервера.
+     *
+     * Номер — это и приглашение: к серверу присоединяются, введя его.
+     * Пока номера выдавались подряд (1, 2, 3…), в любой чужой сервер
+     * можно было войти простым перебором. Шестизначный случайный номер
+     * так не перебрать, а голосом или в сообщении он диктуется так же
+     * легко, как раньше.
+     */
+    private fun randomServerId(): Int = 100_000 + Random.nextInt(900_000)
+
+    /** Случайный номер, которого ещё нет в базе. 0 — не нашли. */
+    private suspend fun freeServerId(): Int {
+        repeat(12) {
+            val candidate = randomServerId()
+            // Ошибку запроса считаем «занято»: лучше попробовать другой
+            // номер, чем занять уже существующий.
+            val taken = runCatching {
+                Db.exists("SELECT 1 FROM servers WHERE id=?", candidate)
+            }.getOrDefault(true)
+            if (!taken) return candidate
+        }
+        return 0
     }
 
     /** Создаёт сервер с каналами по умолчанию — как на ПК. */
     suspend fun createServer(name: String): Int {
         val me = UserSession.effectiveId
-        val serverId = Db.insert("INSERT INTO servers (name, owner_id) VALUES (?,?)", name, me)
+
+        // Сначала пробуем занять случайный номер. Гонка возможна: пока мы
+        // проверяли, его мог занять кто-то другой — тогда вставка упадёт
+        // на уникальности ключа, и мы берём следующий случайный.
+        var serverId = 0
+        repeat(4) {
+            if (serverId <= 0) {
+                val candidate = freeServerId()
+                if (candidate > 0) {
+                    val ok = runCatching {
+                        Db.exec(
+                            "INSERT INTO servers (id, name, owner_id) VALUES (?,?,?)",
+                            candidate, name, me
+                        ) > 0
+                    }.getOrDefault(false)
+                    if (ok) serverId = candidate
+                }
+            }
+        }
+
+        // Не вышло — отдаём номер на откуп базе, как было раньше. Создание
+        // сервера не должно срываться из-за красивого номера.
+        if (serverId <= 0) {
+            serverId = Db.insert("INSERT INTO servers (name, owner_id) VALUES (?,?)", name, me)
+        }
         if (serverId <= 0) return 0
         Db.exec("INSERT INTO server_members (server_id, user_id) VALUES (?,?)", serverId, me)
         Db.exec(
@@ -130,6 +263,77 @@ object ServerRepository {
 
     suspend fun renameServer(serverId: Int, name: String) {
         runCatching { Db.exec("UPDATE servers SET name=? WHERE id=?", name.trim(), serverId) }
+    }
+
+    /**
+     * Выдаёт серверу новый случайный номер. Возвращает его или 0.
+     *
+     * Номер — это приглашение. Если он разошёлся дальше, чем хотелось,
+     * сменить его — единственный способ закрыть вход: отзывать
+     * приглашения по одному в проекте нечем.
+     *
+     * Каналы, роли, баны и участники привязаны к серверу этим же номером,
+     * поэтому правим его во всех таблицах, где есть колонка server_id.
+     * Список таблиц спрашиваем у базы, а не держим в коде: появится новая
+     * таблица с server_id — она подхватится сама и не останется с висящей
+     * ссылкой.
+     *
+     * Всё одной транзакцией: сервер без каналов или каналы без сервера —
+     * хуже, чем несменённый номер. Если база не даст сменить сам номер
+     * (например, на него есть внешний ключ), не меняется вообще ничего.
+     */
+    suspend fun changeServerId(serverId: Int): Int {
+        val fresh = freeServerId()
+        if (fresh <= 0) return 0
+
+        val ok = runCatching {
+            Db.use(idempotent = false) { conn ->
+                val tables = ArrayList<String>()
+                conn.prepareStatement(
+                    "SELECT table_name FROM information_schema.columns " +
+                            "WHERE table_schema = DATABASE() AND column_name = 'server_id'"
+                ).use { ps ->
+                    ps.executeQuery().use { rs ->
+                        while (rs.next()) {
+                            val t = rs.getString(1) ?: continue
+                            if (isPlainIdentifier(t)) tables.add(t)
+                        }
+                    }
+                }
+
+                val autoCommitWas = conn.autoCommit
+                conn.autoCommit = false
+                try {
+                    conn.prepareStatement("UPDATE servers SET id=? WHERE id=?").use { ps ->
+                        ps.setInt(1, fresh)
+                        ps.setInt(2, serverId)
+                        if (ps.executeUpdate() <= 0) error("сервер не найден")
+                    }
+                    for (t in tables) {
+                        conn.prepareStatement("UPDATE $t SET server_id=? WHERE server_id=?").use { ps ->
+                            ps.setInt(1, fresh)
+                            ps.setInt(2, serverId)
+                            ps.executeUpdate()
+                        }
+                    }
+                    conn.commit()
+                    true
+                } catch (e: Throwable) {
+                    runCatching { conn.rollback() }
+                    throw e
+                } finally {
+                    runCatching { conn.autoCommit = autoCommitWas }
+                }
+            }
+        }.getOrDefault(false)
+
+        if (!ok) return 0
+        synchronized(lookCache) {
+            val data = lookCache.remove(serverId)
+            lookLoadedAt.remove(serverId)
+            if (data != null) lookCache[fresh] = data
+        }
+        return fresh
     }
 
     suspend fun deleteServer(serverId: Int) {

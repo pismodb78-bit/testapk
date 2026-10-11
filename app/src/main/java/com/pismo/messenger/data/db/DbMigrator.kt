@@ -312,6 +312,23 @@ object DbMigrator {
                 )
             }
         },
+
+        Migration(24, "servers: аватар и цвет — кастомизация серверов") { c ->
+            // Дословно та же, что на ПК: журнал schema_migrations один на
+            // всех, и номер 24 обязан означать здесь и там одно и то же.
+            //
+            // Картинка лежит в самой таблице, как аватары пользователей:
+            // отдельного хранилища у проекта нет, а заводить его ради одного
+            // поля — отдельная история со своими бедами.
+            if (tableExists(c, "servers")) {
+                if (!columnExists(c, "servers", "avatar_data"))
+                    exec(c, "ALTER TABLE servers ADD COLUMN avatar_data LONGBLOB NULL")
+                // Цвет пригодится и без картинки: буквенный значок перестаёт
+                // быть одинаковым у всех серверов.
+                if (!columnExists(c, "servers", "avatar_color"))
+                    exec(c, "ALTER TABLE servers ADD COLUMN avatar_color VARCHAR(16) NULL")
+            }
+        },
     )
 
     /**
