@@ -129,6 +129,12 @@ fun ServerAvatar(
 
     val data = bytes
     if (data != null && data.isNotEmpty()) {
+        // Под картинкой — выбранный цвет сервера, а если его нет, то ничего:
+        // пусть сквозь прозрачные места просвечивает фон приложения. Раньше
+        // здесь был BgElevated, и картинка с прозрачностью сидела на светлом
+        // пятне, которое выбивалось из тёмного рельса.
+        val backdrop = if (colorHex.isBlank()) Color.Transparent
+        else com.pismo.messenger.core.parseHexColor(colorHex)
         AsyncImage(
             model = data,
             contentDescription = null,
@@ -136,7 +142,7 @@ fun ServerAvatar(
             modifier = Modifier
                 .size(size)
                 .clip(shape)
-                .background(PismoColors.BgElevated),
+                .background(backdrop),
         )
         return
     }
