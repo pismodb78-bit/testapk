@@ -68,7 +68,7 @@ fun IncomingCallDialog() {
                 val inGroup = gid > 0
                 val groupName = current.groupName.ifBlank { "Группа" }
 
-                if (inGroup) GroupAvatar(gid, groupName, current.groupColor, 72.dp)
+                if (inGroup) GroupAvatar(gid, groupName, current.groupColor, 72.dp, hasAvatar = true)
                 else UserAvatar(current.callerId, current.callerName, 72.dp)
                 Spacer(Modifier.height(12.dp))
                 Text(

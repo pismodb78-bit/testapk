@@ -50,6 +50,8 @@ data class GroupSummary(
     val avatarColorHex: String,
     val lastTimeMs: Long?,
     val unread: Int = 0,
+    /** Есть ли у группы картинка. Саму картинку тянем отдельно — она тяжёлая. */
+    val hasAvatar: Boolean = false,
 )
 
 /**

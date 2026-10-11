@@ -111,6 +111,7 @@ object ChatListMemory {
                             lastMessage = Crypto.dec(o.optString("m")),
                             memberCount = o.optInt("c"),
                             avatarColorHex = o.optString("col"),
+                            hasAvatar = o.optBoolean("ava"),
                             lastTimeMs = if (o.isNull("t")) null else o.optLong("t"),
                             unread = 0,
                         )
@@ -150,6 +151,7 @@ object ChatListMemory {
                             .put("m", Crypto.enc(g.lastMessage))
                             .put("c", g.memberCount)
                             .put("col", g.avatarColorHex)
+                            .put("ava", g.hasAvatar)
                             .put("t", g.lastTimeMs ?: JSONObject.NULL)
                     )
                 }

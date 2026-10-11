@@ -13,12 +13,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.sp
 import com.pismo.messenger.data.ServerMemory
+import com.pismo.messenger.data.repo.GroupRepository
 import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.theme.PismoColors
 
 /**
- * Сообщение о бане или исключении с сервера.
+ * Сообщение о бане или исключении — с сервера или из группы.
  *
  * Живёт в корне приложения, рядом с окном входящего звонка, и по той же
  * причине: выгнать могут на любом экране. Раньше про это знал только
@@ -33,16 +34,18 @@ import com.pismo.messenger.ui.theme.PismoColors
 fun ServerKickDialog(onLeaveServerScreens: () -> Unit) {
     var show by remember { mutableStateOf(false) }
     var banned by remember { mutableStateOf(false) }
-    var serverId by remember { mutableIntStateOf(0) }
-    var serverName by remember { mutableStateOf("") }
+    var isGroup by remember { mutableStateOf(false) }
+    var targetId by remember { mutableIntStateOf(0) }
+    var targetName by remember { mutableStateOf("") }
 
     DisposableEffect(Unit) {
         val listener: (String, Int, Int, String) -> Unit = { type, _, session, payload ->
             // Релей шлёт это адресно: дошло — значит про меня.
-            if (type == "server_kick") {
-                serverId = session
+            if (type == "server_kick" || type == "group_kick") {
+                isGroup = type == "group_kick"
+                targetId = session
                 banned = payload == "ban"
-                serverName = ""
+                targetName = ""
                 show = true
             }
         }
@@ -50,13 +53,16 @@ fun ServerKickDialog(onLeaveServerScreens: () -> Unit) {
         onDispose { SignalingClient.removeListener(listener) }
     }
 
-    LaunchedEffect(show, serverId) {
-        if (!show || serverId <= 0) return@LaunchedEffect
-        // Сервер уже не наш — чистим его из памяти вкладки, чтобы он не
-        // всплыл в рельсе при следующем открытии.
-        ServerMemory.invalidate(serverId)
-        serverName = runCatching { ServerRepository.serverInfo(serverId)?.first }
-            .getOrNull().orEmpty()
+    LaunchedEffect(show, targetId, isGroup) {
+        if (!show || targetId <= 0) return@LaunchedEffect
+        targetName = if (isGroup) {
+            runCatching { GroupRepository.groupName(targetId) }.getOrNull().orEmpty()
+        } else {
+            // Сервер уже не наш — чистим его из памяти вкладки, чтобы он не
+            // всплыл в рельсе при следующем открытии.
+            ServerMemory.invalidate(targetId)
+            runCatching { ServerRepository.serverInfo(targetId)?.first }.getOrNull().orEmpty()
+        }
     }
 
     if (!show) return
@@ -66,7 +72,8 @@ fun ServerKickDialog(onLeaveServerScreens: () -> Unit) {
         onLeaveServerScreens()
     }
 
-    val where = if (serverName.isBlank()) "сервере" else "сервере «$serverName»"
+    val what = if (isGroup) "группе" else "сервере"
+    val where = if (targetName.isBlank()) what else "$what «$targetName»"
     AlertDialog(
         onDismissRequest = { close() },
         containerColor = PismoColors.BgSidebar,
@@ -78,9 +85,17 @@ fun ServerKickDialog(onLeaveServerScreens: () -> Unit) {
         },
         text = {
             Text(
-                if (banned) "Вас забанили на $where. Вернуться по ID не получится, " +
-                        "пока бан не снимут."
-                else "Вас исключили с $where. Вернуться можно по ID сервера.",
+                when {
+                    banned && isGroup ->
+                        "Вас забанили в $where. Обратно не добавят, пока бан не снимут."
+                    banned ->
+                        "Вас забанили на $where. Вернуться по ID не получится, " +
+                                "пока бан не снимут."
+                    isGroup ->
+                        "Вас исключили из $where. Вернуться можно, если вас добавят снова."
+                    else ->
+                        "Вас исключили с $where. Вернуться можно по ID сервера."
+                },
                 color = PismoColors.TextSecondary, fontSize = 13.sp,
             )
         },

@@ -122,6 +122,7 @@ fun GroupMembersDialog(
     groupName: String,
     onDismiss: () -> Unit,
     onLeft: () -> Unit,
+    onChanged: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     var members by remember { mutableStateOf<List<GroupMember>>(emptyList()) }
@@ -130,11 +131,39 @@ fun GroupMembersDialog(
     val toAdd = remember { mutableStateListOf<Int>() }
     var canDelete by remember { mutableStateOf(false) }
 
+    // Распоряжаться группой может её создатель, админ группы (звёздочка) и
+    // системный администратор — как и на сервере. Раньше исключать мог
+    // только системный, то есть в своей же группе хозяин был бессилен.
+    var canManage by remember { mutableStateOf(false) }
+    var banned by remember { mutableStateOf<List<UserBrief>>(emptyList()) }
+    var showBans by remember { mutableStateOf(false) }
+    var showLook by remember { mutableStateOf(false) }
+    var color by remember(groupId) { mutableStateOf("") }
+    var hasAvatar by remember(groupId) { mutableStateOf(false) }
+
     suspend fun reload() {
         runCatching {
             members = GroupRepository.members(groupId)
             canDelete = GroupRepository.canDeleteGroup(groupId)
+            canManage = GroupRepository.canManageGroup(groupId)
+            banned = if (canManage) GroupRepository.bannedUsers(groupId) else emptyList()
+            GroupRepository.groupLook(groupId).let { (c, a) -> color = c; hasAvatar = a }
         }
+    }
+
+    if (showLook) {
+        GroupSettingsDialog(
+            groupId = groupId,
+            groupName = groupName,
+            avatarColor = color,
+            hasAvatar = hasAvatar,
+            onDismiss = { showLook = false },
+            onChanged = {
+                scope.launch { reload() }
+                onChanged()
+            },
+        )
+        return
     }
 
     LaunchedEffect(groupId) { reload() }
@@ -168,6 +197,66 @@ fun GroupMembersDialog(
                 }
             } else {
                 LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                    if (canManage) {
+                        item {
+                            TextButton(onClick = { showLook = true }) {
+                                Text(
+                                    "⚙  Оформление группы",
+                                    color = PismoColors.Cyan, fontSize = 13.sp,
+                                )
+                            }
+                        }
+                        item {
+                            TextButton(onClick = { showBans = !showBans }) {
+                                Text(
+                                    if (showBans) "👥  К участникам"
+                                    else "🚫  Забаненные (${banned.size})",
+                                    color = if (showBans) PismoColors.Cyan else PismoColors.TextSecondary,
+                                    fontSize = 13.sp,
+                                )
+                            }
+                        }
+                    }
+
+                    // Забаненные вместо участников — как вкладка «Баны» на
+                    // сервере: снять бан иначе негде, из участников человек
+                    // уже исчез.
+                    if (showBans) {
+                        if (banned.isEmpty()) {
+                            item {
+                                Text(
+                                    "Забаненных нет.",
+                                    color = PismoColors.TextMuted, fontSize = 13.sp,
+                                )
+                            }
+                        }
+                        items(banned, key = { "ban" + it.id }) { b ->
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                UserAvatar(b.id, b.name, 34.dp)
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(b.name, color = PismoColors.TextPrimary, fontSize = 14.sp)
+                                    Text(
+                                        "@${b.login}",
+                                        color = PismoColors.TextMuted, fontSize = 12.sp,
+                                    )
+                                }
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        GroupRepository.unban(groupId, b.id)
+                                        reload()
+                                    }
+                                }) {
+                                    Text("Разбанить", color = PismoColors.Green, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                        return@LazyColumn
+                    }
+
                     // Не принимать звонки этой группы. Отдельно от игнора:
                     // сообщения приходят как обычно, молчит только вызов.
                     item {
@@ -195,15 +284,22 @@ fun GroupMembersDialog(
                                 fontSize = 14.sp,
                                 modifier = Modifier.weight(1f),
                             )
-                            // Исключать может только системный администратор.
-                            if (UserSession.isAdmin && m.userId != UserSession.effectiveId) {
+                            if (canManage && m.userId != UserSession.effectiveId) {
                                 TextButton(onClick = {
                                     scope.launch {
                                         GroupRepository.kickMember(groupId, m.userId)
                                         reload()
                                     }
                                 }) {
-                                    Text("Исключить", color = PismoColors.Red, fontSize = 12.sp)
+                                    Text("Исключить", color = PismoColors.Yellow, fontSize = 12.sp)
+                                }
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        GroupRepository.kickMember(groupId, m.userId, alsoBan = true)
+                                        reload()
+                                    }
+                                }) {
+                                    Text("Забанить", color = PismoColors.Red, fontSize = 12.sp)
                                 }
                             }
                         }

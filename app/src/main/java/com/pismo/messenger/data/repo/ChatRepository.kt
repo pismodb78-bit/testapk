@@ -239,8 +239,13 @@ object ChatRepository {
                     "UNIX_TIMESTAMP(gc.`$createdCol`))"
         }
 
-        val sql = """
+        // Саму картинку НЕ тянем: в списке нужен только факт её наличия.
+        // Колонки может не быть — миграцию 25 кладёт администратор, прав на
+        // неё у приложения нет; тогда читаем без неё, иначе без списка групп
+        // остался бы весь экран чатов.
+        fun sqlFor(withAvatar: Boolean) = """
             SELECT gc.id, gc.name, gc.avatar_color,
+                   ${if (withAvatar) "(gc.avatar_data IS NOT NULL)" else "0"} AS has_avatar,
                    (SELECT gm2.text FROM group_messages gm2
                     WHERE gm2.group_id = gc.id
                     ORDER BY gm2.created_at DESC LIMIT 1) AS last_msg,
@@ -252,7 +257,7 @@ object ChatRepository {
             ORDER BY last_time DESC, gc.name ASC
         """.trimIndent()
 
-        return Db.query(sql, me) { rs ->
+        val map: (java.sql.ResultSet) -> GroupSummary = { rs ->
             val lastRaw = rs.getString("last_msg")
             GroupSummary(
                 id = rs.getInt("id"),
@@ -261,9 +266,22 @@ object ChatRepository {
                 memberCount = rs.getInt("member_count"),
                 avatarColorHex = rs.getString("avatar_color") ?: "#5865F2",
                 lastTimeMs = rs.getLong("last_time").takeIf { it > 0 }?.times(1000),
+                hasAvatar = rs.bool("has_avatar"),
             )
         }
+
+        if (groupAvatarColumnOk) {
+            val rich = runCatching { Db.query(sqlFor(true), me, map = map) }
+            rich.onSuccess { return it }
+            val e = rich.exceptionOrNull()
+            if (e?.message?.contains("avatar_data", true) != true) throw e!!
+            groupAvatarColumnOk = false
+        }
+        return Db.query(sqlFor(false), me, map = map)
     }
+
+    /** Есть ли в group_chats колонка картинки (миграция 25). */
+    @Volatile private var groupAvatarColumnOk = true
 
     // ════════════════════════════════════════════════════════════════
     //  ИСТОРИЯ СООБЩЕНИЙ

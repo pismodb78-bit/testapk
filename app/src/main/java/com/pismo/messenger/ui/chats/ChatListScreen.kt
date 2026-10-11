@@ -57,6 +57,7 @@ import com.pismo.messenger.data.model.Conversation
 import com.pismo.messenger.data.model.GroupSummary
 import com.pismo.messenger.data.model.Presence
 import com.pismo.messenger.data.repo.ChatRepository
+import com.pismo.messenger.data.repo.GroupRepository
 import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.data.repo.ProfileRepository
 import com.pismo.messenger.net.SignalingClient
@@ -215,11 +216,19 @@ fun ChatListScreen(
     }
 
     DisposableEffect(Unit) {
-        val listener: (String, Int, Int, String) -> Unit = { type, _, _, _ ->
+        val listener: (String, Int, Int, String) -> Unit = { type, _, session, _ ->
             if (type == "new_message") scope.launch { reload() }
             // Закрепили или открепили чат на другом устройстве — переставляем
             // список сразу, не дожидаясь сверки.
             if (type == "chatpin") scope.launch { reload() }
+            // Группа сменила имя, цвет или картинку — всё это видно в списке.
+            if (type == "group_look") {
+                GroupRepository.forgetLook(session)
+                scope.launch { reload() }
+            }
+            // Выгнали из группы — она должна исчезнуть из списка. Сказать об
+            // этом — забота окна в корне приложения.
+            if (type == "group_kick") scope.launch { reload() }
         }
         SignalingClient.addListener(listener)
         onDispose { SignalingClient.removeListener(listener) }
@@ -399,6 +408,8 @@ fun ChatListScreen(
                 manageGroup = null
                 scope.launch { reload() }
             },
+            // Сменили имя, цвет или картинку — список чатов показывает их.
+            onChanged = { scope.launch { reload() } },
         )
     }
 }
@@ -500,7 +511,7 @@ private fun GroupRow(g: GroupSummary, onClick: () -> Unit, onLongClick: () -> Un
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        GroupAvatar(g.id, g.name, g.avatarColorHex, 44.dp)
+        GroupAvatar(g.id, g.name, g.avatarColorHex, 44.dp, hasAvatar = g.hasAvatar)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {

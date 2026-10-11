@@ -863,7 +863,7 @@ fun ChatScreen(
                         modifier = if (isGroup) Modifier
                                    else Modifier.clickable { showUserActions = true },
                     ) {
-                        if (isGroup) GroupAvatar(targetId, title, "#5865F2", 32.dp)
+                        if (isGroup) GroupAvatar(targetId, title, "#5865F2", 32.dp, hasAvatar = true)
                         else UserAvatar(targetId, title, 32.dp, presence = peerPresence)
                         Spacer(Modifier.width(10.dp))
                         Column {

@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.pismo.messenger.data.model.Presence
+import com.pismo.messenger.data.repo.GroupRepository
 import com.pismo.messenger.data.repo.ProfileRepository
 import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.ui.theme.PismoColors
@@ -87,9 +88,47 @@ fun UserAvatar(
     }
 }
 
-/** Аватар группы: цвет из group_chats.avatar_color, буква из названия. */
+/**
+ * Значок группы: картинка из group_chats.avatar_data, если её поставили,
+ * иначе буква на цвете из avatar_color — как было раньше.
+ *
+ * [hasAvatar] приходит из списка чатов: саму картинку там не тянут, чтобы
+ * не возить мегабайты ради списка. [version] — счётчик, по которому
+ * значок перечитывается после смены картинки.
+ */
 @Composable
-fun GroupAvatar(groupId: Int, name: String, colorHex: String, size: Dp = 40.dp) {
+fun GroupAvatar(
+    groupId: Int,
+    name: String,
+    colorHex: String,
+    size: Dp = 40.dp,
+    hasAvatar: Boolean = false,
+    version: Int = 0,
+) {
+    var bytes by remember(groupId) {
+        mutableStateOf(if (hasAvatar) GroupRepository.cachedGroupAvatar(groupId) else null)
+    }
+
+    LaunchedEffect(groupId, hasAvatar, version) {
+        bytes = if (hasAvatar) {
+            runCatching { GroupRepository.groupAvatar(groupId) }.getOrNull()
+        } else null
+    }
+
+    val data = bytes
+    if (data != null && data.isNotEmpty()) {
+        AsyncImage(
+            model = data,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(size)
+                .clip(CircleShape)
+                .background(com.pismo.messenger.core.parseHexColor(colorHex)),
+        )
+        return
+    }
+
     LetterAvatar(
         id = groupId,
         name = name,
