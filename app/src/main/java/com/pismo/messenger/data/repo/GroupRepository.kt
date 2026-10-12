@@ -327,10 +327,19 @@ object GroupRepository {
     suspend fun canDeleteGroup(groupId: Int): Boolean =
         createdBy(groupId) == UserSession.effectiveId || UserSession.isAdmin
 
+    /**
+     * Удаление группы. Право на него проверяет canDeleteGroup — это
+     * создатель или системный администратор.
+     */
     suspend fun deleteGroup(groupId: Int) {
         Db.exec("DELETE FROM group_messages WHERE group_id=?", groupId)
         Db.exec("DELETE FROM group_members WHERE group_id=?", groupId)
+        runCatching { Db.exec("DELETE FROM group_bans WHERE group_id=?", groupId) }
         Db.exec("DELETE FROM group_chats WHERE id=?", groupId)
+        forgetLook(groupId)
+        // Остальные участники должны увидеть, что группы больше нет: иначе
+        // она висит в списке до перезапуска, а переписка — до выхода из неё.
+        runCatching { SignalingClient.send("group_members", 0, groupId, "deleted") }
     }
 
     /** Участники группы — для выбора собеседников в групповом звонке. */

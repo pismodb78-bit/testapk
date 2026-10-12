@@ -237,6 +237,8 @@ fun ChatListScreen(
             // Выгнали из группы — она должна исчезнуть из списка. Сказать об
             // этом — забота окна в корне приложения.
             if (type == "group_kick") scope.launch { reload() }
+            // Владелец удалил группу — её тоже больше нет.
+            if (type == "group_members") scope.launch { reload() }
         }
         SignalingClient.addListener(listener)
         onDispose { SignalingClient.removeListener(listener) }

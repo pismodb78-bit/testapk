@@ -677,14 +677,21 @@ fun ChatScreen(
                 scope.launch { reload() }
             }
 
-            // «печатает…». Раскладка полей взята с ПК один в один, иначе
-            // индикатор не совпадёт между телефоном и компьютером: в группе
-            // адресат 0, а в sessionId едет id группы; в личке наоборот —
-            // адресат это собеседник, в sessionId id отправителя.
+            // Группу удалили — оставаться в её переписке незачем.
+            if (type == "group_members" && payload == "deleted" &&
+                isGroup && session == targetId
+            ) {
+                onBack()
+            }
             if (type == "group_look" && isGroup && session == targetId) {
                 com.pismo.messenger.data.repo.GroupRepository.forgetLook(targetId)
                 groupLook++
             }
+
+            // «печатает…». Раскладка полей взята с ПК один в один, иначе
+            // индикатор не совпадёт между телефоном и компьютером: в группе
+            // адресат 0, а в sessionId едет id группы; в личке наоборот —
+            // адресат это собеседник, в sessionId id отправителя.
             if (type == "typing" && sender != UserSession.effectiveId) {
                 val mine = if (payload == "group") isGroup && session == targetId
                 else !isGroup && (sender == targetId || session == targetId)
