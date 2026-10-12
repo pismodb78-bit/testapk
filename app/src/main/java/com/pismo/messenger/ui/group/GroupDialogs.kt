@@ -140,6 +140,7 @@ fun GroupMembersDialog(
     var banned by remember { mutableStateOf<List<UserBrief>>(emptyList()) }
     var showBans by remember { mutableStateOf(false) }
     var showLook by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf("") }
     var color by remember(groupId) { mutableStateOf("") }
     var hasAvatar by remember(groupId) { mutableStateOf(false) }
 
@@ -189,10 +190,15 @@ fun GroupMembersDialog(
         onDismissRequest = onDismiss,
         containerColor = PismoColors.BgSidebar,
         title = {
-            Text(
-                if (adding) "Добавить участников" else "👥 $groupName (${members.size})",
-                color = PismoColors.TextPrimary,
-            )
+            Column {
+                Text(
+                    if (adding) "Добавить участников" else "👥 $groupName (${members.size})",
+                    color = PismoColors.TextPrimary,
+                )
+                if (note.isNotEmpty()) {
+                    Text(note, color = PismoColors.Red, fontSize = 12.sp)
+                }
+            }
         },
         text = {
             if (adding) {
@@ -350,8 +356,8 @@ fun GroupMembersDialog(
                     if (canDelete) {
                         TextButton(onClick = {
                             scope.launch {
-                                GroupRepository.deleteGroup(groupId)
-                                onLeft()
+                                if (GroupRepository.deleteGroup(groupId)) onLeft()
+                                else note = "Не удалось удалить группу."
                             }
                         }) { Text("Удалить", color = PismoColors.Red) }
                     }

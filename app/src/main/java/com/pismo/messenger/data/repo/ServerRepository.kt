@@ -417,22 +417,35 @@ object ServerRepository {
         return fresh
     }
 
-    suspend fun deleteServer(serverId: Int) {
-        runCatching {
-            Db.exec(
-                "DELETE FROM server_messages WHERE channel_id IN " +
-                        "(SELECT id FROM server_channels WHERE server_id=?)", serverId
-            )
-        }
+    /**
+     * Удаляет сервер со всем содержимым. false — база не дала.
+     *
+     * Результат важен: раньше последний запрос летел без защиты, и отказ
+     * базы превращался в падение приложения прямо из обработчика кнопки.
+     */
+    suspend fun deleteServer(serverId: Int): Boolean {
+        // Сначала всё, что привязано к каналам, потом сами каналы: иначе
+        // упоминания, метки прочитанного и присутствие в голосовых остаются
+        // висеть на несуществующих каналах. Каждый шаг отдельно — на части
+        // установок какой-то таблицы может не быть, и спотыкаться об это
+        // ради чистки незачем.
+        val byChannel = "(SELECT id FROM server_channels WHERE server_id=?)"
+        runCatching { Db.exec("DELETE FROM server_messages WHERE channel_id IN $byChannel", serverId) }
+        runCatching { Db.exec("DELETE FROM server_mentions WHERE channel_id IN $byChannel", serverId) }
+        runCatching { Db.exec("DELETE FROM server_reads WHERE channel_id IN $byChannel", serverId) }
+        runCatching { Db.exec("DELETE FROM voice_presence WHERE channel_id IN $byChannel", serverId) }
         runCatching { Db.exec("DELETE FROM server_channels WHERE server_id=?", serverId) }
         runCatching { Db.exec("DELETE FROM server_members WHERE server_id=?", serverId) }
         runCatching { Db.exec("DELETE FROM server_roles WHERE server_id=?", serverId) }
         runCatching { Db.exec("DELETE FROM server_bans WHERE server_id=?", serverId) }
-        Db.exec("DELETE FROM servers WHERE id=?", serverId)
+        val ok = runCatching { Db.exec("DELETE FROM servers WHERE id=?", serverId) }.isSuccess
+        if (!ok) return false
+
         forgetLook(serverId)
         // Остальные участники должны увидеть, что сервера больше нет: иначе
         // он висит в рельсе до перезапуска, а его каналы — до перезахода.
         runCatching { SignalingClient.send("server_members", 0, serverId, "deleted") }
+        return true
     }
 
     // ════════════════════════════════════════════════════════════════

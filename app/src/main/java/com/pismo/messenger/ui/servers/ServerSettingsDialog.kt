@@ -113,10 +113,11 @@ fun ServerSettingsDialog(
             confirmText = "Удалить",
             onConfirm = {
                 scope.launch {
-                    ServerRepository.deleteServer(serverId)
-                    ServerMemory.invalidate(serverId)
                     confirmDelete = false
-                    onLeft()
+                    if (ServerRepository.deleteServer(serverId)) {
+                        ServerMemory.invalidate(serverId)
+                        onLeft()
+                    } else note = "Не удалось удалить сервер."
                 }
             },
             onDismiss = { confirmDelete = false },

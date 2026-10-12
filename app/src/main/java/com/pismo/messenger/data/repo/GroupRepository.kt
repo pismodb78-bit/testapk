@@ -331,15 +331,21 @@ object GroupRepository {
      * Удаление группы. Право на него проверяет canDeleteGroup — это
      * создатель или системный администратор.
      */
-    suspend fun deleteGroup(groupId: Int) {
-        Db.exec("DELETE FROM group_messages WHERE group_id=?", groupId)
-        Db.exec("DELETE FROM group_members WHERE group_id=?", groupId)
+    suspend fun deleteGroup(groupId: Int): Boolean {
+        runCatching { Db.exec("DELETE FROM group_messages WHERE group_id=?", groupId) }
+        runCatching { Db.exec("DELETE FROM group_members WHERE group_id=?", groupId) }
         runCatching { Db.exec("DELETE FROM group_bans WHERE group_id=?", groupId) }
-        Db.exec("DELETE FROM group_chats WHERE id=?", groupId)
+
+        // Результат важен: раньше этот запрос летел без защиты, и отказ базы
+        // превращался в падение приложения прямо из обработчика кнопки.
+        val ok = runCatching { Db.exec("DELETE FROM group_chats WHERE id=?", groupId) }.isSuccess
+        if (!ok) return false
+
         forgetLook(groupId)
         // Остальные участники должны увидеть, что группы больше нет: иначе
         // она висит в списке до перезапуска, а переписка — до выхода из неё.
         runCatching { SignalingClient.send("group_members", 0, groupId, "deleted") }
+        return true
     }
 
     /** Участники группы — для выбора собеседников в групповом звонке. */
