@@ -237,6 +237,9 @@ fun ChatScreen(
     // же меню, что по долгому нажатию на чат в списке: раньше из самого чата к
     // нему было не добраться.
     var showUserActions by remember(targetId) { mutableStateOf(false) }
+    // Управление группой прямо из переписки: раньше до него надо было выйти
+    // в список чатов и нажать на группу там.
+    var showGroupManage by remember(targetId) { mutableStateOf(false) }
     var recordSeconds by remember { mutableStateOf(0) }
     var showCircleRecorder by remember { mutableStateOf(false) }
     var showGifPicker by remember { mutableStateOf(false) }
@@ -860,8 +863,9 @@ fun ChatScreen(
                 title = {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = if (isGroup) Modifier
-                                   else Modifier.clickable { showUserActions = true },
+                        modifier = Modifier.clickable {
+                            if (isGroup) showGroupManage = true else showUserActions = true
+                        },
                     ) {
                         if (isGroup) GroupAvatar(targetId, title, "#5865F2", 32.dp, hasAvatar = true)
                         else UserAvatar(targetId, title, 32.dp, presence = peerPresence)
@@ -933,6 +937,12 @@ fun ChatScreen(
                                 text = { Text("Закреплённые") },
                                 onClick = { menuOpen = false; showPins = true },
                             )
+                            if (isGroup) {
+                                DropdownMenuItem(
+                                    text = { Text("Участники и оформление") },
+                                    onClick = { menuOpen = false; showGroupManage = true },
+                                )
+                            }
                         }
                     }
                     IconButton(onClick = { startCall(context, targetId, title, isGroup, false) }) {
@@ -1360,6 +1370,20 @@ fun ChatScreen(
                 }
             }
         }
+    }
+
+    if (showGroupManage && isGroup) {
+        com.pismo.messenger.ui.group.GroupMembersDialog(
+            groupId = targetId,
+            groupName = title,
+            onDismiss = { showGroupManage = false },
+            onLeft = {
+                // Вышли из группы или удалили её — оставаться в переписке
+                // незачем.
+                showGroupManage = false
+                onBack()
+            },
+        )
     }
 
     if (showUserActions && !isGroup) {
