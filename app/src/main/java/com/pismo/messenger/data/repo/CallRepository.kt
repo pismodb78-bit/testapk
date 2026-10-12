@@ -37,6 +37,33 @@ object CallRepository {
         }.getOrDefault(-1)
     }
 
+    /**
+     * Сколько секунд назад начался вызов. 0 — узнать не удалось.
+     *
+     * Нужно отсчёту «три минуты без ответа»: он обязан идти от НАЧАЛА вызова,
+     * а не от открытия окна. Иначе выйти из звонка и зайти снова значило
+     * получить ещё три минуты, и так до бесконечности — вызов, на который
+     * никто не отвечает, жил бы вечно.
+     *
+     * Имя колонки у разных установок разное, поэтому пробуем оба; оба — из
+     * списка в коде, не из ввода. Считаем разницу средствами базы: её часовой
+     * пояс может не совпадать с телефонным, а разница от этого не зависит.
+     */
+    suspend fun sessionAgeSec(sessionId: Int): Int {
+        if (sessionId <= 0) return 0
+        for (col in arrayOf("started_at", "created_at")) {
+            val age = runCatching {
+                Db.queryFirst(
+                    "SELECT TIMESTAMPDIFF(SECOND, $col, NOW()) AS age " +
+                            "FROM call_sessions WHERE id=?",
+                    sessionId
+                ) { rs -> rs.getInt("age").let { if (rs.wasNull()) -1 else it } }
+            }.getOrNull()
+            if (age != null && age >= 0) return age
+        }
+        return 0
+    }
+
     /** Создаёт сессию в статусе ringing. Возвращает её id. */
     suspend fun createCall(peerId: Int?, groupId: Int?, withVideo: Boolean): Int = Db.insert(
         "INSERT INTO call_sessions (caller_id, callee_id, group_id, status, has_video) " +

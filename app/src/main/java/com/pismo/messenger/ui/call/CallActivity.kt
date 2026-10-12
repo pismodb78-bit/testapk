@@ -573,13 +573,21 @@ private fun CallScreen(
     // Групп и голосовых каналов не касается, как и на ПК: там сидеть одному в
     // ожидании остальных — обычное дело.
     var waitLeftSec by remember { mutableIntStateOf(WAIT_FOR_PEER_SEC) }
-    LaunchedEffect(personalCall, hasRemote) {
+    val waitSessionId = callInfo?.sessionId ?: 0
+    LaunchedEffect(personalCall, hasRemote, waitSessionId) {
         // Собеседник зашёл — отсчёт снимаем. Если он потом уйдёт, трубку
         // положит соседний эффект, и ждать его ещё три минуты незачем.
         if (!personalCall || hasRemote || peerWasHere) {
             waitLeftSec = WAIT_FOR_PEER_SEC
             return@LaunchedEffect
         }
+
+        // Отсчёт идёт от НАЧАЛА вызова, а не от открытия окна. Иначе выйти из
+        // звонка и зайти снова значило получить ещё три минуты, и так сколько
+        // угодно: вызов, на который никто не отвечает, не кончался бы никогда.
+        val gone = runCatching { CallRepository.sessionAgeSec(waitSessionId) }.getOrDefault(0)
+        waitLeftSec = (WAIT_FOR_PEER_SEC - gone).coerceAtLeast(0)
+
         while (isActive && waitLeftSec > 0) {
             delay(1000)
             waitLeftSec--
