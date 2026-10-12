@@ -304,8 +304,12 @@ fun ChannelChatScreen(
     }
 
     DisposableEffect(channelId) {
-        val listener: (String, Int, Int, String) -> Unit = { type, _, _, _ ->
+        val listener: (String, Int, Int, String) -> Unit = { type, _, session, payload ->
             if (type == "new_message") scope.launch { reload(scrollToEnd = true) }
+            // Сервер удалили или меня с него выгнали — читать здесь больше
+            // нечего, уходим обратно.
+            if (type == "server_kick" && session == serverId) onBack()
+            if (type == "server_members" && payload == "deleted" && session == serverId) onBack()
         }
         SignalingClient.addListener(listener)
         onDispose { SignalingClient.removeListener(listener) }

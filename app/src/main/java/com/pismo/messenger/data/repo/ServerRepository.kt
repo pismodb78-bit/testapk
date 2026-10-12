@@ -429,6 +429,10 @@ object ServerRepository {
         runCatching { Db.exec("DELETE FROM server_roles WHERE server_id=?", serverId) }
         runCatching { Db.exec("DELETE FROM server_bans WHERE server_id=?", serverId) }
         Db.exec("DELETE FROM servers WHERE id=?", serverId)
+        forgetLook(serverId)
+        // Остальные участники должны увидеть, что сервера больше нет: иначе
+        // он висит в рельсе до перезапуска, а его каналы — до перезахода.
+        runCatching { SignalingClient.send("server_members", 0, serverId, "deleted") }
     }
 
     // ════════════════════════════════════════════════════════════════

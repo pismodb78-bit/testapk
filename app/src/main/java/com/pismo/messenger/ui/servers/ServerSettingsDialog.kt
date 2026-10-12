@@ -34,6 +34,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.ServerMemory
 import com.pismo.messenger.data.model.ServerPermissions
 import com.pismo.messenger.data.repo.ServerRepository
@@ -288,7 +289,9 @@ fun ServerSettingsDialog(
                 TextButton(onClick = { confirmLeave = true }) {
                     Text("Покинуть сервер", color = PismoColors.Yellow, fontSize = 13.sp)
                 }
-                if (perms.isOwner) {
+                // Удалять — владельцу. Системному администратору тоже: без
+                // него нечем убрать сервер, чей владелец давно ушёл.
+                if (perms.isOwner || UserSession.isAdmin) {
                     TextButton(onClick = { confirmDelete = true }) {
                         Text("Удалить сервер", color = PismoColors.Red, fontSize = 13.sp)
                     }

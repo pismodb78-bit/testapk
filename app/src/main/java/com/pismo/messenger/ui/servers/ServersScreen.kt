@@ -185,7 +185,7 @@ fun ServersScreen(
 
     // Чужие правки каналов раньше доезжали только к следующему опросу.
     DisposableEffect(Unit) {
-        val listener: (String, Int, Int, String) -> Unit = { type, _, session, _ ->
+        val listener: (String, Int, Int, String) -> Unit = { type, _, session, payload ->
             if (type == "channels_changed" && session == selected?.id) {
                 scope.launch { reloadChannels() }
             }
@@ -203,6 +203,15 @@ fun ServersScreen(
                     // Здесь только убираем сервер с глаз.
                     if (selected?.id == session) selected = null
                     error = ""
+                    reloadServers()
+                }
+            }
+            // Владелец удалил сервер — его больше нет ни у кого.
+            if (type == "server_members" && payload == "deleted") {
+                scope.launch {
+                    if (selected?.id == session) selected = null
+                    ServerMemory.invalidate(session)
+                    ServerRepository.forgetLook(session)
                     reloadServers()
                 }
             }
