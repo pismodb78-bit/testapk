@@ -161,6 +161,9 @@ fun ChannelChatScreen(
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = (remembered?.first?.size ?: 1) - 1
     )
+    // Клавиатура не должна прятать последние сообщения.
+    com.pismo.messenger.ui.components.KeepListAboveKeyboard(listState)
+
     var showSearch by remember { mutableStateOf(false) }
     var showCalendar by remember { mutableStateOf(false) }
     var showPins by remember { mutableStateOf(false) }
