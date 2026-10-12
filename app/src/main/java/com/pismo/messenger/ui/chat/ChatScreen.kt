@@ -240,6 +240,10 @@ fun ChatScreen(
     // Управление группой прямо из переписки: раньше до него надо было выйти
     // в список чатов и нажать на группу там.
     var showGroupManage by remember(targetId) { mutableStateOf(false) }
+    // Счётчик правок оформления группы: по нему значок в шапке перечитывает
+    // картинку. Забыть её из памяти мало — значок читает заново только когда
+    // меняются ключи его эффекта.
+    var groupLook by remember(targetId) { mutableIntStateOf(0) }
     var recordSeconds by remember { mutableStateOf(0) }
     var showCircleRecorder by remember { mutableStateOf(false) }
     var showGifPicker by remember { mutableStateOf(false) }
@@ -677,6 +681,10 @@ fun ChatScreen(
             // индикатор не совпадёт между телефоном и компьютером: в группе
             // адресат 0, а в sessionId едет id группы; в личке наоборот —
             // адресат это собеседник, в sessionId id отправителя.
+            if (type == "group_look" && isGroup && session == targetId) {
+                com.pismo.messenger.data.repo.GroupRepository.forgetLook(targetId)
+                groupLook++
+            }
             if (type == "typing" && sender != UserSession.effectiveId) {
                 val mine = if (payload == "group") isGroup && session == targetId
                 else !isGroup && (sender == targetId || session == targetId)
@@ -867,7 +875,10 @@ fun ChatScreen(
                             if (isGroup) showGroupManage = true else showUserActions = true
                         },
                     ) {
-                        if (isGroup) GroupAvatar(targetId, title, "#5865F2", 32.dp, hasAvatar = true)
+                        if (isGroup) GroupAvatar(
+                            targetId, title, "#5865F2", 32.dp,
+                            hasAvatar = true, version = groupLook,
+                        )
                         else UserAvatar(targetId, title, 32.dp, presence = peerPresence)
                         Spacer(Modifier.width(10.dp))
                         Column {
@@ -1383,6 +1394,9 @@ fun ChatScreen(
                 showGroupManage = false
                 onBack()
             },
+            // Своё же событие по сокету не возвращается — значок в шапке
+            // перечитываем сами.
+            onChanged = { groupLook++ },
         )
     }
 

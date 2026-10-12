@@ -37,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -99,6 +100,9 @@ fun ChatListScreen(
     var error by remember { mutableStateOf("") }
     var showCreateGroup by remember { mutableStateOf(false) }
     var manageGroup by remember { mutableStateOf<GroupSummary?>(null) }
+    // Счётчик правок оформления групп: по нему значки перечитывают картинку
+    // после события по сокету.
+    var groupLook by remember { mutableIntStateOf(0) }
     // Поиск по списку — «Поиск чатов…» с ПК. Фильтруем уже загруженное:
     // список и так весь на руках, дёргать базу на каждую букву незачем.
     var query by remember { mutableStateOf("") }
@@ -223,7 +227,11 @@ fun ChatListScreen(
             if (type == "chatpin") scope.launch { reload() }
             // Группа сменила имя, цвет или картинку — всё это видно в списке.
             if (type == "group_look") {
+                // Забыть картинку мало: значок перечитывает её только когда
+                // меняются ключи его эффекта, а они те же. Счётчик — и есть
+                // этот ключ, иначе в списке осталась бы прежняя картинка.
                 GroupRepository.forgetLook(session)
+                groupLook++
                 scope.launch { reload() }
             }
             // Выгнали из группы — она должна исчезнуть из списка. Сказать об
@@ -344,6 +352,7 @@ fun ChatListScreen(
                         items(shownGroups, key = { "g${it.id}" }) { g ->
                             GroupRow(
                                 g = g,
+                                look = groupLook,
                                 onClick = { onOpenGroup(g.id, g.name) },
                                 onLongClick = { manageGroup = g },
                             )
@@ -409,7 +418,12 @@ fun ChatListScreen(
                 scope.launch { reload() }
             },
             // Сменили имя, цвет или картинку — список чатов показывает их.
-            onChanged = { scope.launch { reload() } },
+            // Счётчик нужен и себе: своё же событие по сокету не возвращается,
+            // а значок без смены ключа останется с прежней картинкой.
+            onChanged = {
+                groupLook++
+                scope.launch { reload() }
+            },
         )
     }
 }
@@ -503,7 +517,12 @@ private fun ConversationRow(
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun GroupRow(g: GroupSummary, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun GroupRow(
+    g: GroupSummary,
+    look: Int,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -511,7 +530,10 @@ private fun GroupRow(g: GroupSummary, onClick: () -> Unit, onLongClick: () -> Un
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        GroupAvatar(g.id, g.name, g.avatarColorHex, 44.dp, hasAvatar = g.hasAvatar)
+        GroupAvatar(
+            g.id, g.name, g.avatarColorHex, 44.dp,
+            hasAvatar = g.hasAvatar, version = look,
+        )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
