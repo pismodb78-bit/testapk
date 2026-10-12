@@ -74,6 +74,15 @@ object Transfers {
     private val downloadGate = Mutex()
 
     private val jobs = HashMap<Long, Job>()
+    /**
+     * Чем запустить передачу заново.
+     *
+     * Сорвавшаяся отправка уносила с собой и само вложение: строку из базы
+     * убирали, полоса показывала ошибку, а выбранный файл оставалось искать
+     * заново. Замыкание держит те же байты, поэтому «Повторить» ничего не
+     * спрашивает. Живёт оно ровно до закрытия полосы.
+     */
+    private val retries = HashMap<Long, () -> Unit>()
     /** Куда откатывать отмену: таблица и номер уже вставленной строки. */
     private val rows = HashMap<Long, Pair<String, Int>>()
     private var nextId = 1L
@@ -187,6 +196,9 @@ object Transfers {
         if (!download && total <= 0L) return        // следить не за чем
         val id = synchronized(this) { nextId++ }
         _active.update { it + Task(id, where, fileName, total, download = download) }
+        synchronized(this) {
+            retries[id] = { launch(where, fileName, total, download, gate, table, body) }
+        }
 
         // Ленивый запуск: сначала кладём задачу в список, потом стартуем.
         // Иначе быстрая передача успевала бы завершиться и вычеркнуть себя
@@ -211,15 +223,45 @@ object Transfers {
                 // показывает причину, а недописанную строку убираем — иначе
                 // в переписке останется сообщение с именем файла без файла.
                 if (!download) dropRow(id)
-                update(id) {
-                    it.copy(error = e.message ?: if (download) "не удалось скачать"
-                                                 else "не удалось отправить")
-                }
+                update(id) { it.copy(error = reasonOf(e, download)) }
                 synchronized(this@Transfers) { jobs.remove(id) }
             }
         }
         synchronized(this) { jobs[id] = job }
         job.start()
+    }
+
+    /**
+     * Причина срыва по-человечески.
+     *
+     * Раньше в полосу попадал текст драйвера как есть — «Communications link
+     * failure». Для человека это ничего не значит и выглядит поломкой
+     * программы, хотя означает обычное: связь с сервером пропала.
+     */
+    private fun reasonOf(e: Throwable, download: Boolean): String {
+        if (com.pismo.messenger.data.db.Db.looksLikeConnectionLoss(e)) {
+            return "Нет связи с сервером. Попробуйте ещё раз."
+        }
+        val text = e.message.orEmpty()
+        if (text.contains("max_allowed_packet", ignoreCase = true) ||
+            text.contains("Packet for query is too large", ignoreCase = true)
+        ) return "Файл слишком большой для сервера."
+        if (text.isBlank()) return if (download) "Не удалось скачать." else "Не удалось отправить."
+        return text
+    }
+
+    /** Можно ли повторить сорвавшуюся передачу. */
+    fun canRetry(id: Long): Boolean = synchronized(this) { retries.containsKey(id) }
+
+    /**
+     * Повторить сорвавшуюся передачу теми же байтами. Прежняя полоса
+     * исчезает, вместо неё появляется новая — с нуля.
+     */
+    fun retry(id: Long) {
+        val again = synchronized(this) { retries.remove(id) } ?: return
+        synchronized(this) { jobs.remove(id); rows.remove(id) }
+        _active.update { list -> list.filterNot { it.id == id } }
+        again()
     }
 
     /** Отмена: обрываем передачу и убираем наполовину написанную строку. */
@@ -284,7 +326,9 @@ object Transfers {
     }
 
     private fun finish(id: Long) {
-        synchronized(this) { jobs.remove(id); rows.remove(id) }
+        // Вместе с задачей отпускаем и замыкание повтора: оно держит байты
+        // вложения, а они могут быть в десятки мегабайт.
+        synchronized(this) { jobs.remove(id); rows.remove(id); retries.remove(id) }
         _active.update { list -> list.filterNot { it.id == id } }
     }
 

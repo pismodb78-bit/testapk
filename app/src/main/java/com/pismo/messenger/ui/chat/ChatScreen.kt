@@ -48,6 +48,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
@@ -240,6 +241,10 @@ fun ChatScreen(
     // Управление группой прямо из переписки: раньше до него надо было выйти
     // в список чатов и нажать на группу там.
     var showGroupManage by remember(targetId) { mutableStateOf(false) }
+    // Почему не ушло последнее сообщение. Раньше текстовая отправка глотала
+    // отказ молча: поле очищалось в любом случае, и набранное пропадало без
+    // следа — человек узнавал об этом, только не найдя сообщение в ленте.
+    var sendError by remember(targetId) { mutableStateOf("") }
     // Счётчик правок оформления группы: по нему значок в шапке перечитывает
     // картинку. Забыть её из памяти мало — значок читает заново только когда
     // меняются ключи его эффекта.
@@ -788,20 +793,29 @@ fun ChatScreen(
             sending = true
             WavPlayer.stop()
             scope.launch {
-                runCatching {
-                    ChatRepository.sendMessage(
+                val sent = runCatching {
+                    val id = ChatRepository.sendMessage(
                         scope = scopeKind,
                         target = targetId,
                         text = text,
                         audio = voice,
                         replyToId = replyTo?.id ?: 0,
                     )
-                    notifyPeers(isGroup, targetId)
+                    if (id > 0) notifyPeers(isGroup, targetId)
+                    id > 0
+                }.getOrDefault(false)
+                sending = false
+
+                // Запись не ушла — не выбрасываем её: переписать голосовое
+                // заново человек точно не захочет.
+                if (!sent) {
+                    sendError = "Голосовое не отправлено: нет связи с сервером."
+                    return@launch
                 }
+                sendError = ""
                 input = ""
                 replyTo = null
                 pendingVoice = null
-                sending = false
                 reload(scrollToEnd = true, force = true)
             }
             return
@@ -845,18 +859,27 @@ fun ChatScreen(
 
         sending = true
         scope.launch {
-            runCatching {
-                ChatRepository.sendMessage(
+            val sent = runCatching {
+                val id = ChatRepository.sendMessage(
                     scope = scopeKind,
                     target = targetId,
                     text = text,
                     replyToId = replyTo?.id ?: 0,
                 )
-                notifyPeers(isGroup, targetId)
+                if (id > 0) notifyPeers(isGroup, targetId)
+                id > 0
+            }.getOrDefault(false)
+            sending = false
+
+            // Не ушло — оставляем набранное и ответ на месте: заставлять
+            // человека набирать заново из-за моргнувшей связи нельзя.
+            if (!sent) {
+                sendError = "Не отправлено: нет связи с сервером. Нажмите отправку ещё раз."
+                return@launch
             }
+            sendError = ""
             input = ""
             replyTo = null
-            sending = false
             reload(scrollToEnd = true, force = true)
         }
     }
@@ -1157,6 +1180,28 @@ fun ChatScreen(
             val uploads by Transfers.active.collectAsState()
             uploads.filter { it.where == Transfers.chatKey(isGroup, targetId) }
                 .forEach { UploadBar(it) }
+
+            if (sendError.isNotEmpty()) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(PismoColors.BgElevated)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.width(3.dp).height(28.dp).background(PismoColors.Red))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        sendError,
+                        color = PismoColors.TextSecondary,
+                        fontSize = 12.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = { sendError = "" }) {
+                        Icon(Icons.Default.Close, "Убрать", tint = PismoColors.TextMuted)
+                    }
+                }
+            }
 
             // Панель прикреплённых файлов: они ждут отправки вместе с текстом.
             pending.forEach { att ->
@@ -1711,8 +1756,19 @@ internal fun UploadBar(task: com.pismo.messenger.data.Transfers.Task?) {
                 trackColor = PismoColors.BgMain,
             )
         }
+        // Сорвалось — предлагаем повторить теми же байтами: искать файл
+        // заново из-за моргнувшей связи незачем.
+        if (task.error != null && com.pismo.messenger.data.Transfers.canRetry(task.id)) {
+            TextButton(onClick = { com.pismo.messenger.data.Transfers.retry(task.id) }) {
+                Text("Повторить", color = PismoColors.Cyan, fontSize = 13.sp)
+            }
+        }
         IconButton(onClick = { com.pismo.messenger.data.Transfers.cancel(task.id) }) {
-            Icon(Icons.Default.Close, "Отменить отправку", tint = PismoColors.TextMuted)
+            Icon(
+                Icons.Default.Close,
+                if (task.error != null) "Убрать" else "Отменить отправку",
+                tint = PismoColors.TextMuted,
+            )
         }
     }
 }
