@@ -17,6 +17,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -35,6 +36,7 @@ import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.data.model.GroupMember
 import com.pismo.messenger.data.model.UserBrief
 import com.pismo.messenger.data.repo.GroupRepository
+import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.components.LetterAvatar
 import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.login.PismoField
@@ -167,6 +169,18 @@ fun GroupMembersDialog(
     }
 
     LaunchedEffect(groupId) { reload() }
+
+    // Состав меняется у кого-то другого — список обязан это показать.
+    // Раньше он перечитывался только при открытии окна.
+    DisposableEffect(groupId) {
+        val listener: (String, Int, Int, String) -> Unit = { type, _, session, _ ->
+            if ((type == "group_members" || type == "group_look") && session == groupId) {
+                scope.launch { reload() }
+            }
+        }
+        SignalingClient.addListener(listener)
+        onDispose { SignalingClient.removeListener(listener) }
+    }
     LaunchedEffect(adding) {
         if (adding) runCatching { candidates = GroupRepository.candidatesToAdd(groupId) }
     }

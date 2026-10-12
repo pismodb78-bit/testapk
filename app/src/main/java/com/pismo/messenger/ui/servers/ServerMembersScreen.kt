@@ -31,6 +31,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +51,7 @@ import com.pismo.messenger.data.model.ServerPermissions
 import com.pismo.messenger.data.model.ServerRole
 import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.data.repo.ServerRepository
+import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.components.LetterAvatar
 import com.pismo.messenger.ui.components.UserAvatar
 import com.pismo.messenger.ui.components.Pill
@@ -94,6 +96,19 @@ fun ServerMembersScreen(serverId: Int, onBack: () -> Unit) {
     }
 
     LaunchedEffect(serverId) { reload() }
+
+    // Состав сервера меняется у кого-то другого — список обязан это
+    // показать. Раньше он перечитывался только при открытии экрана: выгнали
+    // человека с другого устройства, а у смотрящего он так и висел.
+    DisposableEffect(serverId) {
+        val listener: (String, Int, Int, String) -> Unit = { type, _, session, _ ->
+            if (type == "server_members" && session == serverId) {
+                scope.launch { reload() }
+            }
+        }
+        SignalingClient.addListener(listener)
+        onDispose { SignalingClient.removeListener(listener) }
+    }
 
     profileOf?.let { (uid, name) ->
         UserProfileDialog(

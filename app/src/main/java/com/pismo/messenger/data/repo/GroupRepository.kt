@@ -125,6 +125,7 @@ object GroupRepository {
             }.isSuccess
             if (ok) added++
         }
+        if (added > 0) announceMembers(groupId)
         return added
     }
 
@@ -152,6 +153,7 @@ object GroupRepository {
         runCatching {
             SignalingClient.send("group_kick", userId, groupId, if (alsoBan) "ban" else "kick")
         }
+        announceMembers(groupId)
     }
 
     /** Снять бан. Вернуть человека в группу всё равно придётся вручную. */
@@ -159,6 +161,8 @@ object GroupRepository {
         runCatching {
             Db.exec("DELETE FROM group_bans WHERE group_id=? AND user_id=?", groupId, userId)
         }
+        // Забаненные показываются там же, где участники.
+        announceMembers(groupId)
     }
 
     suspend fun bannedUsers(groupId: Int): List<UserBrief> = runCatching {
@@ -285,11 +289,23 @@ object GroupRepository {
         runCatching { SignalingClient.send("group_look", 0, groupId, "look") }
     }
 
+    /**
+     * Говорит остальным, что состав группы изменился.
+     *
+     * Адресное group_kick доходит только до выгнанного, а список участников
+     * открыт у других — до этого события он обновлялся лишь при повторном
+     * открытии окна.
+     */
+    private fun announceMembers(groupId: Int) {
+        runCatching { SignalingClient.send("group_members", 0, groupId, "members") }
+    }
+
     suspend fun leaveGroup(groupId: Int) {
         Db.exec(
             "DELETE FROM group_members WHERE group_id=? AND user_id=?",
             groupId, UserSession.effectiveId
         )
+        announceMembers(groupId)
     }
 
     suspend fun isMember(groupId: Int): Boolean = runCatching {

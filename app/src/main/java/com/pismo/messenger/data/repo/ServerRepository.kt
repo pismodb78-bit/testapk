@@ -209,6 +209,18 @@ object ServerRepository {
     }.getOrDefault(false)
 
     /**
+     * Говорит остальным, что состав сервера изменился.
+     *
+     * Широковещательно, как и смена вида: кто сейчас смотрит список
+     * участников, клиент не знает. Адресное server_kick доходит только до
+     * выгнанного — а список участников открыт у других, и до этого события
+     * он обновлялся лишь при повторном заходе на сервер.
+     */
+    private fun announceMembers(serverId: Int) {
+        runCatching { SignalingClient.send("server_members", 0, serverId, "members") }
+    }
+
+    /**
      * Говорит остальным, что сервер сменил вид: название, цвет или картинку.
      *
      * Шлём широковещательно (кому = 0), как new_message: участников сервера
@@ -311,6 +323,7 @@ object ServerRepository {
             ?: return JoinResult.NotFound
 
         Db.exec("INSERT IGNORE INTO server_members (server_id,user_id) VALUES (?,?)", serverId, me)
+        announceMembers(serverId)
         return JoinResult.Ok(name)
     }
 
@@ -319,6 +332,7 @@ object ServerRepository {
             "DELETE FROM server_members WHERE server_id=? AND user_id=?",
             serverId, UserSession.effectiveId
         )
+        announceMembers(serverId)
     }
 
     suspend fun serverInfo(serverId: Int): Pair<String, Int>? = Db.queryFirst(
@@ -862,6 +876,8 @@ object ServerRepository {
             "UPDATE server_members SET role_id=? WHERE server_id=? AND user_id=?",
             roleId, serverId, userId
         )
+        // Роль видна прямо в списке участников — это тоже смена состава.
+        announceMembers(serverId)
     }
 
     /** Заглушить уведомления сервера — только для текущего пользователя. */
@@ -888,6 +904,7 @@ object ServerRepository {
         runCatching {
             SignalingClient.send("server_kick", userId, serverId, if (alsoBan) "ban" else "kick")
         }
+        announceMembers(serverId)
     }
 
     /**
@@ -919,6 +936,8 @@ object ServerRepository {
 
     suspend fun unban(serverId: Int, userId: Int) {
         runCatching { Db.exec("DELETE FROM server_bans WHERE server_id=? AND user_id=?", serverId, userId) }
+        // Забаненные показываются там же, где участники.
+        announceMembers(serverId)
     }
 
     suspend fun bannedUsers(serverId: Int): List<ServerMemberRow> = runCatching {
