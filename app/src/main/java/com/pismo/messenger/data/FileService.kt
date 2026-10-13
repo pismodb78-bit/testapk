@@ -3,16 +3,27 @@ package com.pismo.messenger.data
 import com.pismo.messenger.core.JwtAuth
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.Response
 import okhttp3.MediaType.Companion.toMediaType
 import okio.BufferedSink
 import java.net.URLEncoder
+import java.io.IOException
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * Файловый сервис: вложение лежит на диске сервера, в сообщении — ссылка.
@@ -46,6 +57,39 @@ object FileService {
     @Volatile private var probedAt = 0L
     @Volatile private var alive = false
 
+    /** Сколько раз пробуем дослать файл, прежде чем сдаться. */
+    private const val MAX_ATTEMPTS = 6
+
+    /** Сервер назвал своё смещение (409) — продолжаем с него. */
+    private class OffsetMismatch(val offset: Int) : IOException("offset mismatch")
+
+    /**
+     * Запрос, который слушается отмены.
+     *
+     * `execute()` — вызов блокирующий: отмена корутины его не трогает, поток
+     * сидит в нём до конца передачи. Для отправки это выходило боком. Отмена
+     * снимала задачу со списка, но корутина оставалась внутри заливки и
+     * держала очередь: следующий файл стоял «В очереди» и не двигался, пока
+     * отменённый не догрузится до конца — то есть отмена не отменяла ничего,
+     * кроме надписи на экране.
+     *
+     * Здесь запрос ставится в очередь OkHttp, а отмена корутины рвёт его
+     * по-настоящему: поток освобождается сразу, очередь идёт дальше.
+     */
+    private suspend fun call(req: Request, client: OkHttpClient = http): Response =
+        suspendCancellableCoroutine { cont ->
+            val c = client.newCall(req)
+            cont.invokeOnCancellation { runCatching { c.cancel() } }
+            c.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (cont.isActive) cont.resumeWithException(e)
+                }
+                override fun onResponse(call: Call, response: Response) {
+                    if (cont.isActive) cont.resume(response) else runCatching { response.close() }
+                }
+            })
+        }
+
     fun base(): String = Prefs.filesUrl
 
     /**
@@ -60,8 +104,8 @@ object FileService {
         probedAt = now
         alive = runCatching {
             val req = Request.Builder().url("$b/health").get().build()
-            http.newBuilder().callTimeout(4, TimeUnit.SECONDS).build()
-                .newCall(req).execute().use { it.isSuccessful }
+            call(req, http.newBuilder().callTimeout(4, TimeUnit.SECONDS).build())
+                .use { it.isSuccessful }
         }.getOrDefault(false)
         alive
     }
@@ -94,54 +138,112 @@ object FileService {
     ): String? = withContext(Dispatchers.IO) {
         val b = base()
         if (b.isEmpty() || data.isEmpty()) return@withContext null
+        val total = data.size
 
-        runCatching {
+        try {
             val sha = sha256(data)
             val nameB64 = android.util.Base64.encodeToString(
                 name.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP
             )
 
             // 1. Создаём загрузку. Если такой файл уже лежит — ответ придёт
-            //    сразу с ключом, и по сети не уйдёт ни байта.
+            //    сразу с ключом, и по сети не уйдёт ни байта. А если эту же
+            //    отправку уже начинали и она оборвалась, сервер вернёт ту же
+            //    загрузку и скажет, сколько у него есть: повтор продолжает
+            //    с места обрыва, а не гонит мегабайты заново.
             val create = Request.Builder()
                 .url("$b/files")
                 .post(RequestBody.create(null, ByteArray(0)))
                 .header("Authorization", "Bearer ${token()}")
-                .header("Upload-Length", data.size.toString())
+                .header("Upload-Length", total.toString())
                 .header("Upload-Sha", sha)
                 .header("Upload-Name", nameB64)
                 .build()
 
             var uploadId: String? = null
-            http.newCall(create).execute().use { res ->
+            var offset = 0
+            call(create).use { res ->
                 if (!res.isSuccessful) return@withContext null
                 res.header("File-Key")?.let { key ->
                     onProgress?.invoke(1f)
                     return@withContext urlOf(key, name)      // уже на сервере
                 }
                 uploadId = res.header("Upload-Id")
+                offset = res.header("Upload-Offset")?.toIntOrNull()?.coerceIn(0, total) ?: 0
             }
             val id = uploadId ?: return@withContext null
+            if (offset > 0) onProgress?.invoke(offset.toFloat() / total)
 
-            // 2. Досылаем остаток. После обрыва спрашиваем, сколько принято,
-            //    и продолжаем ровно с этого места.
-            var offset = 0
+            // Докуда дошли в лучшем случае. Нужно, чтобы различать две
+            // разные беды: «сервис не работает» (тогда тихо откатываемся на
+            // базу) и «связь оборвалась на середине». Во втором случае
+            // уводить файл в базу вредно: там он поедет с нуля и медленно,
+            // хотя на сервисе уже лежит половина и повтор её продолжит.
+            var best = offset
+
+            // 2. Досылаем остаток. Обрыв на мобильной связи — не исключение,
+            //    а обычное дело, поэтому пробуем несколько раз, и каждый раз
+            //    продолжаем ровно с того места, которое назвал сервер.
             var attempt = 0
             while (true) {
-                val sent = runCatching { patch(b, id, data, offset, onProgress) }
-                val key = sent.getOrNull()
-                if (key != null) return@withContext urlOf(key, name)
-                if (sent.isSuccess) return@withContext null      // сервис отказал
-                if (++attempt > 4) return@withContext null
-                kotlinx.coroutines.delay(1500L * attempt)
-                offset = headOffset(b, id) ?: return@withContext null
+                currentCoroutineContext().ensureActive()
+                try {
+                    val key = patch(b, id, data, offset, onProgress)
+                    if (key != null) return@withContext urlOf(key, name)
+                    // Приняли, но файл ещё не целый — спрашиваем, сколько есть.
+                    if (++attempt > MAX_ATTEMPTS) giveUp(best)
+                    offset = resolveOffset(b, id) ?: giveUp(best)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Broken) {
+                    throw e              // решение принято — не крутим цикл дальше
+                } catch (e: Silent) {
+                    throw e
+                } catch (e: OffsetMismatch) {
+                    // Сервер назвал своё смещение. Это сверка, а не сбой:
+                    // попытку не тратим, но и крутиться на месте не даём.
+                    if (e.offset == offset && ++attempt > MAX_ATTEMPTS) giveUp(best)
+                    offset = e.offset.coerceIn(0, total)
+                    onProgress?.invoke(offset.toFloat() / total)
+                } catch (e: Throwable) {
+                    if (++attempt > MAX_ATTEMPTS) giveUp(best)
+                    // Связь не возвращается мгновенно: ждём дольше с каждым
+                    // разом, а не долбимся в один и тот же обрыв.
+                    delay(2000L * attempt)
+                    offset = resolveOffset(b, id) ?: giveUp(best)
+                    onProgress?.invoke(offset.toFloat() / total)
+                }
+                if (offset > best) best = offset
             }
             @Suppress("UNREACHABLE_CODE") null
-        }.getOrNull()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Broken) {
+            throw e              // сорвалось на полпути — наверх, к «Повторить»
+        } catch (e: Throwable) {
+            null                 // сервис не отозвался — поедем через базу
+        }
     }
 
+    /**
+     * Отправка сорвалась. Если сервис уже принял часть файла, уводить его в
+     * базу нельзя: там он пойдёт с нуля, медленно и, скорее всего, тем же
+     * обрывом и кончится — а на сервисе половина уже лежит, и повтор
+     * продолжит с места обрыва. Поэтому наверх уходит ошибка с «Повторить»,
+     * а не тихий откат.
+     */
+    private fun giveUp(sent: Int): Nothing =
+        if (sent > 0) throw Broken()
+        else throw Silent()
+
+    /** Сорвалось после того, как часть файла уже уехала. */
+    class Broken : IOException("Связь оборвалась. «Повторить» продолжит с места обрыва.")
+
+    /** Сервис не отозвался — отправка пойдёт через базу, как раньше. */
+    private class Silent : IOException("file service unavailable")
+
     /** Одна попытка дозаписи. Возвращает ключ файла, когда дошли до конца. */
-    private fun patch(
+    private suspend fun patch(
         base: String, id: String, data: ByteArray, from: Int,
         onProgress: ((Float) -> Unit)?,
     ): String? {
@@ -169,18 +271,38 @@ object FileService {
             .header("Authorization", "Bearer ${token()}")
             .header("Upload-Offset", from.toString())
             .build()
-        http.newCall(req).execute().use { res ->
-            if (!res.isSuccessful) throw java.io.IOException("patch ${res.code}")
+        call(req).use { res ->
+            // 409 — разошлись в том, с какого места продолжать. Сервер
+            // присылает своё смещение: с него и пойдём.
+            if (res.code == 409) {
+                throw OffsetMismatch(res.header("Upload-Offset")?.toIntOrNull() ?: 0)
+            }
+            if (!res.isSuccessful) throw IOException("patch ${res.code}")
             return res.header("File-Key")
         }
     }
 
-    private fun headOffset(base: String, id: String): Int? = runCatching {
+    /**
+     * Сколько байт у сервера. Спрашиваем с повторами: один неудачный вопрос
+     * — не повод бросать отправку, на которую уже ушли минуты. Раньше именно
+     * так и было: связь моргнула на этом запросе, и файл уезжал заново через
+     * базу, с нуля.
+     */
+    private suspend fun resolveOffset(base: String, id: String): Int? {
+        repeat(3) { i ->
+            currentCoroutineContext().ensureActive()
+            headOffset(base, id)?.let { return it }
+            delay(1500L * (i + 1))
+        }
+        return headOffset(base, id)
+    }
+
+    private suspend fun headOffset(base: String, id: String): Int? = runCatching {
         val req = Request.Builder()
             .url("$base/files/$id").head()
             .header("Authorization", "Bearer ${token()}")
             .build()
-        http.newCall(req).execute().use { res ->
+        call(req).use { res ->
             if (!res.isSuccessful) null else res.header("Upload-Offset")?.toIntOrNull()
         }
     }.getOrNull()
@@ -197,7 +319,7 @@ object FileService {
         if (url.isBlank()) return@withContext null
         runCatching {
             val req = Request.Builder().url(resolve(url)).get().build()
-            http.newCall(req).execute().use { res ->
+            call(req).use { res ->
                 if (!res.isSuccessful) return@withContext null
                 val body = res.body ?: return@withContext null
                 val total = body.contentLength()
@@ -207,6 +329,10 @@ object FileService {
                 val buf = ByteArray(64 * 1024)
                 body.byteStream().use { input ->
                     while (true) {
+                        // Чтение блокирующее, поэтому про отмену спрашиваем
+                        // сами: иначе отменённое скачивание держало бы свою
+                        // очередь до последнего байта.
+                        currentCoroutineContext().ensureActive()
                         val n = input.read(buf)
                         if (n <= 0) break
                         out.write(buf, 0, n)
