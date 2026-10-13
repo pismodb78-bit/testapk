@@ -1076,11 +1076,23 @@ object ChatRepository {
             onProgress?.invoke(off.toFloat() / data.size)
 
             val sql = "UPDATE $table SET $column = CONCAT(IFNULL($column, _binary''), ?) WHERE id=?"
+
+            // РАЗГОН. Первая порция — маленькая, дальше вдвое больше каждая,
+            // до обычного размера.
+            //
+            // Доля обновляется только ПОСЛЕ порции, а порция у многомегабайтного
+            // файла сама по себе в несколько мегабайт. На слабой связи это
+            // означало минуты ровного нуля: отправка шла, а подтвердить это было
+            // нечем, и выглядело как «файл не выгружается». Четверть мегабайта
+            // уходит за секунды, и полоса трогается почти сразу, а дальше порции
+            // быстро вырастают до прежних — на общую скорость и на работу сервера
+            // разгон почти не влияет.
+            var step = minOf(chunk, 256 * 1024)
             while (off < data.size) {
                 // Отмену проверяем сами: блок обычный, не приостанавливаемый,
                 // поэтому прерывать его посреди порции некому.
                 if (job != null && !job.isActive) throw kotlinx.coroutines.CancellationException()
-                val len = minOf(chunk, data.size - off)
+                val len = minOf(step, data.size - off)
                 conn.prepareStatement(sql).use { ps ->
                     // Поток по куску массива вместо copyOfRange: копия каждой
                     // порции — это ещё столько же памяти и работы сборщику,
@@ -1093,6 +1105,7 @@ object ChatRepository {
                 }
                 off += len
                 onProgress?.invoke(off.toFloat() / data.size)
+                if (step < chunk) step = minOf(chunk, step * 2)
             }
         } finally {
             if (job != null) transferConns.remove(job)

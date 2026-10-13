@@ -1744,9 +1744,17 @@ internal fun UploadBar(task: com.pismo.messenger.data.Transfers.Task?) {
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                task.error ?: if (task.totalBytes > 0)
-                    task.fileName + " · " + formatBytesShort(task.totalBytes)
-                else task.fileName,
+                // Сколько уже ушло — рядом с размером. Одной доли мало: на
+                // слабой связи она подолгу стоит на месте, и понять, идёт
+                // отправка или встала, было нечем.
+                task.error ?: when {
+                    task.totalBytes <= 0 -> task.fileName
+                    task.progress > 0f && task.progress < 1f ->
+                        task.fileName + " · " +
+                                formatBytesShort((task.totalBytes * task.progress).toLong()) +
+                                " из " + formatBytesShort(task.totalBytes)
+                    else -> task.fileName + " · " + formatBytesShort(task.totalBytes)
+                },
                 color = PismoColors.TextMuted,
                 fontSize = 12.sp,
                 maxLines = 2,
