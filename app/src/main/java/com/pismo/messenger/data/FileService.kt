@@ -60,6 +60,16 @@ object FileService {
     /** Сколько раз пробуем дослать файл, прежде чем сдаться. */
     private const val MAX_ATTEMPTS = 6
 
+    /**
+     * Порция одной дозаписи.
+     *
+     * Четыре мегабайта — это запрос на несколько секунд даже на плохой
+     * мобильной связи. Длиннее делать нельзя: чем дольше идёт один запрос,
+     * тем вернее он где-нибудь оборвётся, а обрыв стоит всей неподтверждённой
+     * порции. Короче тоже незачем — лишние круги до сервера на ровном месте.
+     */
+    private const val CHUNK = 4 * 1024 * 1024
+
     /** Сервер назвал своё смещение (409) — продолжаем с него. */
     private class OffsetMismatch(val offset: Int) : IOException("offset mismatch")
 
@@ -181,22 +191,35 @@ object FileService {
             // хотя на сервисе уже лежит половина и повтор её продолжит.
             var best = offset
 
-            // 2. Досылаем остаток. Обрыв на мобильной связи — не исключение,
-            //    а обычное дело, поэтому пробуем несколько раз, и каждый раз
-            //    продолжаем ровно с того места, которое назвал сервер.
+            // 2. Досылаем остаток ПОРЦИЯМИ.
+            //
+            // Одним запросом на весь файл это уже не делается. Длинная
+            // отправка на мобильной связи почти наверняка где-то оборвётся —
+            // оператором, NAT-ом, сменой вышки, — и чем дольше запрос, тем
+            // вернее. Пока порция была одна на весь файл, каждый обрыв стоил
+            // всего, что успело уйти сверх подтверждённого: отправка
+            // возвращалась к последнему подтверждённому байту и шла по
+            // кругу, не доезжая до конца.
+            //
+            // Порция в несколько мегабайт — это запрос на секунды. Обрыв
+            // стоит одной порции, а подтверждённое сервером не теряется.
             var attempt = 0
-            while (true) {
+            while (offset < total) {
                 currentCoroutineContext().ensureActive()
+                val till = minOf(offset + CHUNK, total)
                 try {
-                    val key = patch(b, id, data, offset, onProgress)
+                    val before = offset
+                    val key = patch(b, id, data, offset, till, total, onProgress)
                     if (key != null) return@withContext urlOf(key, name)
-                    // Приняли, но файл ещё не целый — спрашиваем, сколько есть.
-                    if (++attempt > MAX_ATTEMPTS) giveUp(best)
-                    offset = resolveOffset(b, id) ?: giveUp(best)
+                    offset = till
+                    onProgress?.invoke(offset.toFloat() / total)
+                    // Порция дошла — счётчик неудач обнуляем: лимит попыток
+                    // про «не движется», а не про длину файла.
+                    if (offset > before) { attempt = 0; best = maxOf(best, offset) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Broken) {
-                    throw e              // решение принято — не крутим цикл дальше
+                    throw e
                 } catch (e: Silent) {
                     throw e
                 } catch (e: OffsetMismatch) {
@@ -204,6 +227,7 @@ object FileService {
                     // попытку не тратим, но и крутиться на месте не даём.
                     if (e.offset == offset && ++attempt > MAX_ATTEMPTS) giveUp(best)
                     offset = e.offset.coerceIn(0, total)
+                    best = maxOf(best, offset)
                     onProgress?.invoke(offset.toFloat() / total)
                 } catch (e: Throwable) {
                     if (++attempt > MAX_ATTEMPTS) giveUp(best)
@@ -211,10 +235,16 @@ object FileService {
                     // разом, а не долбимся в один и тот же обрыв.
                     delay(2000L * attempt)
                     offset = resolveOffset(b, id) ?: giveUp(best)
+                    best = maxOf(best, offset)
                     onProgress?.invoke(offset.toFloat() / total)
                 }
-                if (offset > best) best = offset
             }
+
+            // Всё ушло, а ключа не было: последняя порция могла дойти уже
+            // после обрыва ответа. Спрашиваем сервер — файл у него целый,
+            // и он отдаст ключ.
+            finishUpload(b, id) ?.let { return@withContext urlOf(it, name) }
+            giveUp(best)
             @Suppress("UNREACHABLE_CODE") null
         } catch (e: CancellationException) {
             throw e
@@ -242,20 +272,22 @@ object FileService {
     /** Сервис не отозвался — отправка пойдёт через базу, как раньше. */
     private class Silent : IOException("file service unavailable")
 
-    /** Одна попытка дозаписи. Возвращает ключ файла, когда дошли до конца. */
+    /**
+     * Одна порция дозаписи: байты [from, till). Возвращает ключ файла, если
+     * этой порцией файл закончился.
+     */
     private suspend fun patch(
-        base: String, id: String, data: ByteArray, from: Int,
+        base: String, id: String, data: ByteArray, from: Int, till: Int, total: Int,
         onProgress: ((Float) -> Unit)?,
     ): String? {
-        val total = data.size
         val body = object : RequestBody() {
             override fun contentType() = "application/offset+octet-stream".toMediaType()
-            override fun contentLength() = (total - from).toLong()
+            override fun contentLength() = (till - from).toLong()
             override fun writeTo(sink: BufferedSink) {
                 var off = from
                 val step = 64 * 1024
-                while (off < total) {
-                    val len = minOf(step, total - off)
+                while (off < till) {
+                    val len = minOf(step, till - off)
                     sink.write(data, off, len)
                     off += len
                     // Прогресс по байтам: полоса трогается через мгновение
@@ -281,6 +313,19 @@ object FileService {
             return res.header("File-Key")
         }
     }
+
+    /**
+     * Ключ готового файла, когда последняя порция дошла, а ответ на неё — нет.
+     * Пустая дозапись в конец заставляет сервер досчитать отпечаток и отдать
+     * ключ; файла при этом уже нет в незавершённых — тогда ответом будет 404,
+     * и это честное «не вышло».
+     */
+    private suspend fun finishUpload(base: String, id: String): String? = runCatching {
+        val have = headOffset(base, id) ?: return null
+        // Пустая дозапись в конец: если у сервера уже весь файл, он досчитает
+        // отпечаток и отдаст ключ; если нет — ответит без ключа.
+        patch(base, id, ByteArray(0), have, have, maxOf(have, 1), null)
+    }.getOrNull()
 
     /**
      * Сколько байт у сервера. Спрашиваем с повторами: один неудачный вопрос
