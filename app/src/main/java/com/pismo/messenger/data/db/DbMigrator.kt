@@ -352,6 +352,24 @@ object DbMigrator {
                         "PRIMARY KEY (group_id, user_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
             )
         },
+
+        Migration(26, "вложения на файловом сервисе: ссылка вместо блоба") { c ->
+            // Дословно та же, что на ПК: журнал schema_migrations один на всех.
+            //
+            // Файл теперь лежит на диске сервера, а в сообщении остаётся
+            // ссылка на него. Старые сообщения с блобами продолжают читаться
+            // по-старому — колонка пустая и означает ровно это.
+            for (t in arrayOf("messages", "group_messages", "server_messages")) {
+                if (!tableExists(c, t)) continue
+                if (!columnExists(c, t, "file_url"))
+                    exec(c, "ALTER TABLE $t ADD COLUMN file_url VARCHAR(512) NULL")
+                // Размер вложения раньше считали по самому блобу
+                // (OCTET_LENGTH). Файла в базе больше нет — размер надо
+                // хранить рядом со ссылкой.
+                if (!columnExists(c, t, "file_size"))
+                    exec(c, "ALTER TABLE $t ADD COLUMN file_size BIGINT NULL")
+            }
+        },
     )
 
     /**

@@ -88,6 +88,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     var lkSecret by remember { mutableStateOf(Prefs.liveKitApiSecret) }
 
     var wsUrl by remember { mutableStateOf(Prefs.wsUrlOverride) }
+    var filesUrl by remember { mutableStateOf(Prefs.filesUrlOverride) }
     var wsEnabled by remember { mutableStateOf(Prefs.wsEnabled) }
     var notifications by remember { mutableStateOf(Prefs.notificationsEnabled) }
     var sounds by remember { mutableStateOf(Prefs.soundsEnabled) }
@@ -146,6 +147,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         Prefs.liveKitApiKey = lkKey.trim()
         Prefs.liveKitApiSecret = lkSecret.trim()
         Prefs.wsUrlOverride = wsUrl.trim()
+        Prefs.filesUrlOverride = filesUrl.trim()
         Prefs.wsEnabled = wsEnabled
         Prefs.notificationsEnabled = notifications
         Prefs.soundsEnabled = sounds
@@ -284,6 +286,27 @@ fun SettingsScreen(onBack: () -> Unit) {
                         "базы. ПК берёт адрес так же — из ip.txt, порт 8080.",
                 color = PismoColors.TextMuted, fontSize = 11.sp,
             )
+            Spacer(Modifier.height(12.dp))
+            PismoField(filesUrl, { filesUrl = it }, "Файловый сервис (пусто — по адресу БД)")
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Используется: " + filesUrl.trim().let {
+                    when {
+                        it == "-" -> "нет — вложения поедут в базу, как раньше"
+                        it.isNotEmpty() -> it.trimEnd('/')
+                        else -> "http://${host.trim()}:8081"
+                    }
+                },
+                color = PismoColors.Cyan, fontSize = 12.sp,
+            )
+            Text(
+                "Крупные вложения уходят на диск сервера, а в сообщении остаётся " +
+                        "ссылка: видно, сколько байт ушло, обрыв не отменяет отправку, " +
+                        "видео перематывается. Прочерк «-» выключает. Сервис ставится " +
+                        "отдельно — ws-server/install-files.sh.",
+                color = PismoColors.TextMuted, fontSize = 11.sp,
+            )
+
             Spacer(Modifier.height(8.dp))
             SwitchRow("Мгновенные события через WebSocket", wsEnabled) { wsEnabled = it }
             SwitchRow("Уведомления о новых сообщениях", notifications) { notifications = it }

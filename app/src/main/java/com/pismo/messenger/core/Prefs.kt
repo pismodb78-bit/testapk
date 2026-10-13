@@ -65,6 +65,24 @@ object Prefs {
     val wsUrl: String
         get() = wsUrlOverride.ifBlank { "ws://$dbHost:8080/" }
 
+    // ── Файловый сервис (ws-server/files.js, порт 8081) ────────────────
+    /**
+     * Пусто — собрать автоматически как http://<dbHost>:8081.
+     * Прочерк («-») — выключить: вложения снова поедут в базу.
+     */
+    var filesUrlOverride: String
+        get() = sp.getString("files_url", "")!!
+        set(v) = sp.edit().putString("files_url", v).apply()
+
+    val filesUrl: String
+        get() = filesUrlOverride.trim().let {
+            when {
+                it == "-" -> ""
+                it.isNotEmpty() -> it.trimEnd('/')
+                else -> "http://$dbHost:8081"
+            }
+        }
+
     // ── LiveKit ────────────────────────────────────────────────────────
     var liveKitUrl: String
         get() = sp.getString("lk_url", "ws://5.181.23.167:7880")!!

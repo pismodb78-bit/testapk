@@ -615,7 +615,7 @@ object ServerRepository {
                    (sm.image_data IS NOT NULL) AS has_img,
                    (sm.audio_data IS NOT NULL) AS has_audio,
                    (sm.video_data IS NOT NULL) AS has_video,
-                   (sm.file_data  IS NOT NULL) AS has_file
+                   ${ChatRepository.hasFileSqlFor("sm")} AS has_file
                    -- Размер вложения здесь НЕ считаем. OCTET_LENGTH по
                    -- LONGBLOB заставляет сервер поднять вложение с диска
                    -- целиком, а лента перечитывается каждые 2.5 секунды:
@@ -682,6 +682,17 @@ object ServerRepository {
         val bigImage = image?.takeIf { it.size > ChatRepository.chunkSizeForBlob() }
         val inlineImage = if (bigImage != null) null else image
 
+        // Крупное вложение — на файловый сервис, как в личных чатах: в строке
+        // останется ссылка, а не блоб, дописываемый порциями.
+        var uploadedUrl: String? = null
+        if (file != null && file.size >= com.pismo.messenger.data.FileService.MIN_SIZE &&
+            com.pismo.messenger.data.FileService.available()
+        ) {
+            uploadedUrl = com.pismo.messenger.data.FileService.upload(
+                file, fileName ?: "file", onProgress
+            )
+        }
+
         val hasMedia = image != null || audio != null || video != null || file != null
         val newId = if (hasMedia) {
             val id = Db.insert(
@@ -700,7 +711,18 @@ object ServerRepository {
                 ChatRepository.uploadFileData("server_messages", id, bigImage, onProgress,
                                               column = "image_data")
             }
-            if (file != null && file.isNotEmpty() && id > 0) {
+            // Ссылку ставим отдельным запросом: колонок может не быть, если
+            // миграцию 26 ещё не прокатили, — тогда файл поедет в базу.
+            var linked = false
+            if (uploadedUrl != null && id > 0) {
+                linked = runCatching {
+                    Db.exec(
+                        "UPDATE server_messages SET file_url=?, file_size=? WHERE id=?",
+                        uploadedUrl, file?.size?.toLong() ?: 0L, id
+                    ) > 0
+                }.getOrDefault(false)
+            }
+            if (!linked && file != null && file.isNotEmpty() && id > 0) {
                 // Тем же дозаписывающим путём, что и личные чаты: одним
                 // пакетом двести мегабайт сервер не примет.
                 ChatRepository.uploadFileData("server_messages", id, file, onProgress,

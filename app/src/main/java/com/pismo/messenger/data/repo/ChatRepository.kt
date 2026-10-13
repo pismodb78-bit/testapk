@@ -4,6 +4,7 @@ import com.pismo.messenger.core.MessagePreview
 import com.pismo.messenger.core.Crypto
 import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.buildName
+import com.pismo.messenger.data.FileService
 import com.pismo.messenger.data.MediaCache
 import com.pismo.messenger.data.MessageMemory
 import com.pismo.messenger.data.db.Db
@@ -399,7 +400,7 @@ object ChatRepository {
                    (m.image_data IS NOT NULL) AS has_img,
                    (m.audio_data IS NOT NULL) AS has_audio,
                    (m.video_data IS NOT NULL) AS has_video,
-                   (m.file_data  IS NOT NULL) AS has_file
+                   ${hasFileSql("m")} AS has_file
                    -- Размер вложения здесь НЕ считаем. OCTET_LENGTH по
                    -- LONGBLOB заставляет сервер поднять вложение с диска
                    -- целиком, а лента перечитывается каждые 2.5 секунды:
@@ -427,7 +428,7 @@ object ChatRepository {
                    (gm.image_data IS NOT NULL) AS has_img,
                    (gm.audio_data IS NOT NULL) AS has_audio,
                    (gm.video_data IS NOT NULL) AS has_video,
-                   (gm.file_data  IS NOT NULL) AS has_file
+                   ${hasFileSql("gm")} AS has_file
             FROM group_messages gm
             JOIN users u ON u.id = gm.sender_id
             WHERE gm.group_id=? $cursor
@@ -617,7 +618,7 @@ object ChatRepository {
                    image_data IS NOT NULL AS has_img,
                    audio_data IS NOT NULL AS has_aud,
                    video_data IS NOT NULL AS has_vid,
-                   file_data  IS NOT NULL AS has_file
+                   ${hasFileSql("")} AS has_file
             FROM messages
             WHERE receiver_id=? AND sender_id=? AND is_read=0
             ORDER BY id DESC LIMIT 1
@@ -644,7 +645,7 @@ object ChatRepository {
                    gm.image_data IS NOT NULL AS has_img,
                    gm.audio_data IS NOT NULL AS has_aud,
                    gm.video_data IS NOT NULL AS has_vid,
-                   gm.file_data  IS NOT NULL AS has_file,
+                   ${hasFileSql("gm")} AS has_file,
                    TRIM(CONCAT(u.Name,' ',u.Surname)) AS sender_name, u.login
             FROM group_messages gm
             JOIN users u ON u.id = gm.sender_id
@@ -886,6 +887,23 @@ object ChatRepository {
             }
         }
 
+        // ФАЙЛОВЫЙ СЕРВИС.
+        //
+        // Крупное вложение уходит на диск сервера, а в строке остаётся ссылка.
+        // Так отпадает дозапись блоба порциями (сервер переписывал весь
+        // накопленный блоб на каждую порцию), появляется честный побайтовый
+        // прогресс, докачка после обрыва и перемотка видео.
+        //
+        // Заливаем ДО вставки строки: пока файла нет, нет и сообщения — на
+        // отмену не остаётся ни пустого пузыря, ни мусора в базе. Мелочь и
+        // голосовые по-прежнему едут в базу: ради них ходить некуда.
+        var uploadedUrl: String? = null
+        var uploadedSize = 0L
+        if (file != null && file.size >= FileService.MIN_SIZE && FileService.available()) {
+            uploadedUrl = FileService.upload(file, fileName ?: "file", onProgress)
+            if (uploadedUrl != null) uploadedSize = file.size.toLong()
+        }
+
         val newId = if (scope == Scope.GROUP) {
             Db.insert(
                 "INSERT INTO group_messages (group_id, sender_id, text, image_data, audio_data, " +
@@ -902,11 +920,28 @@ object ChatRepository {
 
         onRowCreated?.invoke(newId)
 
+        // Ссылку ставим отдельным запросом: колонок может не быть, если
+        // миграцию 26 ещё не прокатили, — тогда файл просто поедет в базу,
+        // как раньше, а сообщение всё равно уйдёт.
+        if (uploadedUrl != null && newId > 0) {
+            val stamped = runCatching {
+                Db.exec(
+                    "UPDATE $table SET file_url=?, file_size=? WHERE id=?",
+                    uploadedUrl, uploadedSize, newId
+                ) > 0
+            }.getOrDefault(false)
+            if (!stamped) {
+                // Колонки нет — отступаем на старый путь, иначе у сообщения
+                // осталось бы имя файла без самого файла.
+                uploadedUrl = null
+            }
+        }
+
         if (bigImage != null && newId > 0) {
             uploadFileData(table, newId, bigImage, onProgress, column = "image_data")
         }
 
-        if (file != null && file.isNotEmpty() && newId > 0) {
+        if (uploadedUrl == null && file != null && file.isNotEmpty() && newId > 0) {
             uploadFileData(table, newId, file, onProgress, fileName = fileName)
             // Отпечаток ставим ПОСЛЕ заливки: только теперь тело файла в строке
             // действительно есть, и её можно предлагать донором следующей
@@ -1227,6 +1262,18 @@ object ChatRepository {
     ): ByteArray? {
         MediaCache.get(msgId, "file", fileName)?.let { return it }
 
+        // Файл мог уехать на файловый сервис — тогда в строке лежит ссылка, а
+        // блоб пуст. Спрашиваем ссылку раньше блоба: качать нечего.
+        fileUrlOf(scope.table, msgId)?.let { url ->
+            val data = FileService.download(url, onProgress)
+            if (data != null && data.isNotEmpty()) {
+                MediaCache.put(msgId, "file", data, fileName)
+                return data
+            }
+            // Сервис не ответил. Ниже попробуем базу: у старых сообщений файл
+            // лежит там, да и ссылка могла остаться от неудачной отправки.
+        }
+
         // Тот же файл мог уже приезжать в ДРУГОМ чате: сообщения разные, а
         // байты одни. Спрашиваем отпечаток — запрос крошечный, тела файла в
         // нём нет, — и если такие байты уже лежат, качать нечего.
@@ -1246,6 +1293,55 @@ object ChatRepository {
             if (sha != null) MediaCache.putByHash(sha, data, fileName)
         }
         return data
+    }
+
+    /**
+     * Ссылка на вложение в файловом сервисе. null — его там нет (старое
+     * сообщение, невыполненная миграция 26 или файл лежит в базе).
+     */
+    @Volatile private var fileUrlColumnOk = true
+    @Volatile private var fileUrlProbed = false
+
+    /**
+     * Есть ли в базе колонки файлового сервиса (миграция 26).
+     *
+     * Спрашиваем ОДИН раз за запуск и дальше просто строим подходящий запрос.
+     * Иначе каждый запрос ленты пришлось бы оборачивать в «попробуй с
+     * колонкой, не вышло — без неё», а лента читается каждые пару секунд.
+     */
+    private suspend fun fileUrlColumns(): Boolean {
+        if (fileUrlProbed) return fileUrlColumnOk
+        fileUrlProbed = true
+        fileUrlColumnOk = runCatching {
+            Db.query("SELECT file_url, file_size FROM messages LIMIT 0") { true }
+            true
+        }.getOrDefault(false)
+        return fileUrlColumnOk
+    }
+
+    /** То же для каналов серверов — их лента живёт в ServerRepository. */
+    internal suspend fun hasFileSqlFor(alias: String): String = hasFileSql(alias)
+
+    /** «У сообщения есть вложение»: в базе или на файловом сервисе. */
+    private suspend fun hasFileSql(alias: String): String {
+        val col = if (alias.isEmpty()) "" else "$alias."
+        return if (fileUrlColumns())
+            "(${col}file_data IS NOT NULL OR ${col}file_url IS NOT NULL)"
+        else "(${col}file_data IS NOT NULL)"
+    }
+
+    internal suspend fun fileUrlOf(table: String, msgId: Int): String? {
+        if (!fileUrlColumnOk) return null
+        val r = runCatching {
+            Db.queryCapped("SELECT file_url FROM $table WHERE id=?", 5, msgId) { rs ->
+                rs.getString(1)
+            }.firstOrNull()
+        }
+        r.onFailure { e ->
+            // Колонки нет — больше не спрашиваем до перезапуска.
+            if (e.message?.contains("file_url", true) == true) fileUrlColumnOk = false
+        }
+        return r.getOrNull()?.takeIf { it.isNotBlank() }
     }
 
     /** Отпечаток вложения сообщения. null — столбца нет или он пуст. */
@@ -1367,11 +1463,18 @@ object ChatRepository {
         }
         val enc = Crypto.enc(captionText)
 
+        // Ссылку на файловый сервис переносим вместе с остальным: у такого
+        // вложения блоб пуст, и без ссылки пересланное пришло бы с именем
+        // файла, но без файла. Байты при этом не копируются вовсе — на диске
+        // сервера файл один, пересылка на него просто ссылается.
+        val extra = if (fileUrlColumns()) ", file_url, file_size" else ""
+
         val ok = runCatching {
             Db.exec(
                 "INSERT INTO ${dstScope.table} ($dstCols, text, image_data, audio_data, " +
-                        "video_data, file_data, file_name) " +
-                        "SELECT $dstVals, ?, image_data, audio_data, video_data, file_data, file_name " +
+                        "video_data, file_data, file_name$extra) " +
+                        "SELECT $dstVals, ?, image_data, audio_data, video_data, file_data, " +
+                        "file_name" + (if (extra.isEmpty()) "" else ", file_url, file_size") + " " +
                         "FROM ${srcScope.table} WHERE id=?",
                 *(params + listOf(enc, srcId)).toTypedArray()
             )
@@ -1479,8 +1582,24 @@ object ChatRepository {
         partnerId, UserSession.effectiveId
     )
 
-    suspend fun fileSize(msgId: Int, scope: Scope): Long =
-        Db.scalarLong("SELECT OCTET_LENGTH(file_data) FROM ${scope.table} WHERE id=?", msgId)
+    /**
+     * Размер вложения. У файла на сервисе блоба в базе нет, поэтому размер
+     * хранится рядом со ссылкой; у старых сообщений считается по блобу.
+     */
+    suspend fun fileSize(msgId: Int, scope: Scope): Long {
+        if (fileUrlColumns()) {
+            runCatching {
+                Db.scalarLong(
+                    "SELECT COALESCE(file_size, OCTET_LENGTH(file_data)) " +
+                            "FROM ${scope.table} WHERE id=?",
+                    msgId
+                )
+            }.onSuccess { return it }
+        }
+        return Db.scalarLong(
+            "SELECT OCTET_LENGTH(file_data) FROM ${scope.table} WHERE id=?", msgId
+        )
+    }
 
     /**
      * Поиск по переписке.
