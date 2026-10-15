@@ -6,6 +6,7 @@ import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.buildName
 import com.pismo.messenger.data.FileService
 import com.pismo.messenger.data.MediaCache
+import com.pismo.messenger.data.ChatDiskCache
 import com.pismo.messenger.data.MessageMemory
 import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.data.db.bool
@@ -1005,7 +1006,20 @@ object ChatRepository {
      * самое делается по сохранённому списку, без единого запроса.
      */
     internal fun fromCache(scope: Scope, targetId: Int, limit: Int, beforeId: Int): List<ChatMessage> {
-        val all = MessageMemory.peek(scope, targetId)?.first ?: return emptyList()
+        // Берём ту сторону кеша, где истории больше.
+        //
+        // В памяти лежит ровно то, что сейчас на экране, — обычно последние
+        // сорок. Запрашивая «что старше сорокового», по памяти мы получали
+        // пустоту и лента решала, что история кончилась, хотя на диске её
+        // сотни. Поэтому сначала диск.
+        val disk = runCatching { ChatDiskCache.load(scope, targetId)?.first }.getOrNull()
+        val mem = MessageMemory.peek(scope, targetId)?.first
+        val all = when {
+            disk == null -> mem ?: return emptyList()
+            mem == null -> disk
+            disk.size >= mem.size -> disk
+            else -> mem
+        }
         val older = if (beforeId > 0) all.filter { it.id < beforeId } else all
         return if (limit > 0 && older.size > limit) older.takeLast(limit) else older
     }
