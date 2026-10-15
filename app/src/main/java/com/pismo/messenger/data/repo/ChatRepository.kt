@@ -904,18 +904,27 @@ object ChatRepository {
             if (uploadedUrl != null) uploadedSize = file.size.toLong()
         }
 
-        val newId = if (scope == Scope.GROUP) {
-            Db.insert(
-                "INSERT INTO group_messages (group_id, sender_id, text, image_data, audio_data, " +
-                        "video_data, file_data, file_name, reply_to_id) VALUES (?,?,?,?,?,?,NULL,?,?)",
-                target, me, encText, inlineImage, audio, video, fileName, reply
-            )
-        } else {
-            Db.insert(
-                "INSERT INTO messages (sender_id, receiver_id, text, image_data, audio_data, " +
-                        "video_data, file_data, file_name, reply_to_id) VALUES (?,?,?,?,?,?,NULL,?,?)",
-                me, target, encText, inlineImage, audio, video, fileName, reply
-            )
+        // Строку создаём с повторами, если связь с базой моргнула.
+        //
+        // Отправка большого файла занимает канал целиком, и к моменту
+        // вставки соединение из пула вполне может оказаться мёртвым. Раньше
+        // это губило всю отправку: файл уже лежит на сервере, минуты ушли —
+        // а сообщения нет, и пробовать надо заново с самого начала. Ждать
+        // возвращения связи здесь куда дешевле, чем заливать второй раз.
+        val newId = insertWithRetry {
+            if (scope == Scope.GROUP) {
+                Db.insert(
+                    "INSERT INTO group_messages (group_id, sender_id, text, image_data, audio_data, " +
+                            "video_data, file_data, file_name, reply_to_id) VALUES (?,?,?,?,?,?,NULL,?,?)",
+                    target, me, encText, inlineImage, audio, video, fileName, reply
+                )
+            } else {
+                Db.insert(
+                    "INSERT INTO messages (sender_id, receiver_id, text, image_data, audio_data, " +
+                            "video_data, file_data, file_name, reply_to_id) VALUES (?,?,?,?,?,?,NULL,?,?)",
+                    me, target, encText, inlineImage, audio, video, fileName, reply
+                )
+            }
         }
 
         onRowCreated?.invoke(newId)
@@ -925,10 +934,12 @@ object ChatRepository {
         // как раньше, а сообщение всё равно уйдёт.
         if (uploadedUrl != null && newId > 0) {
             val stamped = runCatching {
-                Db.exec(
-                    "UPDATE $table SET file_url=?, file_size=? WHERE id=?",
-                    uploadedUrl, uploadedSize, newId
-                ) > 0
+                insertWithRetry {
+                    Db.exec(
+                        "UPDATE $table SET file_url=?, file_size=? WHERE id=?",
+                        uploadedUrl, uploadedSize, newId
+                    )
+                } > 0
             }.getOrDefault(false)
             if (!stamped) {
                 // Колонки нет — отступаем на старый путь, иначе у сообщения
@@ -955,6 +966,27 @@ object ChatRepository {
         cacheOwnAttachment(newId, image, audio, video, file, fileName, fileSha)
 
         newId
+    }
+
+    /**
+     * Повторяет вставку, пока связь не вернётся.
+     *
+     * Только обрывы: повтор запроса с ошибкой в самом запросе ничего не
+     * починит, лишь удвоит ожидание. Четыре захода с нарастающей паузой —
+     * это около полуминуты, которых хватает на переход между вышками.
+     */
+    internal suspend fun insertWithRetry(block: suspend () -> Int): Int {
+        var attempt = 0
+        while (true) {
+            try {
+                return block()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                if (++attempt >= 4 || !Db.looksLikeConnectionLoss(e)) throw e
+                kotlinx.coroutines.delay(2000L * attempt)
+            }
+        }
     }
 
     /** Кладёт только что отправленное вложение в кеш под новым id сообщения. */

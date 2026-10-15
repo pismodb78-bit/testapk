@@ -695,17 +695,23 @@ object ServerRepository {
 
         val hasMedia = image != null || audio != null || video != null || file != null
         val newId = if (hasMedia) {
-            val id = Db.insert(
-                "INSERT INTO server_messages (channel_id, sender_id, text, image_data, audio_data, " +
-                        "video_data, file_data, file_name" +
-                        (if (hasReplyCol == true) ", reply_to_id" else "") +
-                        ") VALUES (?,?,?,?,?,?,NULL,?" +
-                        (if (hasReplyCol == true) ",?" else "") + ")",
-                *buildList {
-                    addAll(listOf(channelId, me, enc, inlineImage, audio, video, fileName))
-                    if (hasReplyCol == true) add(if (replyToId > 0) replyToId else null)
-                }.toTypedArray()
-            )
+            // С повторами на обрыве: отправка большого файла занимает канал
+            // целиком, и к моменту вставки соединение из пула вполне может
+            // оказаться мёртвым. Файл при этом уже лежит на сервере — терять
+            // его из-за моргнувшей связи незачем.
+            val id = ChatRepository.insertWithRetry {
+                Db.insert(
+                    "INSERT INTO server_messages (channel_id, sender_id, text, image_data, audio_data, " +
+                            "video_data, file_data, file_name" +
+                            (if (hasReplyCol == true) ", reply_to_id" else "") +
+                            ") VALUES (?,?,?,?,?,?,NULL,?" +
+                            (if (hasReplyCol == true) ",?" else "") + ")",
+                    *buildList {
+                        addAll(listOf(channelId, me, enc, inlineImage, audio, video, fileName))
+                        if (hasReplyCol == true) add(if (replyToId > 0) replyToId else null)
+                    }.toTypedArray()
+                )
+            }
             onRowCreated?.invoke(id)
             if (bigImage != null && id > 0) {
                 ChatRepository.uploadFileData("server_messages", id, bigImage, onProgress,
@@ -716,10 +722,12 @@ object ServerRepository {
             var linked = false
             if (uploadedUrl != null && id > 0) {
                 linked = runCatching {
-                    Db.exec(
-                        "UPDATE server_messages SET file_url=?, file_size=? WHERE id=?",
-                        uploadedUrl, file?.size?.toLong() ?: 0L, id
-                    ) > 0
+                    ChatRepository.insertWithRetry {
+                        Db.exec(
+                            "UPDATE server_messages SET file_url=?, file_size=? WHERE id=?",
+                            uploadedUrl, file?.size?.toLong() ?: 0L, id
+                        )
+                    } > 0
                 }.getOrDefault(false)
             }
             if (!linked && file != null && file.isNotEmpty() && id > 0) {
