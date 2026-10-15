@@ -360,6 +360,12 @@ object ChatRepository {
     }
 
     suspend fun loadDirectMessages(partnerId: Int, limit: Int = PAGE_SIZE, beforeId: Int = 0): List<ChatMessage> {
+        // Без связи — из кеша переписки. Он хранит всю долистанную историю, и
+        // прокрутка вверх работает ровно до того места, докуда дочитали при
+        // связи; раньше она упиралась в последнюю страницу, хотя остальное
+        // лежало на диске.
+        if (!Db.online.value) return fromCache(Scope.DM, partnerId, limit, beforeId)
+
         val me = UserSession.effectiveId
         val cursor = if (beforeId > 0) "AND id < $beforeId " else ""
 
@@ -419,6 +425,8 @@ object ChatRepository {
     }
 
     suspend fun loadGroupMessages(groupId: Int, limit: Int = PAGE_SIZE, beforeId: Int = 0): List<ChatMessage> {
+        if (!Db.online.value) return fromCache(Scope.GROUP, groupId, limit, beforeId)
+
         val cursor = if (beforeId > 0) "AND gm.id < $beforeId " else ""
         val inner = """
             SELECT gm.id, gm.sender_id, gm.text, gm.file_name,
@@ -987,6 +995,19 @@ object ChatRepository {
                 kotlinx.coroutines.delay(2000L * attempt)
             }
         }
+    }
+
+    /**
+     * Страница переписки ИЗ КЕША — для работы без связи.
+     *
+     * Кеш хранит всю долистанную историю, но лента просит её постранично:
+     * сначала хвост, потом то, что старше последнего показанного. Здесь то же
+     * самое делается по сохранённому списку, без единого запроса.
+     */
+    internal fun fromCache(scope: Scope, targetId: Int, limit: Int, beforeId: Int): List<ChatMessage> {
+        val all = MessageMemory.peek(scope, targetId)?.first ?: return emptyList()
+        val older = if (beforeId > 0) all.filter { it.id < beforeId } else all
+        return if (limit > 0 && older.size > limit) older.takeLast(limit) else older
     }
 
     /** Кладёт только что отправленное вложение в кеш под новым id сообщения. */

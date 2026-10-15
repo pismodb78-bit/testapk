@@ -602,6 +602,10 @@ object ServerRepository {
     // ════════════════════════════════════════════════════════════════
 
     suspend fun channelMessages(channelId: Int, limit: Int = 40, beforeId: Int = 0): List<ChatMessage> {
+        // Без связи — из кеша канала, как и в переписке.
+        if (!Db.online.value)
+            return ChatRepository.fromCache(Scope.SERVER, channelId, limit, beforeId)
+
         if (hasReplyCol == null) hasReplyCol = columnExists("server_messages", "reply_to_id")
         val withReply = hasReplyCol == true
         val replyCol = if (withReply) "sm.reply_to_id," else "0 AS reply_to_id,"
