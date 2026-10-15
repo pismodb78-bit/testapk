@@ -416,7 +416,15 @@ fun MessageBubble(
                                                 ChatRepository.loadFile(msg.id, scopeKind, msg.fileName)
                                             }.getOrNull()
                                             fileStatus = when {
-                                                data == null -> "Не удалось загрузить"
+                                                data == null -> {
+                                                    // Причину знает файловый
+                                                    // сервис — без неё
+                                                    // непонятно, чинить сеть
+                                                    // или файл потерян.
+                                                    val why = com.pismo.messenger.data.FileService.lastError
+                                                    if (why.isNullOrBlank()) "Не удалось загрузить"
+                                                    else "Не удалось загрузить: $why"
+                                                }
                                                 MediaSaver.saveFile(context, msg.fileName, data) ->
                                                     "Сохранено в загрузки"
                                                 else -> "Не удалось сохранить"

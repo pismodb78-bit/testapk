@@ -403,16 +403,58 @@ object FileService {
      * другим адресом сервера — берём из него только путь, а основу свою:
      * сервер мог переехать, а ссылки в переписке остались прежними.
      */
+    /**
+     * Почему не вышло в последний раз. Нужно не для порядка: «не удалось
+     * загрузить» без причины не говорит человеку ничего и не даёт понять,
+     * чинить ли сеть, адрес сервиса или сам файл.
+     */
+    @Volatile
+    var lastError: String? = null
+        private set
+
     suspend fun download(
         url: String,
         onProgress: ((Float) -> Unit)? = null,
     ): ByteArray? = withContext(Dispatchers.IO) {
         if (url.isBlank()) return@withContext null
-        runCatching {
-            val req = Request.Builder().url(resolve(url)).get().build()
+
+        // Сначала по своему адресу сервиса, потом по тому, что в ссылке.
+        //
+        // Ссылку писал отправитель со своим адресом, и обычно он тот же.
+        // Но если у нас сервис настроен иначе (или не настроен вовсе),
+        // подменять рабочий адрес на нерабочий — значит не скачать ничего:
+        // поэтому вторым заходом пробуем ссылку как есть.
+        val mine = resolve(url)
+        val tries = if (mine == url) listOf(url) else listOf(mine, url)
+
+        for ((i, target) in tries.withIndex()) {
+            repeat(2) { attempt ->                      // одна осечка — не приговор
+                currentCoroutineContext().ensureActive()
+                val got = fetch(target, onProgress)
+                if (got != null) return@withContext got
+                if (attempt == 0) delay(800)
+            }
+            if (i == 0 && tries.size > 1) lastError = null   // пробуем следующий адрес
+        }
+        null
+    }
+
+    /** Одна попытка скачивания. null — не вышло, причина в [lastError]. */
+    private suspend fun fetch(target: String, onProgress: ((Float) -> Unit)?): ByteArray? {
+        return try {
+            val req = Request.Builder().url(target).get().build()
             call(req).use { res ->
-                if (!res.isSuccessful) return@withContext null
-                val body = res.body ?: return@withContext null
+                if (!res.isSuccessful) {
+                    lastError = when (res.code) {
+                        404 -> "файла нет на сервере"
+                        else -> "сервис ответил ${res.code}"
+                    }
+                    return null
+                }
+                val body = res.body ?: run {
+                    lastError = "пустой ответ сервиса"
+                    return null
+                }
                 val total = body.contentLength()
                 val out = java.io.ByteArrayOutputStream(
                     if (total > 0) total.toInt() else 64 * 1024
@@ -430,9 +472,20 @@ object FileService {
                         if (total > 0) onProgress?.invoke(out.size().toFloat() / total)
                     }
                 }
-                out.toByteArray()
+                val bytes = out.toByteArray()
+                if (bytes.isEmpty()) {
+                    lastError = "сервис отдал пусто"
+                    return null
+                }
+                lastError = null
+                bytes
             }
-        }.getOrNull()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            lastError = e.message?.takeIf { it.isNotBlank() } ?: "нет связи с сервисом"
+            null
+        }
     }
 
     /** Путь из чужой ссылки на своей основе. */

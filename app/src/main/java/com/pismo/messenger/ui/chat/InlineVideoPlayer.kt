@@ -140,7 +140,7 @@ fun InlineVideoBubble(
             }.getOrNull()
             loading = false
             if (data == null) {
-                status = "Не удалось загрузить"
+                status = loadFailure()
                 return@launch
             }
             status = ""
@@ -259,7 +259,7 @@ fun InlineVideoBubble(
                             ChatRepository.loadFile(msgId, scopeKind, fileName)
                         }.getOrNull()
                         status = when {
-                            bytes == null -> "Не удалось загрузить"
+                            bytes == null -> loadFailure()
                             MediaSaver.saveVideo(context, fileName, bytes) -> "Сохранено в галерею"
                             else -> "Не удалось сохранить"
                         }
@@ -559,7 +559,7 @@ fun InlineAudioBubble(
                         }.getOrNull()
                         loading = false
                         if (data == null) {
-                            status = "Не удалось загрузить"
+                            status = loadFailure()
                         } else {
                             status = ""
                             file = MediaCache.fileFor(msgId, "file", fileName)
@@ -626,7 +626,7 @@ fun InlineAudioBubble(
                         ChatRepository.loadFile(msgId, scopeKind, fileName)
                     }.getOrNull()
                     status = when {
-                        bytes == null -> "Не удалось загрузить"
+                        bytes == null -> loadFailure()
                         MediaSaver.saveFile(context, fileName, bytes) -> "Сохранено в загрузки"
                         else -> "Не удалось сохранить"
                     }
@@ -761,4 +761,16 @@ private fun blockHolderFocus(view: android.view.View) {
         override fun onViewAttachedToWindow(v: android.view.View) = apply(v)
         override fun onViewDetachedFromWindow(v: android.view.View) = Unit
     })
+}
+
+/**
+ * Почему вложение не приехало — человеческим языком.
+ *
+ * «Не удалось загрузить» само по себе не говорит ничего: чинить сеть,
+ * адрес сервиса или смириться с потерянным файлом — непонятно. Причину
+ * знает файловый сервис, её и показываем.
+ */
+private fun loadFailure(): String {
+    val why = com.pismo.messenger.data.FileService.lastError
+    return if (why.isNullOrBlank()) "Не удалось загрузить" else "Не удалось загрузить: $why"
 }
