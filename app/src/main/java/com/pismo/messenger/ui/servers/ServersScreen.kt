@@ -232,6 +232,18 @@ fun ServersScreen(
 
     LaunchedEffect(Unit) { reloadServers() }
 
+    // Серверы тоже готовим к офлайну: списки каналов и их ленты. Без этого
+    // сервер без связи выглядит пустым, хотя сообщения лежат рядом.
+    LaunchedEffect(servers) {
+        if (servers.isNotEmpty()) {
+            com.pismo.messenger.data.OfflinePrefetch.schedule(
+                partnerIds = emptyList(),
+                groupIds = emptyList(),
+                serverIds = servers.map { it.id },
+            )
+        }
+    }
+
     // Связь вернулась — перечитываем серверы и каналы сразу: без связи рельс
     // жил из кеша и мог отстать.
     val netReconnects by com.pismo.messenger.data.db.Db.reconnects.collectAsState()

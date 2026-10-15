@@ -128,6 +128,14 @@ fun ChatListScreen(
             }
             ChatListMemory.put(conversations, groups)
 
+            // Готовим к работе без связи ВСЕ переписки из списка, а не только
+            // те, куда заглянули: иначе в метро открывается один-два чата, а
+            // остальные встречают пустотой.
+            com.pismo.messenger.data.OfflinePrefetch.schedule(
+                partnerIds = conversations.map { it.userId },
+                groupIds = groups.map { it.id },
+            )
+
             // Закрепы теперь общие с компьютером и живут в базе. Раз в
             // перезагрузку списка этого достаточно: их меняют руками, а не
             // сами по себе. Если база не ответит, останется прежний кеш.
