@@ -198,6 +198,16 @@ object Db {
         if (!_online.value) {
             _online.value = true
             _reconnects.value = _reconnects.value + 1
+
+            // База снова отвечает — значит сеть вернулась, и сокет событий
+            // поднимать нужно сейчас, а не через его собственную паузу. Пока
+            // он лежит, не приходит НИЧЕГО: ни новые сообщения, ни «печатает»,
+            // ни звонки, — и приложение выглядит живым, но глухим.
+            runCatching {
+                com.pismo.messenger.net.SignalingClient.ensureConnected(
+                    com.pismo.messenger.core.UserSession.effectiveId
+                )
+            }
         }
     }
 

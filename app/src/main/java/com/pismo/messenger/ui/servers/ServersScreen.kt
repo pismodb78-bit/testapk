@@ -231,6 +231,18 @@ fun ServersScreen(
     }
 
     LaunchedEffect(Unit) { reloadServers() }
+
+    // Связь вернулась — перечитываем серверы и каналы сразу: без связи рельс
+    // жил из кеша и мог отстать.
+    val netReconnects by com.pismo.messenger.data.db.Db.reconnects.collectAsState()
+    var seenNet by remember { mutableStateOf(netReconnects) }
+    LaunchedEffect(netReconnects) {
+        if (netReconnects != seenNet) {
+            seenNet = netReconnects
+            reloadServers()
+            reloadChannels()
+        }
+    }
     LaunchedEffect(selected?.id) { reloadChannels() }
 
     // Свой заход в голосовой канал и выход из него показываем сразу, не

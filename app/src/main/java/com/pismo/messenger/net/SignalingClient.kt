@@ -112,6 +112,22 @@ object SignalingClient {
         }
     }
 
+    /**
+     * Поднять сокет прямо сейчас, не дожидаясь расписания.
+     *
+     * Связь пропадает и возвращается не по нашему расписанию, а по жизни:
+     * метро, лифт, смена сети. Сокет после обрыва ждёт свою паузу и всё это
+     * время события из релея не приходят вовсе — ни новых сообщений, ни
+     * «печатает», ни звонков. Как только база снова отвечает, поднимать его
+     * нужно немедленно: это и есть признак, что сеть вернулась.
+     */
+    fun ensureConnected(userId: Int) {
+        if (!Prefs.wsEnabled || userId <= 0) return
+        if (ws != null) return
+        wantConnection = true
+        connect(userId)
+    }
+
     private fun scheduleReconnect() {
         if (!wantConnection) return
         Thread {

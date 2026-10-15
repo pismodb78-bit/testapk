@@ -55,6 +55,7 @@ import com.pismo.messenger.core.UserSession
 import com.pismo.messenger.core.formatListTime
 import com.pismo.messenger.core.parseHexColor
 import com.pismo.messenger.data.ChatListMemory
+import com.pismo.messenger.data.db.Db
 import com.pismo.messenger.data.model.Conversation
 import com.pismo.messenger.data.model.GroupSummary
 import com.pismo.messenger.data.model.Presence
@@ -152,6 +153,17 @@ fun ChatListScreen(
     }
 
     LaunchedEffect(Unit) { reload() }
+
+    // Связь вернулась — перечитываем немедленно, не дожидаясь своего круга
+    // опроса. Пока её не было, список жил из кеша и мог отстать на часы.
+    val reconnects by Db.reconnects.collectAsState()
+    var seenReconnects by remember { mutableStateOf(reconnects) }
+    LaunchedEffect(reconnects) {
+        if (reconnects != seenReconnects) {
+            seenReconnects = reconnects
+            reload()
+        }
+    }
 
     // Присутствие обновляем отдельным лёгким запросом с тем же периодом, что
     // и ПК (6 с). Держать его в общей перезагрузке списка нельзя: тот идёт

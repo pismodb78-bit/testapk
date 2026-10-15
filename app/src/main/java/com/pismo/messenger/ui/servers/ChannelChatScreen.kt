@@ -268,6 +268,16 @@ fun ChannelChatScreen(
         if (recording && recordSeconds >= VOICE_MAX_SECONDS) keepVoice(recorder.stop())
     }
 
+    // Связь вернулась — перечитываем ленту канала немедленно.
+    val netReconnects by com.pismo.messenger.data.db.Db.reconnects.collectAsState()
+    var seenNet by remember(channelId) { mutableStateOf(netReconnects) }
+    LaunchedEffect(channelId, netReconnects) {
+        if (netReconnects != seenNet) {
+            seenNet = netReconnects
+            reload()
+        }
+    }
+
     LaunchedEffect(channelId) {
         mentionMe = runCatching { ServerRepository.mentionIdentity(channelId) }
             .getOrDefault("" to "")
