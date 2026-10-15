@@ -61,14 +61,27 @@ object FileService {
     private const val MAX_ATTEMPTS = 6
 
     /**
-     * Порция одной дозаписи.
+     * Порция дозаписи — величина не постоянная, а подстраивающаяся.
      *
-     * Четыре мегабайта — это запрос на несколько секунд даже на плохой
-     * мобильной связи. Длиннее делать нельзя: чем дольше идёт один запрос,
-     * тем вернее он где-нибудь оборвётся, а обрыв стоит всей неподтверждённой
-     * порции. Короче тоже незачем — лишние круги до сервера на ровном месте.
+     * Четыре мегабайта хороши на нормальной связи: мало кругов до сервера,
+     * запрос на несколько секунд. Но бывает связь, которая рвёт соединение
+     * каждые полтора-два мегабайта (общежитие, переполненная вышка), и там
+     * крупная порция не доезжает никогда — каждый обрыв стоит всего, что
+     * ушло сверх принятого сервером.
+     *
+     * Поэтому порция ужимается вдвое на каждом обрыве и растёт вдвое на
+     * каждой дошедшей: связь сама выбирает размер, при котором её хватает.
      */
-    private const val CHUNK = 4 * 1024 * 1024
+    private const val CHUNK_MAX = 4 * 1024 * 1024
+
+    /**
+     * Нижняя граница — маленькая намеренно. На связи, которая рвёт
+     * соединение после сотни килобайт, порция обязана стать меньше этой
+     * сотни, иначе не доедет ни одна и отправка встанет совсем. Лишние
+     * круги до сервера тут цена вопроса, а не беда: как только связь
+     * перестаёт рваться, порция удваивается обратно до четырёх мегабайт.
+     */
+    private const val CHUNK_MIN = 64 * 1024
 
     /** Сервер назвал своё смещение (409) — продолжаем с него. */
     private class OffsetMismatch(val offset: Int) : IOException("offset mismatch")
@@ -204,18 +217,20 @@ object FileService {
             // Порция в несколько мегабайт — это запрос на секунды. Обрыв
             // стоит одной порции, а подтверждённое сервером не теряется.
             var attempt = 0
+            var chunk = CHUNK_MAX
             while (offset < total) {
                 currentCoroutineContext().ensureActive()
-                val till = minOf(offset + CHUNK, total)
+                val before = offset
+                val till = minOf(offset + chunk, total)
                 try {
-                    val before = offset
                     val key = patch(b, id, data, offset, till, total, onProgress)
                     if (key != null) return@withContext urlOf(key, name)
                     offset = till
+                    best = maxOf(best, offset)
                     onProgress?.invoke(offset.toFloat() / total)
-                    // Порция дошла — счётчик неудач обнуляем: лимит попыток
-                    // про «не движется», а не про длину файла.
-                    if (offset > before) { attempt = 0; best = maxOf(best, offset) }
+                    // Порция дошла целиком — можно осмелеть.
+                    chunk = minOf(CHUNK_MAX, chunk * 2)
+                    attempt = 0
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Broken) {
@@ -230,12 +245,28 @@ object FileService {
                     best = maxOf(best, offset)
                     onProgress?.invoke(offset.toFloat() / total)
                 } catch (e: Throwable) {
-                    if (++attempt > MAX_ATTEMPTS) giveUp(best)
-                    // Связь не возвращается мгновенно: ждём дольше с каждым
-                    // разом, а не долбимся в один и тот же обрыв.
-                    delay(2000L * attempt)
-                    offset = resolveOffset(b, id) ?: giveUp(best)
-                    best = maxOf(best, offset)
+                    // ОБРЫВ ПОСРЕДИ ПОРЦИИ — ещё не беда.
+                    //
+                    // Сервер оставляет у себя всё, что успел принять, и
+                    // спрашиваем мы именно его. Если принятое выросло —
+                    // отправка ИДЁТ, просто связь рваная: такой обрыв не
+                    // тратит попытку, иначе на сети, рвущейся каждые два
+                    // мегабайта, большой файл сдавался бы на шестом обрыве,
+                    // проехав едва десятую часть.
+                    val have = resolveOffset(b, id) ?: giveUp(best)
+                    if (have > before) {
+                        offset = have.coerceIn(0, total)
+                        best = maxOf(best, offset)
+                        attempt = 0
+                    } else {
+                        if (++attempt > MAX_ATTEMPTS) giveUp(best)
+                        // Стоим на месте — ждём дольше с каждым разом, а не
+                        // долбимся в один и тот же обрыв.
+                        delay(2000L * attempt)
+                        offset = have.coerceIn(0, total)
+                    }
+                    // На рвущейся связи короткий запрос доезжает вернее.
+                    chunk = maxOf(CHUNK_MIN, chunk / 2)
                     onProgress?.invoke(offset.toFloat() / total)
                 }
             }

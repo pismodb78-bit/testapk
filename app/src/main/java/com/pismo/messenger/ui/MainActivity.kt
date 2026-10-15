@@ -12,7 +12,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.pismo.messenger.core.Prefs
@@ -29,7 +28,6 @@ import com.pismo.messenger.ui.settings.SettingsScreen
 import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
-import com.pismo.messenger.ui.components.ConnectionOverlay
 import com.pismo.messenger.ui.theme.PismoColors
 import com.pismo.messenger.ui.theme.PismoTheme
 
@@ -109,11 +107,6 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 )
-
-                // Заставка «нет связи» — тоже в корне и тоже вне NavHost:
-                // обрыв случается на любом экране, а перекрывать она должна
-                // всё приложение целиком, как панель ConnectionGuard на ПК.
-                // Стоит ПОСЛЕ NavHost по порядку отрисовки — см. ниже.
 
                 NavHost(navController = navController, startDestination = start) {
                     composable(Routes.LOGIN) {
@@ -228,21 +221,25 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Заставку не вешаем на вход, регистрацию и настройки: адрес
-                // базы чинят именно там, и запереть эти экраны сообщением
-                // «нет связи» значило бы сделать неверную настройку
-                // неисправимой. На ПК по той же причине ConnectionGuard
-                // живёт в MainForm и формы входа не закрывает.
-                val currentEntry by navController.currentBackStackEntryAsState()
-                val route = currentEntry?.destination?.route
-                ConnectionOverlay(
-                    enabled = UserSession.effectiveId > 0 &&
-                        route != Routes.SETTINGS &&
-                        route != Routes.LOGIN &&
-                        route != Routes.REGISTER
-                )
+                // Заставки «нет связи» здесь больше нет. Обрыв на телефоне
+                // — обычное дело (лифт, метро, выход из фона с уснувшим
+                // сокетом), а панель во весь экран на каждый такой случай
+                // запирала приложение целиком: нельзя было ни перечитать уже
+                // загруженную переписку, ни уйти в другой чат. Теперь о
+                // связи говорит строка в шапке — см. NetStatus.
             }
         }
+    }
+
+    /**
+     * Возврат из фона. Сокеты в пуле за время сна обычно умирают, и первый
+     * же запрос после разворачивания падал — отсюда «переподключение каждый
+     * раз, когда свернёшь». Трогаем связь ЗАРАНЕЕ, пока человек смотрит на
+     * список чатов: к первому его действию соединение уже живое.
+     */
+    override fun onStart() {
+        super.onStart()
+        if (UserSession.effectiveId > 0) com.pismo.messenger.data.db.Db.warmUp()
     }
 
     override fun onDestroy() {

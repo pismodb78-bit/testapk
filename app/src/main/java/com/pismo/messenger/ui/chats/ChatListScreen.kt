@@ -36,6 +36,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -113,7 +114,10 @@ fun ChatListScreen(
     // список остался бы в прежнем порядке до следующей перезагрузки.
     var pinnedIds by remember { mutableStateOf(Prefs.pinnedChats()) }
 
-    suspend fun reload() {
+    // Пока список перечитывается, в шапке — «Обновление…». Первое, что
+    // хочется знать на плохой связи: приложение занято делом или просто
+    // показывает старое.
+    suspend fun reload() = com.pismo.messenger.core.NetStatus.sync {
         runCatching {
             groups = ChatRepository.loadGroups()
             conversations = if (UserSession.isAdminRootView) {
@@ -250,10 +254,18 @@ fun ChatListScreen(
             TopAppBar(
                 title = {
                     Column {
+                        // Связь — строкой в заголовке, как в мессенджерах:
+                        // «Соединение…», «Обновление…», а когда всё хорошо —
+                        // своё обычное имя. Полноэкранной заставки больше
+                        // нет, приложением можно пользоваться и на обрыве.
+                        val net by com.pismo.messenger.core.NetStatus.state.collectAsState()
+                        val netLabel = com.pismo.messenger.core.NetStatus.label(net)
                         Text(
-                            if (UserSession.isImpersonating) "За: ${UserSession.effectiveName}"
-                            else "PISMO",
-                            color = PismoColors.TextPrimary,
+                            netLabel
+                                ?: if (UserSession.isImpersonating) "За: ${UserSession.effectiveName}"
+                                   else "PISMO",
+                            color = if (netLabel != null) PismoColors.TextSecondary
+                                    else PismoColors.TextPrimary,
                             fontWeight = FontWeight.Bold,
                             fontSize = 18.sp,
                         )

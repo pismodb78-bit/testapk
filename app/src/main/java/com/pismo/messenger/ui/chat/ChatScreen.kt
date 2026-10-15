@@ -922,11 +922,21 @@ fun ChatScreen(
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
                             )
-                            // Пока собеседник печатает, вторая строка шапки
-                            // занята им — как на ПК. Статус присутствия
-                            // никуда не денется через четыре секунды, а
-                            // «печатает…» ценно ровно сейчас.
-                            if (typingName.isNotEmpty()) {
+                            // Вторая строка шапки занята по старшинству:
+                            // связь → «печатает…» → присутствие. Обрыв важнее
+                            // всего остального: пока его нет, видно, что
+                            // приложение не молчит просто так. Заставки во
+                            // весь экран на это больше нет.
+                            val net by com.pismo.messenger.core.NetStatus.state.collectAsState()
+                            val netLabel = com.pismo.messenger.core.NetStatus.label(net)
+                            if (netLabel != null) {
+                                Text(
+                                    netLabel,
+                                    color = PismoColors.TextMuted,
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                )
+                            } else if (typingName.isNotEmpty()) {
                                 Text(
                                     if (isGroup) "✍ $typingName печатает…" else "✍ печатает…",
                                     color = PismoColors.Green,
