@@ -1,5 +1,6 @@
 package com.pismo.messenger.data.db
 
+import com.pismo.messenger.core.NetInfo
 import com.pismo.messenger.core.Prefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,7 +35,14 @@ import java.sql.Statement
  */
 object Db {
 
-    private const val MAX_POOL = 4
+    /**
+     * Сколько соединений держим.
+     *
+     * На мобильной сети каждое — это ещё одна сессия в NAT оператора, и
+     * каждая из них протухает сама по себе. Меньше сессий — меньше поводов
+     * нарваться на мёртвую; четыре нужны, когда круг до сервера дешёвый.
+     */
+    private val MAX_POOL: Int get() = if (NetInfo.isCellular()) 2 else 4
 
     /**
      * Соединение в пуле вместе со временем, когда его последний раз отдавали.
@@ -55,7 +63,17 @@ object Db {
      * Сколько соединение считается заведомо живым. wait_timeout на сервере —
      * полчаса, так что тридцать секунд это с большим запасом.
      */
-    private const val FRESH_MS = 30_000L
+    private val FRESH_MS: Long get() = if (NetInfo.isCellular()) 8_000L else 30_000L
+
+    /**
+     * Как часто подтверждаем жизнь простаивающих соединений.
+     *
+     * Это то же самое, что делают мессенджеры со своим постоянным сокетом:
+     * короткий пинг, чтобы NAT оператора не счёл сессию брошенной и не
+     * выбросил её. Без него соединение умирает в тишине, а узнаём мы об этом
+     * только следующим запросом — который висит до таймаута.
+     */
+    private const val KEEPALIVE_MS = 20_000L
 
     private val pool = ArrayDeque<Pooled>()
     private val lock = Mutex()
@@ -129,9 +147,22 @@ object Db {
         return conn
     }
 
+    /** Какой сети принадлежат соединения в пуле. */
+    private var poolEpoch = NetInfo.epoch
+
     private suspend fun borrow(): Connection {
         val key = currentKey()
+        startKeepAlive()
         lock.withLock {
+            // Сеть сменилась — исходящий адрес другой, и прежние соединения
+            // стали мусором. Выяснять это таймаутами незачем: выбрасываем
+            // сразу, иначе первый же запрос после перехода с Wi-Fi на
+            // мобильную повиснет на мёртвом сокете.
+            if (NetInfo.epoch != poolEpoch) {
+                poolEpoch = NetInfo.epoch
+                pool.forEach { runCatching { it.conn.close() } }
+                pool.clear()
+            }
             if (key != configKey) {
                 // Настройки подключения изменились — старые соединения не годятся.
                 pool.forEach { runCatching { it.conn.close() } }
@@ -159,6 +190,47 @@ object Db {
                 pool.addLast(Pooled(conn, System.currentTimeMillis()))
             } else {
                 runCatching { conn.close() }
+            }
+        }
+    }
+
+    private var keepAliveJob: Job? = null
+
+    /**
+     * Подтверждение жизни простаивающих соединений.
+     *
+     * Так работают мессенджеры: по их постоянному сокету каждые десять-тридцать
+     * секунд идёт короткий пинг. Нужен он не серверу, а NAT оператора: без
+     * трафика тот считает сессию брошенной и выбрасывает её молча. Соединение
+     * в пуле после этого выглядит живым, а первый же запрос по нему уходит в
+     * никуда и висит до таймаута — отсюда и «на мобильном интернете всё
+     * падает, а на Wi-Fi работает».
+     *
+     * Пингуем только то, что лежит в пуле, и только когда есть связь: это
+     * один крошечный запрос на соединение раз в двадцать секунд.
+     */
+    @Synchronized
+    private fun startKeepAlive() {
+        if (keepAliveJob?.isActive == true) return
+        keepAliveJob = guardScope.launch {
+            while (isActive) {
+                delay(KEEPALIVE_MS)
+                if (!_online.value) continue
+                val alive = lock.withLock { pool.toList() }
+                for (p in alive) {
+                    if (System.currentTimeMillis() - p.idleSince < KEEPALIVE_MS / 2) continue
+                    val ok = runCatching {
+                        p.conn.createStatement().use { it.execute("/* keepalive */ SELECT 1") }
+                        true
+                    }.getOrDefault(false)
+                    if (ok) {
+                        p.idleSince = System.currentTimeMillis()
+                    } else {
+                        // Умерло — выбрасываем здесь, а не на глазах у человека.
+                        lock.withLock { pool.remove(p) }
+                        runCatching { p.conn.close() }
+                    }
+                }
             }
         }
     }

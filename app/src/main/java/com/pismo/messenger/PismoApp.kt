@@ -25,6 +25,9 @@ class PismoApp : Application() {
         CrashLog.install(this)
         Prefs.init(this)
         PushLog.init(this)
+        // Какая сеть — знаем заранее: от этого зависят пул соединений и
+        // частота подтверждений их жизни (см. NetInfo).
+        com.pismo.messenger.core.NetInfo.init(this)
         MediaCache.init(this)
         com.pismo.messenger.data.LinkPreviews.init(this)
         // Кеш переписок и раскладки серверов теперь переживает закрытие
