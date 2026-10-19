@@ -1684,8 +1684,21 @@ object ChatRepository {
     suspend fun loadVideoCircle(msgId: Int, scope: Scope): ByteArray? =
         loadBlob(msgId, scope, "video_data", "video", null)
 
-    suspend fun loadFile(msgId: Int, scope: Scope, fileName: String?): ByteArray? =
-        loadBlob(msgId, scope, "file_data", "file", fileName)
+    /**
+     * Вложение сообщения.
+     *
+     * ЧЕРЕЗ [loadFileTracked], а не напрямую из столбца. Это была причина
+     * «не могу посмотреть и скачать видео собеседника»: крупные вложения
+     * давно уезжают на файловый сервис, и в строке у них остаётся ССЫЛКА, а
+     * file_data пуст. Прямое чтение столбца возвращало пусто — и видео,
+     * голосовое и кнопка «сохранить» одинаково отвечали «не удалось
+     * загрузить», хотя файл лежал на сервере целым. Карточка документа при
+     * этом открывалась: она одна ходила правильным путём.
+     */
+    suspend fun loadFile(
+        msgId: Int, scope: Scope, fileName: String?,
+        onProgress: ((Float) -> Unit)? = null,
+    ): ByteArray? = loadFileTracked(msgId, scope, fileName, onProgress)
 
     private suspend fun loadBlob(
         msgId: Int, scope: Scope, column: String, kind: String, fileName: String?,

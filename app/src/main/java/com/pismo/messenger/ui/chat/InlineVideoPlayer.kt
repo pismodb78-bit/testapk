@@ -135,8 +135,13 @@ fun InlineVideoBubble(
         scope.launch {
             loading = true
             status = "Загрузка видео…"
+            // Доля в подписи, а не один безмолвный кружок: видео на десятки
+            // мегабайт идёт по мобильной связи минуту и больше, и без неё
+            // ожидание не отличить от «ничего не происходит».
             val data = runCatching {
-                ChatRepository.loadFile(msgId, scopeKind, fileName)
+                ChatRepository.loadFile(msgId, scopeKind, fileName) { f ->
+                    status = "Загрузка видео… " + (f * 100).toInt() + " %"
+                }
             }.getOrNull()
             loading = false
             if (data == null) {
@@ -256,7 +261,9 @@ fun InlineVideoBubble(
                         status = "Сохранение…"
                         val bytes = if (f != null) withContext(Dispatchers.IO) { f.readBytes() }
                         else runCatching {
-                            ChatRepository.loadFile(msgId, scopeKind, fileName)
+                            ChatRepository.loadFile(msgId, scopeKind, fileName) { fr ->
+                                status = "Загрузка… " + (fr * 100).toInt() + " %"
+                            }
                         }.getOrNull()
                         status = when {
                             bytes == null -> loadFailure()
@@ -555,7 +562,9 @@ fun InlineAudioBubble(
                         loading = true
                         status = "Загрузка…"
                         val data = runCatching {
-                            ChatRepository.loadFile(msgId, scopeKind, fileName)
+                            ChatRepository.loadFile(msgId, scopeKind, fileName) { f ->
+                                status = "Загрузка… " + (f * 100).toInt() + " %"
+                            }
                         }.getOrNull()
                         loading = false
                         if (data == null) {
@@ -623,7 +632,9 @@ fun InlineAudioBubble(
                     status = "Сохранение…"
                     val bytes = if (f != null) withContext(Dispatchers.IO) { f.readBytes() }
                     else runCatching {
-                        ChatRepository.loadFile(msgId, scopeKind, fileName)
+                        ChatRepository.loadFile(msgId, scopeKind, fileName) { f ->
+                            status = "Сохранение… " + (f * 100).toInt() + " %"
+                        }
                     }.getOrNull()
                     status = when {
                         bytes == null -> loadFailure()

@@ -413,7 +413,12 @@ fun MessageBubble(
                                         scope.launch {
                                             fileStatus = "Сохранение…"
                                             val data = runCatching {
-                                                ChatRepository.loadFile(msg.id, scopeKind, msg.fileName)
+                                                ChatRepository.loadFile(
+                                                    msg.id, scopeKind, msg.fileName,
+                                                ) { f ->
+                                                    fileStatus = "Сохранение… " +
+                                                        (f * 100).toInt() + " %"
+                                                }
                                             }.getOrNull()
                                             fileStatus = when {
                                                 data == null -> {
