@@ -1,14 +1,19 @@
 package com.pismo.messenger.data
 
 import com.pismo.messenger.core.JwtAuth
+import com.pismo.messenger.core.NetInfo
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
@@ -61,36 +66,49 @@ object FileService {
     private const val MAX_ATTEMPTS = 6
 
     /**
-     * Порция дозаписи — величина не постоянная, а подстраивающаяся.
+     * Сколько частей держим в полёте одновременно.
      *
-     * МЕЛКО И ЧАСТО, А НЕ КРУПНО И ДОЛГО. Исходящий канал мобильной сети
-     * узкий, и пока порция льётся, он занят ЦЕЛИКОМ. Полтора мегабайта на
-     * таком канале — это секунды непрерывной записи, в течение которых не
-     * проходит больше ничего: ни опрос новых сообщений, ни пинги соединений
-     * с базой. Соединения в пуле за это время успевают умереть по таймауту —
-     * отсюда и «при отправке теряется связь с базой, и всё разваливается».
-     *
-     * Поэтому порция здесь заведомо меньше, чем на проводном компьютере:
-     * полмегабайта обычно и мегабайт в лучшем случае. Между порциями канал
-     * отпускается — см. паузу в цикле заливки.
-     *
-     * Нижняя граница маленькая намеренно. На связи, которая рвёт соединение
-     * после сотни килобайт, порция обязана стать меньше этой сотни, иначе не
-     * доедет ни одна и отправка встанет совсем.
+     * Так работают мессенджеры: пока одна часть летит, следующие уже в пути,
+     * и круг до сервера между ними не стоит простоем. На мобильной связи
+     * дорожек меньше — узкий канал быстрее захлёбывается, да и каждая
+     * дорожка это ещё одна сессия в NAT оператора.
      */
-    private const val CHUNK_START = 512 * 1024
-    private const val CHUNK_MAX = 1024 * 1024
-    private const val CHUNK_MIN = 64 * 1024
+    private const val WIFI_LANES = 4
+    private const val CELL_LANES = 2
+
+    /** Границы размера части. */
+    private const val PART_MIN = 256 * 1024
+    private const val PART_MAX = 8 * 1024 * 1024
+    private const val PART_CELL_MAX = 2 * 1024 * 1024
+
+    /** К какой длительности части стремимся: столько летит одна часть. */
+    private const val PART_TARGET_MS = 3_000L
+
+    /** Замеренная скорость отправки, байт в секунду. 0 — ещё не знаем. */
+    @Volatile private var speedBps: Long = 0
+
+    private fun rememberSpeed(bytes: Int, ms: Long) {
+        if (bytes <= 0 || ms <= 0) return
+        val now = bytes * 1000L / ms
+        // Скользящее среднее: одна быстрая часть не повод поверить в канал.
+        speedBps = if (speedBps == 0L) now else (speedBps * 3 + now) / 4
+    }
 
     /**
-     * Пауза между порциями — чтобы в канал пролез кто-то ещё.
+     * Размер части под текущую скорость.
      *
-     * Ставится не всегда, а только когда порция шла долго: это признак
-     * насыщенного канала, на котором соседям по сети ничего не достаётся.
-     * На быстрой связи порции улетают мгновенно, и тормозить их незачем.
+     * Постоянный размер плох с обеих сторон: на быстром канале мелкие части
+     * заставляют ждать круг до сервера чаще, чем нужно, а на медленном
+     * крупная часть идёт минутами и теряется целиком при обрыве. Поэтому
+     * целимся в несколько секунд на часть — ровно как это делают загрузчики
+     * мессенджеров.
      */
-    private const val GAP_MS = 150L
-    private const val BUSY_MS = 500L
+    private fun partSize(): Int {
+        val cap = if (NetInfo.isCellular()) PART_CELL_MAX else PART_MAX
+        if (speedBps <= 0) return (512 * 1024).coerceAtMost(cap)
+        val want = (speedBps * PART_TARGET_MS / 1000L)
+        return want.coerceIn(PART_MIN.toLong(), cap.toLong()).toInt()
+    }
 
     /** Сервер назвал своё смещение (409) — продолжаем с него. */
     private class OffsetMismatch(val offset: Int) : IOException("offset mismatch")
@@ -178,11 +196,10 @@ object FileService {
                 name.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP
             )
 
-            // 1. Создаём загрузку. Если такой файл уже лежит — ответ придёт
-            //    сразу с ключом, и по сети не уйдёт ни байта. А если эту же
-            //    отправку уже начинали и она оборвалась, сервер вернёт ту же
-            //    загрузку и скажет, сколько у него есть: повтор продолжает
-            //    с места обрыва, а не гонит мегабайты заново.
+            // 1. Создаём загрузку. Такой файл уже лежит — ответ придёт сразу с
+            //    ключом, и по сети не уйдёт ни байта. А если эту отправку уже
+            //    начинали и она оборвалась, сервер вернёт ту же загрузку и
+            //    скажет, сколько у него есть.
             val create = Request.Builder()
                 .url("$b/files")
                 .post(RequestBody.create(null, ByteArray(0)))
@@ -193,7 +210,7 @@ object FileService {
                 .build()
 
             var uploadId: String? = null
-            var offset = 0
+            var from = 0
             call(create).use { res ->
                 if (!res.isSuccessful) return@withContext null
                 res.header("File-Key")?.let { key ->
@@ -201,96 +218,49 @@ object FileService {
                     return@withContext urlOf(key, name)      // уже на сервере
                 }
                 uploadId = res.header("Upload-Id")
-                offset = res.header("Upload-Offset")?.toIntOrNull()?.coerceIn(0, total) ?: 0
+                from = res.header("Upload-Offset")?.toIntOrNull()?.coerceIn(0, total) ?: 0
             }
             val id = uploadId ?: return@withContext null
-            if (offset > 0) onProgress?.invoke(offset.toFloat() / total)
 
-            // Докуда дошли в лучшем случае. Нужно, чтобы различать две
-            // разные беды: «сервис не работает» (тогда тихо откатываемся на
-            // базу) и «связь оборвалась на середине». Во втором случае
-            // уводить файл в базу вредно: там он поедет с нуля и медленно,
-            // хотя на сервисе уже лежит половина и повтор её продолжит.
-            var best = offset
+            // 2. Остаток шлём ЧАСТЯМИ И РАЗОМ.
+            //
+            // Раньше части шли строго друг за другом, и после каждой мы ждали
+            // ответа сервера. На мобильной связи этот круг — сотни
+            // миллисекунд, и на файле в полсотни частей он складывается в
+            // минуты простоя при живом канале. Мессенджеры поэтому и держат
+            // несколько частей в полёте одновременно; сервер научен принимать
+            // их вразнобой и сам следит, что дыр не осталось.
+            val sent = java.util.concurrent.atomic.AtomicLong(from.toLong())
+            onProgress?.invoke(from.toFloat() / total)
 
-            // 2. Досылаем остаток ПОРЦИЯМИ.
-            //
-            // Одним запросом на весь файл это уже не делается. Длинная
-            // отправка на мобильной связи почти наверняка где-то оборвётся —
-            // оператором, NAT-ом, сменой вышки, — и чем дольше запрос, тем
-            // вернее. Пока порция была одна на весь файл, каждый обрыв стоил
-            // всего, что успело уйти сверх подтверждённого: отправка
-            // возвращалась к последнему подтверждённому байту и шла по
-            // кругу, не доезжая до конца.
-            //
-            // Порция в несколько мегабайт — это запрос на секунды. Обрыв
-            // стоит одной порции, а подтверждённое сервером не теряется.
-            var attempt = 0
-            var chunk = CHUNK_START
-            while (offset < total) {
-                currentCoroutineContext().ensureActive()
-                val before = offset
-                val till = minOf(offset + chunk, total)
-                try {
-                    val started = System.currentTimeMillis()
-                    val key = patch(b, id, data, offset, till, total, onProgress)
-                    if (key != null) return@withContext urlOf(key, name)
-                    val spent = System.currentTimeMillis() - started
-                    offset = till
-                    best = maxOf(best, offset)
-                    onProgress?.invoke(offset.toFloat() / total)
-                    // Порция дошла целиком — можно осмелеть.
-                    chunk = minOf(CHUNK_MAX, chunk * 2)
-                    attempt = 0
-                    // Канал был занят всё это время — отпускаем его, чтобы
-                    // успели пройти опрос сообщений и соединения с базой.
-                    // Иначе они умирают по таймауту прямо во время отправки.
-                    if (spent > BUSY_MS && offset < total) delay(GAP_MS)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Broken) {
-                    throw e
-                } catch (e: Silent) {
-                    throw e
-                } catch (e: OffsetMismatch) {
-                    // Сервер назвал своё смещение. Это сверка, а не сбой:
-                    // попытку не тратим, но и крутиться на месте не даём.
-                    if (e.offset == offset && ++attempt > MAX_ATTEMPTS) giveUp(best)
-                    offset = e.offset.coerceIn(0, total)
-                    best = maxOf(best, offset)
-                    onProgress?.invoke(offset.toFloat() / total)
-                } catch (e: Throwable) {
-                    // ОБРЫВ ПОСРЕДИ ПОРЦИИ — ещё не беда.
-                    //
-                    // Сервер оставляет у себя всё, что успел принять, и
-                    // спрашиваем мы именно его. Если принятое выросло —
-                    // отправка ИДЁТ, просто связь рваная: такой обрыв не
-                    // тратит попытку, иначе на сети, рвущейся каждые два
-                    // мегабайта, большой файл сдавался бы на шестом обрыве,
-                    // проехав едва десятую часть.
-                    val have = resolveOffset(b, id) ?: giveUp(best)
-                    if (have > before) {
-                        offset = have.coerceIn(0, total)
-                        best = maxOf(best, offset)
-                        attempt = 0
-                    } else {
-                        if (++attempt > MAX_ATTEMPTS) giveUp(best)
-                        // Стоим на месте — ждём дольше с каждым разом, а не
-                        // долбимся в один и тот же обрыв.
-                        delay(2000L * attempt)
-                        offset = have.coerceIn(0, total)
-                    }
-                    // На рвущейся связи короткий запрос доезжает вернее.
-                    chunk = maxOf(CHUNK_MIN, chunk / 2)
-                    onProgress?.invoke(offset.toFloat() / total)
-                }
+            val lanes = if (NetInfo.isCellular()) CELL_LANES else WIFI_LANES
+            val part = partSize()
+            val parts = ArrayList<Pair<Int, Int>>()
+            var at = from
+            while (at < total) {
+                val till = minOf(at + part, total)
+                parts.add(at to till)
+                at = till
             }
 
-            // Всё ушло, а ключа не было: последняя порция могла дойти уже
-            // после обрыва ответа. Спрашиваем сервер — файл у него целый,
-            // и он отдаст ключ.
-            finishUpload(b, id) ?.let { return@withContext urlOf(it, name) }
-            giveUp(best)
+            var key: String? = null
+            val gate = Semaphore(lanes)
+            kotlinx.coroutines.coroutineScope {
+                parts.map { (pFrom, pTill) ->
+                    async {
+                        gate.withPermit {
+                            val got = sendPart(b, id, data, pFrom, pTill, total, sent, onProgress)
+                            if (got != null) synchronized(this@FileService) { key = got }
+                        }
+                    }
+                }.awaitAll()
+            }
+            key?.let { return@withContext urlOf(it, name) }
+
+            // Все части ушли, а ключа нет — значит ответ на последнюю
+            // потерялся или часть не доехала. Спрашиваем сервер.
+            finishUpload(b, id)?.let { return@withContext urlOf(it, name) }
+            giveUp(sent.get().toInt())
             @Suppress("UNREACHABLE_CODE") null
         } catch (e: CancellationException) {
             throw e
@@ -298,6 +268,41 @@ object FileService {
             throw e              // сорвалось на полпути — наверх, к «Повторить»
         } catch (e: Throwable) {
             null                 // сервис не отозвался — поедем через базу
+        }
+    }
+
+    /**
+     * Одна часть со всеми повторами. Возвращает ключ, если именно она
+     * оказалась последней недостающей.
+     */
+    private suspend fun sendPart(
+        base: String, id: String, data: ByteArray,
+        from: Int, till: Int, total: Int,
+        sent: java.util.concurrent.atomic.AtomicLong,
+        onProgress: ((Float) -> Unit)?,
+    ): String? {
+        var attempt = 0
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            val before = sent.get()
+            try {
+                val started = System.currentTimeMillis()
+                val key = patch(base, id, data, from, till, total, sent, onProgress)
+                rememberSpeed(till - from, System.currentTimeMillis() - started)
+                return key
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: OffsetMismatch) {
+                // Сервер не принял это место — спорить незачем, часть уже
+                // где-то лежит. Отдаём ход остальным.
+                return null
+            } catch (e: Throwable) {
+                // Обрыв на полпути: сервер засчитал принятое, и повтор везёт
+                // только остаток. Пока что-то доезжает, попытки не тратим.
+                sent.set(maxOf(before, sent.get()))
+                if (++attempt > MAX_ATTEMPTS) giveUp(sent.get().toInt())
+                delay(1000L * attempt)
+            }
         }
     }
 
@@ -324,6 +329,7 @@ object FileService {
      */
     private suspend fun patch(
         base: String, id: String, data: ByteArray, from: Int, till: Int, total: Int,
+        sent: java.util.concurrent.atomic.AtomicLong,
         onProgress: ((Float) -> Unit)?,
     ): String? {
         val body = object : RequestBody() {
@@ -336,9 +342,10 @@ object FileService {
                     val len = minOf(step, till - off)
                     sink.write(data, off, len)
                     off += len
-                    // Прогресс по байтам: полоса трогается через мгновение
-                    // после начала, а не после первой многомегабайтной порции.
-                    onProgress?.invoke(off.toFloat() / total)
+                    // Прогресс общий на все дорожки: по отдельной части он
+                    // ничего не значит, а человек смотрит на один файл.
+                    val done = sent.addAndGet(len.toLong())
+                    onProgress?.invoke((done.toFloat() / total).coerceIn(0f, 1f))
                 }
                 sink.flush()
             }
@@ -350,8 +357,9 @@ object FileService {
             .header("Upload-Offset", from.toString())
             .build()
         call(req).use { res ->
-            // 409 — разошлись в том, с какого места продолжать. Сервер
-            // присылает своё смещение: с него и пойдём.
+            // 409 — сервер не берёт это место. С параллельными частями такое
+            // возможно только при расхождении в размере файла; спорить
+            // бессмысленно.
             if (res.code == 409) {
                 throw OffsetMismatch(res.header("Upload-Offset")?.toIntOrNull() ?: 0)
             }
@@ -370,23 +378,9 @@ object FileService {
         val have = headOffset(base, id) ?: return null
         // Пустая дозапись в конец: если у сервера уже весь файл, он досчитает
         // отпечаток и отдаст ключ; если нет — ответит без ключа.
-        patch(base, id, ByteArray(0), have, have, maxOf(have, 1), null)
+        patch(base, id, ByteArray(0), have, have, maxOf(have, 1),
+              java.util.concurrent.atomic.AtomicLong(0), null)
     }.getOrNull()
-
-    /**
-     * Сколько байт у сервера. Спрашиваем с повторами: один неудачный вопрос
-     * — не повод бросать отправку, на которую уже ушли минуты. Раньше именно
-     * так и было: связь моргнула на этом запросе, и файл уезжал заново через
-     * базу, с нуля.
-     */
-    private suspend fun resolveOffset(base: String, id: String): Int? {
-        repeat(3) { i ->
-            currentCoroutineContext().ensureActive()
-            headOffset(base, id)?.let { return it }
-            delay(1500L * (i + 1))
-        }
-        return headOffset(base, id)
-    }
 
     private suspend fun headOffset(base: String, id: String): Int? = runCatching {
         val req = Request.Builder()
