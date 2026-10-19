@@ -606,6 +606,11 @@ object ServerRepository {
         if (!Db.online.value)
             return ChatRepository.fromCache(Scope.SERVER, channelId, limit, beforeId)
 
+        // Короткая дорога через релей — см. пояснение в ChatRepository.
+        ChatRepository.relayPage("channel", Scope.SERVER, limit, beforeId) {
+            put("channel", channelId)
+        }?.let { return it }
+
         if (hasReplyCol == null) hasReplyCol = columnExists("server_messages", "reply_to_id")
         val withReply = hasReplyCol == true
         val replyCol = if (withReply) "sm.reply_to_id," else "0 AS reply_to_id,"

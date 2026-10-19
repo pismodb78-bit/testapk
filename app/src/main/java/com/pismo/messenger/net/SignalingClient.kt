@@ -128,6 +128,15 @@ object SignalingClient {
         connect(userId)
     }
 
+    /** Отправить готовое сообщение. false — сокета нет. */
+    fun sendRaw(json: String): Boolean {
+        val socket = ws ?: return false
+        return runCatching { socket.send(json) }.getOrDefault(false)
+    }
+
+    /** Жив ли сокет прямо сейчас. */
+    fun isOpen(): Boolean = ws != null
+
     private fun scheduleReconnect() {
         if (!wantConnection) return
         Thread {
@@ -140,6 +149,9 @@ object SignalingClient {
 
         override fun onOpen(webSocket: WebSocket, response: Response) {
             connecting.set(false)
+            // Новое соединение — новый шанс спрашивать данные у релея: прежние
+            // промахи могли быть и просто обрывом.
+            RelayQuery.reset()
             Log.d(TAG, "подключено к ${Prefs.wsUrl}")
 
             // Пакет регистрации с JWT — сервер сверяет подпись тем же секретом.
@@ -158,6 +170,13 @@ object SignalingClient {
                 val root = JSONObject(text)
                 val type = root.optString("type")
                 if (type.isEmpty() || type == "pong") return
+
+                // Ответ на НАШ запрос данных — не событие для экранов, а
+                // посылка тому, кто его ждёт.
+                if (type == "q_ok" || type == "q_err") {
+                    RelayQuery.deliver(root)
+                    return
+                }
 
                 emit(
                     type,

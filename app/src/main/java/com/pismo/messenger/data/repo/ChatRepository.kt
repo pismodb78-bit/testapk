@@ -9,6 +9,7 @@ import com.pismo.messenger.data.MediaCache
 import com.pismo.messenger.data.ChatDiskCache
 import com.pismo.messenger.data.MessageMemory
 import com.pismo.messenger.data.db.Db
+import com.pismo.messenger.net.RelayQuery
 import com.pismo.messenger.data.db.bool
 import com.pismo.messenger.data.db.epochMillis
 import com.pismo.messenger.data.db.str
@@ -367,6 +368,14 @@ object ChatRepository {
         // лежало на диске.
         if (!Db.online.value) return fromCache(Scope.DM, partnerId, limit, beforeId)
 
+        // Короткая дорога: спросить релей, который стоит рядом с базой.
+        // Телефону это один обмен по открытому сокету вместо десятка кругов
+        // до базы — на мобильной связи разница в секунды. Не вышло (старый
+        // релей, нет связи с ним) — идём в базу сами, как раньше.
+        relayPage("dm", Scope.DM, limit, beforeId) {
+            put("with", partnerId)
+        }?.let { return it }
+
         val me = UserSession.effectiveId
         val cursor = if (beforeId > 0) "AND id < $beforeId " else ""
 
@@ -428,6 +437,10 @@ object ChatRepository {
     suspend fun loadGroupMessages(groupId: Int, limit: Int = PAGE_SIZE, beforeId: Int = 0): List<ChatMessage> {
         if (!Db.online.value) return fromCache(Scope.GROUP, groupId, limit, beforeId)
 
+        relayPage("group", Scope.GROUP, limit, beforeId) {
+            put("group", groupId)
+        }?.let { return it }
+
         val cursor = if (beforeId > 0) "AND gm.id < $beforeId " else ""
         val inner = """
             SELECT gm.id, gm.sender_id, gm.text, gm.file_name,
@@ -446,6 +459,56 @@ object ChatRepository {
         val sql = "SELECT * FROM ($inner) sub ORDER BY id ASC"
 
         return Db.query(sql, groupId) { rs -> mapMessage(rs, Scope.GROUP) }
+    }
+
+    /**
+     * Страница сообщений через релей. null — короткой дороги нет, идём в базу.
+     */
+    internal suspend fun relayPage(
+        op: String,
+        scope: Scope,
+        limit: Int,
+        beforeId: Int,
+        args: org.json.JSONObject.() -> Unit,
+    ): List<ChatMessage>? {
+        if (!RelayQuery.available()) return null
+        val a = org.json.JSONObject().put("limit", limit)
+        if (beforeId > 0) a.put("before", beforeId)
+        a.args()
+        val rows = RelayQuery.ask(op, a) ?: return null
+        return buildList {
+            for (i in 0 until rows.length()) {
+                val o = rows.optJSONObject(i) ?: continue
+                add(mapRelayMessage(o, scope))
+            }
+        }
+    }
+
+    /**
+     * Строка от релея — тот же набор полей, что и из базы. Отдельный разбор
+     * нужен потому, что приходит она JSON-ом, а не курсором.
+     */
+    private fun mapRelayMessage(o: org.json.JSONObject, scope: Scope): ChatMessage {
+        fun bool(name: String) = o.optInt(name, 0) != 0 || o.optBoolean(name, false)
+        val senderName = o.optString("sender_name").trim()
+            .ifBlank { o.optString("login") }
+        return ChatMessage(
+            id = o.optInt("id"),
+            senderId = o.optInt("sender_id"),
+            senderName = senderName,
+            text = Crypto.dec(o.optString("text")),
+            createdAtMs = o.optLong("created_ts") * 1000L,
+            replyToId = o.optInt("reply_to_id"),
+            isDeleted = bool("is_deleted"),
+            isEdited = !o.isNull("edited_at") && o.optString("edited_at").isNotBlank(),
+            hasImage = bool("has_img"),
+            hasAudio = bool("has_audio"),
+            hasVideo = bool("has_video"),
+            hasFile = bool("has_file"),
+            fileName = if (o.isNull("file_name")) null else o.optString("file_name"),
+            scope = scope,
+            isRead = if (o.has("is_read")) bool("is_read") else true,
+        )
     }
 
     private fun mapMessage(rs: java.sql.ResultSet, scope: Scope): ChatMessage {
