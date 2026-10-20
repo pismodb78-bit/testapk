@@ -23,8 +23,24 @@ object VideoLinks {
          * работать, если не видит, с какой страницы его открыли (YouTube
          * отвечает на это ошибкой 153). Значит, страницу с рамкой надо
          * собрать самим и отдать её от имени этого домена.
+         *
+         * [pageUrl] — исходная ссылка. Нужна на случай, когда встраивание
+         * запрещено самим автором ролика: тогда никакой проигрыватель внутри
+         * приложения не поможет, и единственный честный выход — открыть
+         * ссылку снаружи.
+         *
+         * [youtubeId] — номер ролика. Для YouTube страницу собираем не
+         * голой рамкой, а их же библиотекой проигрывателя: она сама
+         * договаривается об источнике и настройках, и отказов из-за них
+         * не возникает.
          */
-        data class Embed(val url: String, val origin: String, val title: String) : Playable
+        data class Embed(
+            val url: String,
+            val origin: String,
+            val title: String,
+            val pageUrl: String = url,
+            val youtubeId: String? = null,
+        ) : Playable
     }
 
     private val FILE_EXT = setOf("mp4", "webm", "m4v", "mov", "mkv", "m3u8", "3gp")
@@ -37,11 +53,14 @@ object VideoLinks {
                 "https://www.youtube.com/embed/$it?autoplay=1&playsinline=1&rel=0&enablejsapi=1",
                 "https://www.youtube.com",
                 "YouTube",
+                pageUrl = "https://www.youtube.com/watch?v=$it",
+                youtubeId = it,
             )
         }
         rutubeId(url, host)?.let {
             return Playable.Embed(
                 "https://rutube.ru/play/embed/$it", "https://rutube.ru", "RUTUBE",
+                pageUrl = url,
             )
         }
         // Instagram отсюда УБРАН намеренно. Их адрес встраивания теперь
@@ -52,6 +71,7 @@ object VideoLinks {
         tiktokId(url, host)?.let {
             return Playable.Embed(
                 "https://www.tiktok.com/embed/v2/$it", "https://www.tiktok.com", "TikTok",
+                pageUrl = url,
             )
         }
 

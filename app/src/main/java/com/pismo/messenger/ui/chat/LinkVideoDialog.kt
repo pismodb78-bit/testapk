@@ -53,7 +53,7 @@ fun LinkVideoDialog(playable: VideoLinks.Playable, onClose: () -> Unit) {
         ) {
             when (playable) {
                 is VideoLinks.Playable.Direct -> DirectPlayer(playable.url)
-                is VideoLinks.Playable.Embed -> EmbedPlayer(playable.url, playable.origin)
+                is VideoLinks.Playable.Embed -> EmbedPlayer(playable, onClose)
             }
 
             IconButton(
@@ -64,7 +64,38 @@ fun LinkVideoDialog(playable: VideoLinks.Playable, onClose: () -> Unit) {
             ) {
                 Icon(Icons.Default.Close, "Закрыть", tint = Color.White)
             }
+
         }
+    }
+}
+
+@Composable
+private fun OpenOutside(
+    embed: VideoLinks.Playable.Embed,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.material3.TextButton(
+        onClick = {
+            runCatching {
+                context.startActivity(
+                    android.content.Intent(
+                        android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse(embed.pageUrl),
+                    ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+            // Закрываемся сами: иначе ролик остался бы играть за спиной у
+            // приложения, которому мы его только что передали.
+            onClose()
+        },
+        modifier = modifier,
+    ) {
+        androidx.compose.material3.Text(
+            "Открыть в ${embed.title}",
+            color = Color.White,
+        )
     }
 }
 
@@ -91,10 +122,56 @@ private fun DirectPlayer(url: String) {
     )
 }
 
-@SuppressLint("SetJavaScriptEnabled")
+/**
+ * Страница проигрывателя YouTube на их же библиотеке.
+ *
+ * Номер ролика сюда приходит уже проверенным (VideoLinks пропускает только
+ * буквы, цифры, «-» и «_»), поэтому подстановка в текст страницы безопасна.
+ */
+private fun youtubePage(videoId: String, origin: String): String = """
+    <!doctype html>
+    <html><head><meta name="viewport"
+        content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <style>html,body{margin:0;background:#000;height:100%}#player{width:100%;height:100%}</style>
+    </head><body>
+    <div id="player"></div>
+    <script src="https://www.youtube.com/iframe_api"
+            referrerpolicy="strict-origin-when-cross-origin"></script>
+    <script>
+      function onYouTubeIframeAPIReady() {
+        new YT.Player('player', {
+          videoId: '$videoId',
+          playerVars: {
+            autoplay: 1, playsinline: 1, rel: 0, fs: 1,
+            origin: '$origin'
+          },
+          events: {
+            onReady: function (e) { e.target.playVideo(); },
+            // Отказ проигрывателя разбирает приложение: его коды — это
+            // «запрещено встраивание», «ролик удалён» и подобное, и
+            // человеку надо сказать это словами, а не номером.
+            onError: function (e) {
+              try { PismoPlayer.onError(e.data); } catch (x) {}
+            }
+          }
+        });
+      }
+    </script>
+    </body></html>
+""".trimIndent()
+
+@SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
 @Composable
-private fun EmbedPlayer(url: String, origin: String) {
+private fun EmbedPlayer(embed: VideoLinks.Playable.Embed, onClose: () -> Unit) {
+    val url = embed.url
+    val origin = embed.origin
     val context = androidx.compose.ui.platform.LocalContext.current
+
+    // Отказ проигрывателя — словами. Коды службы («Error code: 152») для
+    // человека не значат ничего, а означают они обычно одно: автор ролика
+    // запретил смотреть его вне YouTube.
+    val failure = remember(url) { androidx.compose.runtime.mutableStateOf<String?>(null) }
 
     // Кому возвращать поворот экрана после полного экрана. Ищем окно по
     // цепочке обёрток: у диалога это не сам Activity, а обёртка вокруг него.
@@ -122,8 +199,44 @@ private fun EmbedPlayer(url: String, origin: String) {
             settings.mediaPlaybackRequiresUserGesture = false
             settings.loadWithOverviewMode = true
             settings.useWideViewPort = true
+
+            // КТО МЫ ДЛЯ СЛУЖБЫ. WebView представляется строкой, в которой
+            // стоит пометка «; wv» — «я встроенное окно, а не браузер». С
+            // осени 2025 YouTube по ней отказывает во встраивании: вместо
+            // ролика приходит чёрный экран с «This video is unavailable» и
+            // кодом 152. Убираем пометку — остаётся обычный Chrome на
+            // Android, которым это окно, по сути, и является (внутри один и
+            // тот же движок и та же версия).
+            //
+            // Ничего чужого мы не выдаём: строка остаётся своей, с настоящей
+            // версией системы и движка.
+            settings.userAgentString = settings.userAgentString
+                .replace("; wv)", ")")
+                .replace("; wv ", " ")
+                // «Version/4.0» — вторая такая же пометка, по ней встроенное
+                // окно узнают даже без «wv».
+                .replace("Version/4.0 ", "")
             setBackgroundColor(android.graphics.Color.BLACK)
             webViewClient = WebViewClient()
+
+            // Мост для одного-единственного сообщения — «проигрыватель
+            // отказался и вот почему». Больше приложение отсюда ничего не
+            // принимает: страница чужая, и давать ей что-то сверх этого
+            // незачем.
+            addJavascriptInterface(object {
+                @android.webkit.JavascriptInterface
+                fun onError(code: Int) {
+                    val text = when (code) {
+                        101, 150 -> "Автор запретил смотреть этот ролик вне YouTube."
+                        100 -> "Ролик удалён или закрыт автором."
+                        2 -> "Ссылка на ролик неверная."
+                        else -> "Не удалось воспроизвести ролик здесь."
+                    }
+                    // Сообщение приходит с потока страницы — возвращаемся на
+                    // поток окна, прежде чем трогать то, что оно рисует.
+                    view.post { failure.value = text }
+                }
+            }, "PismoPlayer")
             webChromeClient = object : WebChromeClient() {
                 private var custom: android.view.View? = null
 
@@ -168,7 +281,13 @@ private fun EmbedPlayer(url: String, origin: String) {
             // заголовком Referer; если его нет или он вырезан, настройка
             // проигрывателя срывается с той же ошибкой. Значение отдаёт только
             // домен и ничего сверх него.
-            val html = """
+            //
+            // У YouTube вместо голой рамки — ИХ СОБСТВЕННАЯ библиотека
+            // проигрывателя (iframe_api). Рамку она создаёт сама и сама же
+            // договаривается об источнике и настройках: там, где голая рамка
+            // упиралась в «This video is unavailable», библиотека проходит.
+            // Это их штатный способ встраивания, описанный в их же справке.
+            val html = embed.youtubeId?.let { id -> youtubePage(id, origin) } ?: """
                 <!doctype html>
                 <html><head><meta name="viewport"
                     content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -200,17 +319,46 @@ private fun EmbedPlayer(url: String, origin: String) {
         }
     }
 
-    AndroidView(
-        factory = {
-            host.addView(
-                web,
-                android.widget.FrameLayout.LayoutParams(
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                ),
+    Box(Modifier.fillMaxSize()) {
+        AndroidView(
+            factory = {
+                host.addView(
+                    web,
+                    android.widget.FrameLayout.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    ),
+                )
+                host
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
+
+        val why = failure.value
+        if (why == null) {
+            // Выход наружу — сверху слева, напротив крестика. Низ экрана
+            // занимают собственные кнопки проигрывателя, и класть что-то
+            // своё поверх них значило бы отбирать у него перемотку.
+            OpenOutside(
+                embed, onClose,
+                Modifier.align(Alignment.TopStart).padding(8.dp),
             )
-            host
-        },
-        modifier = Modifier.fillMaxSize(),
-    )
+        } else {
+            // Проигрывать нечего — показываем своё объяснение вместо чужого
+            // чёрного экрана с номером ошибки.
+            androidx.compose.foundation.layout.Column(
+                Modifier
+                    .align(Alignment.Center)
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                androidx.compose.material3.Text(
+                    why,
+                    color = Color.White,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+                OpenOutside(embed, onClose)
+            }
+        }
+    }
 }
