@@ -542,7 +542,18 @@ fun MessageBubble(
                                     val playable = url?.let {
                                         com.pismo.messenger.core.VideoLinks.of(it)
                                     }
-                                    if (playable != null) {
+                                    // «Смотреть здесь» — только для того, что
+                                    // и правда здесь смотрится. У YouTube
+                                    // этого пункта больше нет: их проигрыватель
+                                    // вправе отказать чужому окну и отказывает,
+                                    // а предлагать то, что оборачивается чёрным
+                                    // экраном с номером ошибки, незачем. Такая
+                                    // ссылка уходит в само приложение YouTube —
+                                    // и по нажатию, и пунктом ниже.
+                                    if (playable != null &&
+                                        !com.pismo.messenger.core.VideoLinks
+                                            .opensOutside(playable)
+                                    ) {
                                         DropdownMenuItem(
                                             text = { Text("▶  Смотреть здесь") },
                                             onClick = { videoLink = playable; linkMenu = null },
