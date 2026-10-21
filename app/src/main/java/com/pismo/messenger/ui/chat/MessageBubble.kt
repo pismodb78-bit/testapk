@@ -517,7 +517,11 @@ fun MessageBubble(
                                                     released?.consume()
                                                     val play = com.pismo.messenger.core
                                                         .VideoLinks.of(hit.url)
-                                                    if (play != null) videoLink = play
+                                                    // YouTube уходит сразу в своё
+                                                    // приложение: см. VideoLinks.opensOutside.
+                                                    if (play != null && !com.pismo.messenger.core
+                                                            .VideoLinks.opensOutside(play)
+                                                    ) videoLink = play
                                                     else com.pismo.messenger.core
                                                         .LinkOpener.open(context, hit.url)
                                                 }
@@ -952,9 +956,12 @@ private fun LinkSourceRows(text: String) {
                     .clip(RoundedCornerShape(8.dp))
                     .background(Color(0x22000000))
                     // Видео открываем прямо здесь, остальное — в браузере.
-                    // Уходить из переписки ради ролика не нужно.
+                    // Уходить из переписки ради ролика не нужно — кроме
+                    // YouTube: он уходит в своё приложение (VideoLinks.opensOutside).
                     .clickable {
-                        if (playable != null) videoLink = playable
+                        if (playable != null &&
+                            !com.pismo.messenger.core.VideoLinks.opensOutside(playable)
+                        ) videoLink = playable
                         else com.pismo.messenger.core.LinkOpener.open(context, link.url)
                     }
                     .padding(8.dp)
