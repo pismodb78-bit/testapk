@@ -90,7 +90,7 @@ fun AlbumBubble(
     ) {
         Column(
             Modifier
-                .widthIn(max = 268.dp)
+                .widthIn(max = 288.dp)
                 .clip(RoundedCornerShape(10.dp))
                 .background(if (isMine) PismoColors.Blurple else PismoColors.BgElevated)
                 .padding(3.dp)
@@ -174,7 +174,7 @@ private fun AlbumGrid(
     onSelect: () -> Unit,
 ) {
     val cols = if (msgs.size <= 4) 2 else 3
-    val side = (262.dp - 2.dp * (cols - 1)) / cols
+    val side = (280.dp - 2.dp * (cols - 1)) / cols
     val rows = msgs.chunked(cols)
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         rows.forEach { row ->

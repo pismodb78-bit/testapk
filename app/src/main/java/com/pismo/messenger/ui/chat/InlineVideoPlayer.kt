@@ -153,7 +153,12 @@ fun InlineVideoBubble(
     LaunchedEffect(file) {
         val f = file ?: return@LaunchedEffect
         if (cover != null) return@LaunchedEffect
-        cover = withContext(Dispatchers.IO) { firstFrame(f) }
+        val frame = withContext(Dispatchers.IO) { firstFrame(f) }
+        // Форму ролика запоминаем по первому же кадру: со следующего показа
+        // пузырь встанет сразу правильным, без рамки 4:3 вокруг вертикального
+        // видео.
+        frame?.let { VideoShapes.remember(msgId, it.width, it.height) }
+        cover = frame
     }
 
     DisposableEffect(msgId) {
@@ -218,14 +223,19 @@ fun InlineVideoBubble(
         }
     }
 
-    Column(Modifier.widthIn(max = 280.dp)) {
+    // Пузырь принимает форму ролика (см. VideoShapes). Вертикальному хватает
+    // и меньшей ширины: во всю ширину переписки он занял бы пол-экрана, как
+    // это и было, пока любое видео показывалось в рамке 4:3.
+    val shape = VideoShapes.ratio(msgId)
+    val maxW = if (shape < 1f) 220.dp else 280.dp
+    Column(Modifier.widthIn(max = maxW)) {
         Box(
             Modifier
                 .fillMaxWidth()
                 // Пропорции ОДИНАКОВЫ до и после запуска. Пока они менялись,
                 // нажатие на видео меняло высоту пузыря, лента пересчитывала
                 // раскладку и уезжала вниз.
-                .aspectRatio(4f / 3f)
+                .aspectRatio(shape)
                 .clip(RoundedCornerShape(8.dp))
                 .background(PismoColors.BgDarkest)
                 // Ни обложка, ни элементы плеера не должны забирать фокус:

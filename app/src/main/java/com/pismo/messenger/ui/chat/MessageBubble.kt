@@ -350,7 +350,11 @@ fun MessageBubble(
                         if (image == null && msg.hasImage) {
                             Box(
                                 Modifier
-                                    .width(260.dp)
+                                    // Ширина у всех медиа-пузырей одна (280):
+                                    // фотография, ролик, голосовое, музыка и
+                                    // карточка ссылки раньше были каждая своей
+                                    // ширины, и лента выглядела рваной.
+                                    .width(280.dp)
                                     .aspectRatio(ImageShapes.ratio(msg.id, msg.fileName))
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(Color(0x22000000))
@@ -360,7 +364,7 @@ fun MessageBubble(
 
                         image?.let { bytes ->
                             val mod = Modifier
-                                .widthIn(max = 260.dp)
+                                .widthIn(max = 280.dp)
                                 .clip(RoundedCornerShape(8.dp))
                                 .clickable { viewerBytes = bytes }
                             // GIF узнаём по содержимому, как IsGif на ПК:
@@ -440,6 +444,8 @@ fun MessageBubble(
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
+                                    // Та же ширина, что у остальных медиа.
+                                    .widthIn(max = 280.dp)
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(Color(0x22000000))
                                     .clickable {
@@ -888,7 +894,8 @@ private fun VoiceRow(msgId: Int, audio: ByteArray?, isMine: Boolean) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .widthIn(max = 260.dp)
+            // Та же ширина, что у остальных медиа-пузырей.
+            .widthIn(max = 280.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(Color(0x22000000))
             .padding(horizontal = 10.dp, vertical = 8.dp),
@@ -1055,7 +1062,7 @@ private fun LinkSourceRows(text: String) {
                         else com.pismo.messenger.core.LinkOpener.open(context, link.url)
                     }
                     .padding(8.dp)
-                    .widthIn(max = 260.dp),
+                    .widthIn(max = 280.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
