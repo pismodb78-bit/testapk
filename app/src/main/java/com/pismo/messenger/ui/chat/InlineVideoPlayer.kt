@@ -5,6 +5,12 @@ import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.widget.VideoView
 import androidx.compose.foundation.Image
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -373,6 +379,15 @@ internal fun VideoSurface(
      */
     var seeking by remember(file.absolutePath) { mutableStateOf(false) }
 
+    /**
+     * Видны ли кнопки. Прячем их, пока видео идёт: ради кадра плеер и
+     * открывают, а панель поверх него — это чужая треть экрана. Возвращает
+     * их касание по видео, как в любом проигрывателе.
+     */
+    var controls by remember(file.absolutePath) { mutableStateOf(true) }
+    /** Любое действие продлевает показ: счётчик перезапускает отсчёт. */
+    var poke by remember(file.absolutePath) { mutableIntStateOf(0) }
+
     DisposableEffect(file.absolutePath) {
         onDispose {
             runCatching { view.stopPlayback() }
@@ -391,6 +406,38 @@ internal fun VideoSurface(
             }
             kotlinx.coroutines.delay(200)
         }
+    }
+
+    /**
+     * Перемотка в нужное место, а не к ближайшему ключевому кадру.
+     *
+     * Обычный seekTo у Android ищет ПРЕДЫДУЩИЙ ключевой кадр, а в коротком
+     * ролике из мессенджера их бывает один — в самом начале. Отсюда и
+     * бралось «ставишь на вторую половину, а уезжает в первую».
+     * SEEK_CLOSEST доводит до запрошенного места; он есть с Android 8, ниже
+     * остаётся прежнее поведение — другого там нет.
+     */
+    fun seekExact(toMs: Int) {
+        val limit = if (durationMs > 0) durationMs else Int.MAX_VALUE
+        val target = toMs.coerceIn(0, limit)
+        runCatching {
+            val mp = player
+            if (mp != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                mp.seekTo(target.toLong(), MediaPlayer.SEEK_CLOSEST)
+            } else {
+                view.seekTo(target)
+            }
+        }
+        positionMs = target
+        seeking = true
+    }
+
+    // Кнопки уходят сами — но только пока видео идёт. На паузе они нужны:
+    // человек ровно за ними и остановил.
+    LaunchedEffect(controls, isPlaying, poke) {
+        if (!controls || !isPlaying) return@LaunchedEffect
+        kotlinx.coroutines.delay(2800)
+        controls = false
     }
 
     // Ответа о конце перемотки может и не прийти — например, если файл
@@ -486,6 +533,55 @@ internal fun VideoSurface(
             }
         }
 
+        // Касание по кадру — показать или спрятать кнопки. Слой лежит ПОД
+        // ними, поэтому нажатия по самим кнопкам сюда не доходят.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { controls = !controls; poke++ }
+        )
+
+        // ГЛАВНЫЕ КНОПКИ — ПОСЕРЕДИНЕ.
+        //
+        // Пуск и перемотка на десять секунд там, куда и так смотришь, и
+        // полупрозрачные — кадр сквозь них виден. Внизу осталась только
+        // полоса времени: ей место у края, а не под пальцем.
+        AnimatedVisibility(
+            visible = controls,
+            modifier = Modifier.align(Alignment.Center),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(22.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RoundControl(Icons.Default.Replay10, "Назад на 10 секунд") {
+                    seekExact(positionMs - 10_000); poke++
+                }
+                RoundControl(
+                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    if (isPlaying) "Пауза" else "Воспроизвести",
+                    big = true,
+                ) {
+                    if (isPlaying) {
+                        runCatching { view.pause() }
+                        isPlaying = false
+                    } else {
+                        runCatching { view.start() }
+                        isPlaying = true
+                    }
+                    poke++
+                }
+                RoundControl(Icons.Default.Forward10, "Вперёд на 10 секунд") {
+                    seekExact(positionMs + 10_000); poke++
+                }
+            }
+        }
+
         // ПАНЕЛЬ УПРАВЛЕНИЯ ПРИПОДНЯТА НАД КАДРОМ.
         //
         // Раньше она лежала ровно по нижнему краю, во всю ширину и с
@@ -497,9 +593,14 @@ internal fun VideoSurface(
         //
         // Порядок отступов важен: первый padding — это поля СНАРУЖИ плашки,
         // второй, после фона, — внутри неё.
+        AnimatedVisibility(
+            visible = controls,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
         Row(
             Modifier
-                .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .focusProperties { canFocus = false }
                 // navigationBarsPadding отступает от жестовой полосы, если
@@ -511,33 +612,17 @@ internal fun VideoSurface(
                     start = 6.dp,
                     end = 6.dp,
                     top = 6.dp,
-                    bottom = if (insetBottom) 44.dp else 8.dp,
+                    // Выше прежнего: полоса не должна оказаться на одной
+                    // линии с кнопками, которые теперь стоят по центру.
+                    bottom = if (insetBottom) 56.dp else 14.dp,
                 )
                 .clip(RoundedCornerShape(18.dp))
-                .background(Color(0xB3000000))
+                // Полупрозрачнее: сквозь полосу видно кадр, а читается она
+                // по-прежнему — буквы и ползунок белые.
+                .background(Color(0x59000000))
                 .padding(horizontal = 4.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(
-                onClick = {
-                    if (isPlaying) {
-                        runCatching { view.pause() }
-                        isPlaying = false
-                    } else {
-                        runCatching { view.start() }
-                        isPlaying = true
-                    }
-                },
-                modifier = Modifier.size(34.dp),
-            ) {
-                Icon(
-                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isPlaying) "Пауза" else "Воспроизвести",
-                    tint = Color.White,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-
             Text(
                 formatClock(if (dragging) (dragValue * durationMs).toInt() else positionMs),
                 color = Color.White,
@@ -547,33 +632,11 @@ internal fun VideoSurface(
             Slider(
                 value = if (dragging) dragValue
                 else if (durationMs > 0) positionMs.toFloat() / durationMs else 0f,
-                onValueChange = { dragging = true; dragValue = it },
+                onValueChange = { dragging = true; dragValue = it; poke++ },
                 onValueChangeFinished = {
-                    val target = (dragValue * durationMs).toInt()
-                    // ТОЧНАЯ ПЕРЕМОТКА, а не «до ближайшего ключевого кадра».
-                    //
-                    // Отсюда и бралось «ставишь на вторую половину, а ползунок
-                    // прыгает в первую»: обычный seekTo у Android ищет
-                    // ПРЕДЫДУЩИЙ ключевой кадр, а в коротком ролике из
-                    // мессенджера их бывает один — в самом начале. Видео и
-                    // уезжало к нулю, а ползунок послушно возвращался следом.
-                    //
-                    // SEEK_CLOSEST доводит до запрошенного места, раскодировав
-                    // остаток от ключевого кадра. Он есть с Android 8; ниже
-                    // остаётся прежнее поведение — другого там нет.
-                    runCatching {
-                        val mp = player
-                        if (mp != null &&
-                            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O
-                        ) {
-                            mp.seekTo(target.toLong(), MediaPlayer.SEEK_CLOSEST)
-                        } else {
-                            view.seekTo(target)
-                        }
-                    }
-                    positionMs = target
-                    seeking = true
+                    seekExact((dragValue * durationMs).toInt())
                     dragging = false
+                    poke++
                 },
                 colors = SliderDefaults.colors(
                     thumbColor = Color.White,
@@ -588,6 +651,7 @@ internal fun VideoSurface(
                 onClick = {
                     muted = !muted
                     player?.setVolume(if (muted) 0f else 1f, if (muted) 0f else 1f)
+                    poke++
                 },
                 modifier = Modifier.size(30.dp),
             ) {
@@ -621,6 +685,35 @@ internal fun VideoSurface(
                 }
             }
         }
+        }
+    }
+}
+
+/**
+ * Круглая кнопка поверх кадра. Полупрозрачная: сквозь неё видно видео, а
+ * белый значок читается на любом фоне.
+ */
+@Composable
+private fun RoundControl(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    description: String,
+    big: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Box(
+        Modifier
+            .size(if (big) 58.dp else 44.dp)
+            .clip(RoundedCornerShape(50))
+            .background(Color(0x66000000))
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            icon,
+            contentDescription = description,
+            tint = Color.White,
+            modifier = Modifier.size(if (big) 32.dp else 24.dp),
+        )
     }
 }
 
