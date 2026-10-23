@@ -348,11 +348,31 @@ fun ChatScreen(
                 .getOrDefault(emptySet())
             val marked = if (pinned.isEmpty()) loaded
                          else loaded.map { it.copy(isPinned = it.id in pinned) }
-            if (marked.size != messages.size ||
-                marked.zip(messages).any { (a, b) -> a != b }
+
+            // ДОЛИСТАННОЕ НЕ ТЕРЯЕМ.
+            //
+            // Опрос забирает последние pageLimit сообщений, и лимит он
+            // прочитал ДО запроса. Пока запрос ехал, человек мог долистать
+            // ещё страницу истории — и простое присваивание выбрасывало её:
+            // сообщение, за которое держалась лента, исчезало из списка, и
+            // она оказывалась на страницу ниже. Это и есть «быстро листаешь
+            // плюс прогруз — телепортирует».
+            //
+            // Поэтому всё, что СТАРШЕ первого пришедшего, оставляем как
+            // было: свежая выборка про него ничего не знает, но на экране он
+            // есть и держит положение.
+            val oldestFresh = marked.firstOrNull()?.id
+            val kept = if (oldestFresh == null) emptyList()
+                       else messages.takeWhile { it.id < oldestFresh }
+            val merged = if (kept.isEmpty()) marked else kept + marked
+            if (merged.size != messages.size ||
+                merged.zip(messages).any { (a, b) -> a != b }
             ) {
-                messages = marked
+                messages = merged
             }
+            // И лимит поднимаем до показанного, иначе следующий же опрос
+            // сократит ленту обратно.
+            if (merged.size > pageLimit) pageLimit = merged.size
             // Максимум ленты — это и есть максимум переписки: страница
             // грузится с конца. Записываем его здесь, чтобы опрос не считал
             // только что показанное сообщение новостью.
@@ -366,8 +386,11 @@ fun ChatScreen(
             if (lastHeardId >= 0 && newestIncoming > lastHeardId) Sounds.message()
             if (newestIncoming > lastHeardId) lastHeardId = newestIncoming
 
-            reactions = ReactionsRepository.forMessages(loaded.map { it.id }, scopeKind)
-            MessageMemory.put(scopeKind, targetId, loaded, reactions)
+            // Реакции и память — по ВСЕМУ показанному, а не только по
+            // свежей выборке: иначе у долистанных сообщений реакции
+            // пропадали бы на каждом опросе, а кеш забывал бы историю.
+            reactions = ReactionsRepository.forMessages(merged.map { it.id }, scopeKind)
+            MessageMemory.put(scopeKind, targetId, merged, reactions)
             ChatRepository.prefetchPageMedia(loaded, scopeKind)
             if (!isGroup) {
                 val state = ChatRepository.blockState(targetId)

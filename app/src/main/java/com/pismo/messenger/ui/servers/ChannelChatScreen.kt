@@ -211,13 +211,24 @@ fun ChannelChatScreen(
     suspend fun reload(scrollToEnd: Boolean = false) {
         runCatching {
             val loaded = ServerRepository.channelMessages(channelId, limit = pageLimit)
+
+            // Долистанное не теряем — то же, что в личной переписке. Опрос
+            // прочитал лимит ДО запроса, и пока запрос ехал, человек мог
+            // долистать ещё страницу истории. Простое присваивание
+            // выбрасывало её вместе с сообщением, за которое держалась
+            // лента, и канал уезжал на страницу.
+            val oldestFresh = loaded.firstOrNull()?.id
+            val kept = if (oldestFresh == null) emptyList()
+                       else messages.takeWhile { it.id < oldestFresh }
+            val merged = if (kept.isEmpty()) loaded else kept + loaded
             // Присваиваем только при реальном изменении — иначе одинаковый
             // список каждые 2,5 секунды перекомпоновывал бы все пузыри.
-            if (loaded.size != messages.size ||
-                loaded.zip(messages).any { (a, b) -> a != b }
+            if (merged.size != messages.size ||
+                merged.zip(messages).any { (a, b) -> a != b }
             ) {
-                messages = loaded
+                messages = merged
             }
+            if (merged.size > pageLimit) pageLimit = merged.size
             // Максимум ленты = максимум канала: страница грузится с конца.
             lastMaxId = loaded.maxOfOrNull { it.id } ?: -1
 
@@ -226,8 +237,10 @@ fun ChannelChatScreen(
             if (lastHeardId >= 0 && newestIncoming > lastHeardId) Sounds.message()
             if (newestIncoming > lastHeardId) lastHeardId = newestIncoming
 
-            reactions = ReactionsRepository.forMessages(loaded.map { it.id }, Scope.SERVER)
-            MessageMemory.put(Scope.SERVER, channelId, loaded, reactions)
+            // Реакции и память — по всему показанному: иначе у долистанных
+            // сообщений реакции пропадали бы на каждом опросе.
+            reactions = ReactionsRepository.forMessages(merged.map { it.id }, Scope.SERVER)
+            MessageMemory.put(Scope.SERVER, channelId, merged, reactions)
             ServerRepository.prefetchChannelMedia(loaded)
             perms = ServerRepository.permissions(serverId)
             // То же, что в личных чатах: свёрнутое приложение не должно
