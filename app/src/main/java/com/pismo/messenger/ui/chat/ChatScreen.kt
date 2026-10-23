@@ -1173,7 +1173,15 @@ fun ChatScreen(
                                 },
                                 scopeKind = scopeKind,
                                 onOpenVideo = { file, name, id ->
-                                    fullscreenVideo = FullscreenVideo(file, name, id)
+                                    fullscreenVideo = FullscreenVideo(
+                                        file, name, id,
+                                        // В группе подписываем автором, в
+                                        // личной переписке и так понятно, с
+                                        // кем говоришь.
+                                        sender = if (isGroup && msg.senderId != UserSession.effectiveId)
+                                            msg.senderName else "",
+                                        caption = msg.text,
+                                    )
                                 },
                                 selectMode = selectMode,
                                 selected = msg.id in selectedIds,

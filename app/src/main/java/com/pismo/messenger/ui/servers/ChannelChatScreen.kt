@@ -631,7 +631,13 @@ fun ChannelChatScreen(
                                 isGroup = true,          // в канале всегда показываем автора
                                 onOpenVideo = { file, name, id ->
                                     fullscreenVideo =
-                                        com.pismo.messenger.ui.chat.FullscreenVideo(file, name, id)
+                                        com.pismo.messenger.ui.chat.FullscreenVideo(
+                                            file, name, id,
+                                            // В канале автор подписан всегда —
+                                            // там пишут многие.
+                                            sender = msg.senderName,
+                                            caption = msg.text,
+                                        )
                                 },
                                 mentioned = msg.senderId != UserSession.effectiveId &&
                                     Mentions.mentionsMe(msg.text, mentionMe.first, mentionMe.second),

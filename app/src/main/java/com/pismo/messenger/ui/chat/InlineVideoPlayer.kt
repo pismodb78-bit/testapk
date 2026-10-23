@@ -750,8 +750,20 @@ object VideoPositions {
     fun clear() = synchronized(positions) { positions.clear() }
 }
 
-/** Что сейчас открыто во весь экран. */
-data class FullscreenVideo(val file: File, val fileName: String, val msgId: Int)
+/**
+ * Что сейчас открыто во весь экран.
+ *
+ * Подпись и автор едут сюда вместе с файлом: в полном экране от переписки
+ * не остаётся ничего, и без них непонятно ни кто это прислал, ни что было
+ * написано рядом с видео.
+ */
+data class FullscreenVideo(
+    val file: File,
+    val fileName: String,
+    val msgId: Int,
+    val sender: String = "",
+    val caption: String = "",
+)
 
 /**
  * Полноэкранный просмотр видео — живёт НА УРОВНЕ ЭКРАНА, а не внутри пузыря.
@@ -794,6 +806,41 @@ fun FullscreenVideoHost(
                     }
                 },
             )
+            // Кто прислал и что написал — над панелью управления.
+            //
+            // В пузыре это видно и так: имя стоит над сообщением, подпись —
+            // под видео. В полном экране не остаётся ни того, ни другого, и
+            // ролик висит сам по себе. Полоса держится выше кнопок, чтобы не
+            // спорить с перемоткой, и уходит целиком, когда сказать нечего.
+            if (video.sender.isNotBlank() || video.caption.isNotBlank()) {
+                Column(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 104.dp),
+                ) {
+                    if (video.sender.isNotBlank()) {
+                        Text(
+                            video.sender,
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                            maxLines = 1,
+                        )
+                    }
+                    if (video.caption.isNotBlank()) {
+                        Text(
+                            video.caption,
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            maxLines = 4,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+
             IconButton(
                 onClick = { close() },
                 modifier = Modifier
