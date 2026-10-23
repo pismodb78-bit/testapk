@@ -628,9 +628,11 @@ internal fun VideoSurface(
                     start = 6.dp,
                     end = 6.dp,
                     top = 6.dp,
-                    // Выше прежнего: полоса не должна оказаться на одной
-                    // линии с кнопками, которые теперь стоят по центру.
-                    bottom = if (insetBottom) 56.dp else 14.dp,
+                    // Ещё выше: у нижнего края полоса мешает и жестовой
+                    // черте снизу, и собственной подписи под кадром, а
+                    // попасть по ползунку тем труднее, чем он ближе к
+                    // границе экрана.
+                    bottom = if (insetBottom) 84.dp else 24.dp,
                 )
                 .clip(RoundedCornerShape(18.dp))
                 // Полупрозрачнее: сквозь полосу видно кадр, а читается она
@@ -1064,7 +1066,8 @@ fun FullscreenVideoHost(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .padding(start = 16.dp, end = 16.dp, bottom = 104.dp),
+                        // Над полосой времени, которая сама приподнята.
+                        .padding(start = 16.dp, end = 16.dp, bottom = 136.dp),
                 )
             }
 
