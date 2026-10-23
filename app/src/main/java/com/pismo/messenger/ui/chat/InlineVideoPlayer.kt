@@ -56,6 +56,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -414,7 +419,18 @@ internal fun VideoSurface(
                     // поверх него — не то, чего ждут от нажатия на ролик.
                     WavPlayer.stop()
                     val resumeAt = if (positionMs > 0) positionMs else startAtMs
-                        if (resumeAt > 0) seekTo(resumeAt)
+                        if (resumeAt > 0) {
+                            // Тем же точным способом: иначе возврат из полного
+                            // экрана откатывал бы ролик к ближайшему ключевому
+                            // кадру, то есть нередко к началу.
+                            if (android.os.Build.VERSION.SDK_INT >=
+                                android.os.Build.VERSION_CODES.O
+                            ) {
+                                runCatching { mp.seekTo(resumeAt.toLong(), MediaPlayer.SEEK_CLOSEST) }
+                            } else {
+                                seekTo(resumeAt)
+                            }
+                        }
                         if (isPlaying) start() else pause()
                     }
                     setOnCompletionListener {
@@ -511,8 +527,29 @@ internal fun VideoSurface(
                 else if (durationMs > 0) positionMs.toFloat() / durationMs else 0f,
                 onValueChange = { dragging = true; dragValue = it },
                 onValueChangeFinished = {
-                    runCatching { view.seekTo((dragValue * durationMs).toInt()) }
-                    positionMs = (dragValue * durationMs).toInt()
+                    val target = (dragValue * durationMs).toInt()
+                    // ТОЧНАЯ ПЕРЕМОТКА, а не «до ближайшего ключевого кадра».
+                    //
+                    // Отсюда и бралось «ставишь на вторую половину, а ползунок
+                    // прыгает в первую»: обычный seekTo у Android ищет
+                    // ПРЕДЫДУЩИЙ ключевой кадр, а в коротком ролике из
+                    // мессенджера их бывает один — в самом начале. Видео и
+                    // уезжало к нулю, а ползунок послушно возвращался следом.
+                    //
+                    // SEEK_CLOSEST доводит до запрошенного места, раскодировав
+                    // остаток от ключевого кадра. Он есть с Android 8; ниже
+                    // остаётся прежнее поведение — другого там нет.
+                    runCatching {
+                        val mp = player
+                        if (mp != null &&
+                            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O
+                        ) {
+                            mp.seekTo(target.toLong(), MediaPlayer.SEEK_CLOSEST)
+                        } else {
+                            view.seekTo(target)
+                        }
+                    }
+                    positionMs = target
                     dragging = false
                 },
                 colors = SliderDefaults.colors(
@@ -812,33 +849,38 @@ fun FullscreenVideoHost(
             // под видео. В полном экране не остаётся ни того, ни другого, и
             // ролик висит сам по себе. Полоса держится выше кнопок, чтобы не
             // спорить с перемоткой, и уходит целиком, когда сказать нечего.
-            if (video.sender.isNotBlank() || video.caption.isNotBlank()) {
-                Column(
-                    Modifier
+            // ОДНОЙ СТРОКОЙ: ник, а подпись — в скобках за ним.
+            //
+            // Длинная подпись тут не нужна и вредна: она лезла бы на кадр,
+            // ради которого полный экран и открывают. Поэтому ровно строка —
+            // что не поместилось, обрывается многоточием. Полное сообщение
+            // никуда не делось, оно в переписке.
+            val label = buildAnnotatedString {
+                if (video.sender.isNotBlank()) {
+                    withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
+                        append(video.sender)
+                    }
+                }
+                if (video.caption.isNotBlank()) {
+                    if (length > 0) append(" ")
+                    append("(")
+                    append(video.caption)
+                    append(")")
+                }
+            }
+            if (label.isNotEmpty()) {
+                Text(
+                    label,
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
                         .navigationBarsPadding()
                         .padding(start = 16.dp, end = 16.dp, bottom = 104.dp),
-                ) {
-                    if (video.sender.isNotBlank()) {
-                        Text(
-                            video.sender,
-                            color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                            maxLines = 1,
-                        )
-                    }
-                    if (video.caption.isNotBlank()) {
-                        Text(
-                            video.caption,
-                            color = Color.White,
-                            fontSize = 14.sp,
-                            maxLines = 4,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        )
-                    }
-                }
+                )
             }
 
             IconButton(

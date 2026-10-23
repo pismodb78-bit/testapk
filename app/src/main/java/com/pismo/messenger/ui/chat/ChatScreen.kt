@@ -1175,11 +1175,11 @@ fun ChatScreen(
                                 onOpenVideo = { file, name, id ->
                                     fullscreenVideo = FullscreenVideo(
                                         file, name, id,
-                                        // В группе подписываем автором, в
-                                        // личной переписке и так понятно, с
-                                        // кем говоришь.
-                                        sender = if (isGroup && msg.senderId != UserSession.effectiveId)
-                                            msg.senderName else "",
+                                        // Ник показываем всегда: в полном
+                                        // экране от переписки не остаётся
+                                        // ничего, и без него ролик висит сам
+                                        // по себе — даже в личной переписке.
+                                        sender = msg.senderName,
                                         caption = msg.text,
                                     )
                                 },
