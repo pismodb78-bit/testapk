@@ -62,11 +62,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -356,6 +353,12 @@ internal fun VideoSurface(
     onSave: (() -> Unit)?,
     onPositionChange: (Int) -> Unit = {},
     insetBottom: Boolean = false,
+    /**
+     * Видно ли сейчас управление. Нужно полному экрану: ник и подпись
+     * лежат поверх кадра рядом с кнопками и должны уходить вместе с ними,
+     * а живёт это состояние здесь.
+     */
+    onControlsChange: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val view = remember(file.absolutePath) { VideoView(context) }
@@ -434,6 +437,8 @@ internal fun VideoSurface(
         positionMs = target
         seeking = true
     }
+
+    LaunchedEffect(controls) { onControlsChange(controls) }
 
     // Кнопки уходят сами — но только пока видео идёт. На паузе они нужны:
     // человек ровно за ними и остановил.
@@ -979,6 +984,8 @@ fun FullscreenVideoHost(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var livePos by remember(video.msgId) { mutableIntStateOf(VideoPositions.get(video.msgId)) }
+    /** Видно ли управление — его показывает и прячет сам плеер. */
+    var chrome by remember(video.msgId) { mutableStateOf(true) }
 
     fun close() {
         VideoPositions.put(video.msgId, livePos)
@@ -995,6 +1002,7 @@ fun FullscreenVideoHost(
                 startAtMs = VideoPositions.get(video.msgId),
                 autoPlay = true,
                 onPositionChange = { livePos = it },
+                onControlsChange = { chrome = it },
                 insetBottom = true,
                 onFullscreen = null,
                 onSave = {
@@ -1009,34 +1017,51 @@ fun FullscreenVideoHost(
             // под видео. В полном экране не остаётся ни того, ни другого, и
             // ролик висит сам по себе. Полоса держится выше кнопок, чтобы не
             // спорить с перемоткой, и уходит целиком, когда сказать нечего.
-            // ОДНОЙ СТРОКОЙ: ник, а подпись — в скобках за ним.
+            // КТО ПРИСЛАЛ — СВЕРХУ, ЧТО НАПИСАЛ — СНИЗУ.
             //
-            // Длинная подпись тут не нужна и вредна: она лезла бы на кадр,
-            // ради которого полный экран и открывают. Поэтому ровно строка —
-            // что не поместилось, обрывается многоточием. Полное сообщение
-            // никуда не делось, оно в переписке.
-            val label = buildAnnotatedString {
-                if (video.sender.isNotBlank()) {
-                    withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
-                        append(video.sender)
-                    }
-                }
-                if (video.caption.isNotBlank()) {
-                    if (length > 0) append(" ")
-                    append("(")
-                    append(video.caption)
-                    append(")")
-                }
-            }
-            if (label.isNotEmpty()) {
+            // И то и другое уходит вместе с кнопками: ради кадра полный
+            // экран и открывают, а подписи поверх него нужны ровно в тот
+            // момент, когда человек разбирается, что это и от кого.
+            //
+            // По строке на каждое — длинная подпись лезла бы на кадр.
+            // Что не поместилось, обрывается многоточием; целиком
+            // сообщение никуда не делось, оно в переписке.
+            AnimatedVisibility(
+                visible = chrome && video.sender.isNotBlank(),
+                modifier = Modifier.align(Alignment.TopStart),
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
                 Text(
-                    label,
+                    video.sender,
                     color = Color.White,
-                    fontSize = 13.sp,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
-                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        // Справа место под крестик: он остаётся на виду
+                        // всегда, иначе из скрытого управления было бы не
+                        // выйти.
+                        .padding(start = 16.dp, end = 60.dp, top = 18.dp),
+                )
+            }
+
+            AnimatedVisibility(
+                visible = chrome && video.caption.isNotBlank(),
+                modifier = Modifier.align(Alignment.BottomCenter),
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
+                Text(
+                    video.caption,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
                         .padding(start = 16.dp, end = 16.dp, bottom = 104.dp),
