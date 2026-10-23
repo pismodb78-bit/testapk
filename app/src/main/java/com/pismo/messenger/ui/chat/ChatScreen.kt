@@ -215,16 +215,27 @@ fun ChatScreen(
     var iBlocked by remember { mutableStateOf(false) }
     var theyBlocked by remember { mutableStateOf(false) }
 
-    // Лента открывается СРАЗУ на последнем сообщении. Раньше стартовая
-    // позиция была нулевой, и чат на мгновение (а с запомненной лентой —
-    // надолго) показывал самое старое сообщение, пока прокрутка вниз не
-    // догоняла. Начальный индекс задаётся до первой компоновки, поэтому
-    // прыжка не видно вовсе.
-    val listState = rememberLazyListState(
-        initialFirstVisibleItemIndex = (remembered?.first?.size ?: 1) - 1
-    )
-    // Клавиатура не должна прятать последние сообщения.
-    com.pismo.messenger.ui.components.KeepListAboveKeyboard(listState)
+    // ЛЕНТА ПЕРЕВЁРНУТА — см. reverseLayout у LazyColumn ниже. Нулевой
+    // элемент это самое свежее сообщение, и стоит он у НИЖНЕГО края. Поэтому
+    // начальную позицию задавать больше не нужно: чат открывается на
+    // последнем сообщении сам.
+    //
+    // И это же лечит «телепорт на стыках прогруженного». Обычный список при
+    // изменении данных держится за ПЕРВЫЙ ВИДИМЫЙ элемент, то есть за верхний
+    // край окна, а порция старых сообщений ложится ВЫШЕ него — значит всё, что
+    // над якорем, надо пересчитать и переложить. Любая мелочь в этой кладке
+    // уводила взгляд: склеившаяся черта с датой (у самого старого сообщения
+    // она была, а с приходом порции стала не нужна), картинка, вставшая в свой
+    // настоящий размер вместо заготовки, потерянный после большого сдвига
+    // ключ. Отсюда и дёрганье ровно на границах страниц.
+    //
+    // В перевёрнутом списке якорь стоит у нижнего края, старые сообщения
+    // приходят в КОНЕЦ данных — то есть за верхний край экрана, — и
+    // перекладывать над якорем нечего. Двигать взгляд попросту некуда.
+    val listState = rememberLazyListState()
+    // KeepListAboveKeyboard здесь больше не нужен: перевёрнутая лента прижата
+    // к низу окна, и когда клавиатура поднимает нижний край, последние
+    // сообщения поднимаются вместе с ним сами.
 
     val recorder = remember { WavRecorder(scope) }
     var recording by remember { mutableStateOf(false) }
@@ -416,16 +427,13 @@ fun ChatScreen(
         loading = false
         // Прокручиваем вниз только если пользователь и так был у конца ленты:
         // иначе новое сообщение выдёргивало бы его из середины истории.
-        // «У конца» — это когда конец ленты ВИДНО, а не «осталось три
-        // сообщения». С прежней меркой человек, отлиставший на пару
-        // сообщений вверх, считался стоящим внизу, и очередной опрос уносил
-        // его к последнему — особенно заметно, когда эти сообщения с
-        // фотографиями в пол-экрана.
-        val info = listState.layoutInfo
-        val lastSeen = info.visibleItemsInfo.lastOrNull()
-        val atBottom = lastSeen == null ||
-            (lastSeen.index >= info.totalItemsCount - 1 &&
-                lastSeen.offset + lastSeen.size <= info.viewportEndOffset + 8)
+        //
+        // В перевёрнутой ленте «у конца» считается одной строкой: нулевой
+        // элемент — самое свежее сообщение, и стоит он у нижнего края ровно
+        // тогда, когда смещение прокрутки нулевое. Пара пикселей допуска — на
+        // дрожь пальца.
+        val atBottom = listState.firstVisibleItemIndex == 0 &&
+            listState.firstVisibleItemScrollOffset <= 8
         // И НЕ ТРОГАЕМ ленту, пока её листает пользователь. scrollToItem
         // мгновенно обрывает инерцию, а опрос приходит раз в две с половиной
         // секунды — попасть им в разгон пальца проще простого. Отсюда и
@@ -439,7 +447,8 @@ fun ChatScreen(
         if (messages.isNotEmpty() && !userScrolling && !watching &&
             (force || (scrollToEnd && atBottom))
         ) {
-            listState.scrollToItem(messages.lastIndex)
+            // Конец перевёрнутой ленты — это её нулевой элемент.
+            listState.scrollToItem(0)
         }
     }
 
@@ -557,16 +566,25 @@ fun ChatScreen(
         //
         // isScrollInProgress отвечает ровно на нужный вопрос — тянут ленту прямо
         // сейчас или нет. Тап её не поднимает, перекладка списка тоже.
-        snapshotFlow { listState.firstVisibleItemIndex to listState.isScrollInProgress }
-            .collect { (first, scrolling) ->
+        // Считаем, сколько элементов осталось до самого СТАРОГО загруженного.
+        // В перевёрнутом списке номера растут вверх, поэтому верхний видимый
+        // элемент — последний в visibleItemsInfo (он всегда отсортирован по
+        // номеру), а «дотянули до верха» значит «до конца данных осталась
+        // пара штук».
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val topMost = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+            (info.totalItemsCount - 1 - topMost) to listState.isScrollInProgress
+        }
+            .collect { (left, scrolling) ->
                 if (!scrolling) return@collect
                 if (loading || loadingOlder || noMoreOlder) return@collect
                 if (messages.isEmpty()) return@collect
                 // Запас начинаем везти ЗАДОЛГО до порога. Почти вся пауза при
                 // подгрузке — это поход к серверу, а не работа; сходить заранее,
                 // пока человек ещё читает, и есть самый дешёвый способ её убрать.
-                if (first <= 12) scope.launch { warmReserve() }
-                if (first > 2) return@collect
+                if (left <= 12) scope.launch { warmReserve() }
+                if (left > 2) return@collect
 
                 // Пауза между подгрузками: пока предыдущая порция укладывается,
                 // номер первого видимого успевает дёрнуться ещё несколько раз.
@@ -617,11 +635,11 @@ fun ChatScreen(
                     // будет лежать готовой, и подгрузка обойдётся без запроса.
                     warmReserve()
                 }
-                // Поправлять позицию руками НЕ НУЖНО и вредно: LazyColumn держит
-                // якорь на первом видимом элементе по его ключу, поэтому порция,
-                // легшая сверху, сама сдвигает содержимое, не трогая взгляд. А
-                // ручной scrollToItem поверх этого обрывал бы инерцию — палец в
-                // этот момент как раз ведёт ленту вверх.
+                // Поправлять позицию руками НЕ НУЖНО и вредно. Лента
+                // перевёрнута: порция старых сообщений уходит в КОНЕЦ данных,
+                // за верхний край экрана, и на уже разложенное не влияет
+                // вовсе. А ручной scrollToItem поверх этого обрывал бы
+                // инерцию — палец в этот момент как раз ведёт ленту вверх.
                 loadingOlder = false
             }
     }
@@ -943,6 +961,21 @@ fun ChatScreen(
 
     val readOnly = !isGroup && (iBlocked || theyBlocked)
 
+    /**
+     * Номер ЭЛЕМЕНТА ЛЕНТЫ для сообщения, подходящего под условие.
+     *
+     * Лента перевёрнута, поэтому номер в хронологическом списке и номер
+     * элемента списка — разные вещи: нулевой элемент это самое свежее
+     * сообщение. Все прыжки — по цитате, из поиска, на дату — ходят только
+     * через эту функцию, чтобы не разъехаться. Фильтр тот же, что у ленты: в
+     * закрытой переписке часть сообщений скрыта, и без него номера съезжают.
+     */
+    fun feedIndexOf(match: (ChatMessage) -> Boolean): Int {
+        val chrono = messages.filter { !readOnly || it.isMine }
+        val i = chrono.indexOfFirst(match)
+        return if (i < 0) -1 else chrono.lastIndex - i
+    }
+
     Scaffold(
         containerColor = PismoColors.BgMain,
         topBar = {
@@ -1138,6 +1171,10 @@ fun ChatScreen(
                 } else {
                     LazyColumn(
                         state = listState,
+                        // Снизу вверх: нулевой элемент у нижнего края. Из-за
+                        // этого подгрузка старых сообщений вообще не трогает
+                        // уже разложенное — подробности у listState выше.
+                        reverseLayout = true,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(
                             horizontal = 10.dp, vertical = 8.dp
@@ -1161,11 +1198,18 @@ fun ChatScreen(
                         // двигает: список состоит только из сообщений, и
                         // держится он всегда за сообщение.
 
-                        val visible = messages.filter { !readOnly || it.isMine }
+                        // asReversed — это ВИД на список, а не копия: разворот
+                        // ничего не перекладывает в памяти.
+                        val visible = messages.filter { !readOnly || it.isMine }.asReversed()
                         itemsIndexedCompat(visible) { index, msg ->
-                            val prev = visible.getOrNull(index - 1)
-                            val showDate = prev == null ||
-                                    formatDateSeparator(prev.createdAtMs) !=
+                            // Сосед по номеру СТАРШЕ: список перевёрнут. Черта
+                            // с датой стоит над самым ранним сообщением дня, а
+                            // это тот, у кого сосед сверху — уже из другого
+                            // дня (внутри пузыря порядок обычный, сверху вниз,
+                            // переворот касается только самих элементов).
+                            val older = visible.getOrNull(index + 1)
+                            val showDate = older == null ||
+                                    formatDateSeparator(older.createdAtMs) !=
                                     formatDateSeparator(msg.createdAtMs)
                             if (showDate) DateSeparator(formatDateSeparator(msg.createdAtMs))
 
@@ -1173,13 +1217,10 @@ fun ChatScreen(
                                 transferKey = Transfers.chatKey(isGroup, targetId),
                                 onQuoteClick = { id ->
                                     scope.launch {
-                                        // Индекс берём по ВИДИМОМУ списку, а не
-                                        // по messages: в закрытой переписке
-                                        // часть сообщений отфильтрована, и
-                                        // номера разъезжаются.
-                                        fun indexOf() = messages
-                                            .filter { !readOnly || it.isMine }
-                                            .indexOfFirst { it.id == id }
+                                        // Номер элемента ленты — через
+                                        // feedIndexOf: лента перевёрнута, и
+                                        // хронологический номер ей не подходит.
+                                        fun indexOf() = feedIndexOf { it.id == id }
 
                                         // Сообщения может не быть на
                                         // загруженной странице — тогда прыжок
@@ -1588,7 +1629,7 @@ fun ChatScreen(
                 // Прыгаем к сообщению, если оно есть на текущей странице;
                 // иначе просто закрываем — подгрузка вглубь истории пока
                 // не реализована.
-                val idx = messages.indexOfFirst { it.id == found.id }
+                val idx = feedIndexOf { it.id == found.id }
                 if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
             },
         )
@@ -1613,7 +1654,7 @@ fun ChatScreen(
                         loading = true
                         reload()
                     }
-                    val idx = messages.indexOfFirst { it.createdAtMs >= dayStartMs }
+                    val idx = feedIndexOf { it.createdAtMs >= dayStartMs }
                     if (idx >= 0) {
                         listState.animateScrollToItem(idx)
                         jumpNote = ""

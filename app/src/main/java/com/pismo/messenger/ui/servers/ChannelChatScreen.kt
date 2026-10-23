@@ -158,12 +158,14 @@ fun ChannelChatScreen(
         mutableStateOf<com.pismo.messenger.ui.chat.FullscreenVideo?>(null)
     }
 
-    // Открываемся сразу на последнем сообщении, как в личных чатах.
-    val listState = rememberLazyListState(
-        initialFirstVisibleItemIndex = (remembered?.first?.size ?: 1) - 1
-    )
-    // Клавиатура не должна прятать последние сообщения.
-    com.pismo.messenger.ui.components.KeepListAboveKeyboard(listState)
+    // ЛЕНТА ПЕРЕВЁРНУТА, как в личных чатах: нулевой элемент — самое свежее
+    // сообщение, и стоит он у нижнего края. Поэтому канал открывается на
+    // последнем сообщении сам, начальную позицию задавать не нужно, а
+    // приехавшая в ленту история ничего не сдвигает — двигать над якорем
+    // нечего. Подробное объяснение — в ChatScreen, у его listState.
+    val listState = rememberLazyListState()
+    // KeepListAboveKeyboard не нужен: перевёрнутая лента прижата к низу окна
+    // и поднимается вместе с ним, когда выезжает клавиатура.
 
     var showSearch by remember { mutableStateOf(false) }
     var showCalendar by remember { mutableStateOf(false) }
@@ -257,13 +259,10 @@ fun ChannelChatScreen(
         // Прокручиваем вниз, только если пользователь и так был у конца
         // ленты: иначе новое сообщение выдёргивало бы его из середины
         // истории, которую он читает.
-        // «У конца» — когда конец ленты видно, а не «осталось три
-        // сообщения»: см. пояснение в личной переписке.
-        val info = listState.layoutInfo
-        val lastSeen = info.visibleItemsInfo.lastOrNull()
-        val atBottom = lastSeen == null ||
-            (lastSeen.index >= info.totalItemsCount - 1 &&
-                lastSeen.offset + lastSeen.size <= info.viewportEndOffset + 8)
+        // «У конца» в перевёрнутой ленте — это нулевой элемент у самого
+        // нижнего края: см. пояснение в личной переписке.
+        val atBottom = listState.firstVisibleItemIndex == 0 &&
+            listState.firstVisibleItemScrollOffset <= 8
         // Пока ленту листает пользователь — не трогаем: scrollToItem
         // мгновенно обрывает инерцию, а опрос приходит раз в две с половиной
         // секунды и легко попадает в разгон пальца.
@@ -273,7 +272,8 @@ fun ChannelChatScreen(
             !listState.isScrollInProgress &&
             !com.pismo.messenger.ui.chat.VideoPlayback.active
         ) {
-            listState.scrollToItem(messages.lastIndex)
+            // Конец перевёрнутой ленты — её нулевой элемент.
+            listState.scrollToItem(0)
         }
     }
 
@@ -603,6 +603,10 @@ fun ChannelChatScreen(
                 } else {
                     LazyColumn(
                         state = listState,
+                        // Снизу вверх — как в личных чатах: так приходящие
+                        // сообщения и подгруженная история не сдвигают
+                        // прочитанное из-под глаз.
+                        reverseLayout = true,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(
                             horizontal = 10.dp, vertical = 8.dp
@@ -610,11 +614,18 @@ fun ChannelChatScreen(
                     ) {
                         // Ключ по id: без него обновление списка сбрасывает
                         // состояние всех пузырей, и картинки грузятся заново.
-                        items(messages.size, key = { messages[it].id }) { index ->
-                            val msg = messages[index]
-                            val prev = messages.getOrNull(index - 1)
-                            val showDate = prev == null ||
-                                    formatDateSeparator(prev.createdAtMs) !=
+                        //
+                        // asReversed — вид на список, а не копия: разворот
+                        // ничего не перекладывает в памяти.
+                        val feed = messages.asReversed()
+                        items(feed.size, key = { feed[it].id }) { index ->
+                            val msg = feed[index]
+                            // Сосед по номеру СТАРШЕ: список перевёрнут. Черта
+                            // с датой стоит над самым ранним сообщением дня —
+                            // у того, чей сосед сверху уже из другого дня.
+                            val older = feed.getOrNull(index + 1)
+                            val showDate = older == null ||
+                                    formatDateSeparator(older.createdAtMs) !=
                                     formatDateSeparator(msg.createdAtMs)
                             if (showDate) DateSeparator(formatDateSeparator(msg.createdAtMs))
 
@@ -638,7 +649,11 @@ fun ChannelChatScreen(
                                                 reload()
                                             }
                                         }
-                                        val idx = messages.indexOfFirst { it.id == id }
+                                        // Номер элемента ПЕРЕВЁРНУТОЙ ленты:
+                                        // нулевой — самое свежее сообщение.
+                                        val chrono = messages.indexOfFirst { it.id == id }
+                                        val idx =
+                                            if (chrono < 0) -1 else messages.lastIndex - chrono
                                         if (idx >= 0) {
                                             listState.animateScrollToItem(idx)
                                             flashId = id
@@ -959,7 +974,9 @@ fun ChannelChatScreen(
             onJump = { found ->
                 showSearch = false
                 // Прыгаем к сообщению, если оно есть на загруженной странице.
-                val idx = messages.indexOfFirst { it.id == found.id }
+                // Номер переводим в номер элемента перевёрнутой ленты.
+                val chrono = messages.indexOfFirst { it.id == found.id }
+                val idx = if (chrono < 0) -1 else messages.lastIndex - chrono
                 if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
             },
         )
@@ -992,7 +1009,8 @@ fun ChannelChatScreen(
                         loading = true
                         reload()
                     }
-                    val idx = messages.indexOfFirst { it.createdAtMs >= dayStartMs }
+                    val chrono = messages.indexOfFirst { it.createdAtMs >= dayStartMs }
+                    val idx = if (chrono < 0) -1 else messages.lastIndex - chrono
                     if (idx >= 0) {
                         listState.animateScrollToItem(idx)
                         jumpNote = ""
