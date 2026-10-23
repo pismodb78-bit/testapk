@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -84,6 +85,12 @@ import kotlinx.coroutines.launch
  * время с пометкой «изменено», реакции и меню по долгому нажатию.
  */
 @OptIn(ExperimentalFoundationApi::class)
+/**
+ * Высота полоски с цитатой: полоса слева 30 dp плюс поля по 6 dp. Держим
+ * константой, потому что под неё заранее резервируется место (см. пузырь).
+ */
+private val QUOTE_HEIGHT = 42.dp
+
 @Composable
 fun MessageBubble(
     msg: ChatMessage,
@@ -156,7 +163,13 @@ fun MessageBubble(
                 ?.also { QuoteMemory.put(msg.replyToId, scopeKind, it) }
         }
         if (image == null && msg.hasImage) {
-            image = runCatching { ChatRepository.loadImage(msg.id, scopeKind, msg.fileName) }.getOrNull()
+            val bytes = runCatching {
+                ChatRepository.loadImage(msg.id, scopeKind, msg.fileName)
+            }.getOrNull()
+            // Пропорции снимаем ДО показа и без раскодирования пикселей:
+            // следующий раз заглушка встанет точно под эту картинку.
+            if (bytes != null) ImageShapes.remember(msg.id, bytes)
+            image = bytes
         }
         if (audio == null && msg.hasAudio) {
             audio = runCatching { ChatRepository.loadAudio(msg.id, scopeKind) }.getOrNull()
@@ -258,6 +271,18 @@ fun MessageBubble(
                             fontStyle = FontStyle.Italic,
                         )
                     } else {
+                        // МЕСТО ПОД ЦИТАТУ ДЕРЖИМ ЗАРАНЕЕ.
+                        //
+                        // Она приезжает отдельным запросом, и пузырь без неё
+                        // ниже, чем с ней. Пока её не было, лента дёргалась
+                        // на каждом ответе: строка приходила и толкала вниз
+                        // всё, что под ней. Высота у цитаты постоянная —
+                        // полоска в две строки, — так что держать её место
+                        // ничего не стоит.
+                        if (quote == null && msg.replyToId > 0) {
+                            Spacer(Modifier.height(QUOTE_HEIGHT + 6.dp))
+                        }
+
                         quote?.let { q ->
                             Row(
                                 Modifier
@@ -293,6 +318,28 @@ fun MessageBubble(
                                     )
                                 }
                             }
+                            Spacer(Modifier.height(6.dp))
+                        }
+
+                        // И ПОД КАРТИНКУ — ТОЖЕ.
+                        //
+                        // Она тоже едет отдельно, и до её приезда пузырь не
+                        // занимал под неё ни пикселя: фотография появлялась
+                        // разом и сдвигала переписку на свою высоту. Это и
+                        // есть «чат дёргает при прогрузке».
+                        //
+                        // Пропорции запоминаем: при первом показе берём их у
+                        // самой картинки, дальше заглушка встаёт ровно той же
+                        // высоты, и сдвига нет вовсе. Пока их неоткуда взять,
+                        // держим обычные для фотографии 4:3.
+                        if (image == null && msg.hasImage) {
+                            Box(
+                                Modifier
+                                    .width(260.dp)
+                                    .aspectRatio(ImageShapes.ratio(msg.id))
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0x22000000))
+                            )
                             Spacer(Modifier.height(6.dp))
                         }
 
