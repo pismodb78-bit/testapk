@@ -169,7 +169,7 @@ object Transfers {
         scopeKind: Scope,
         fileName: String?,
         onReady: suspend (ByteArray) -> Unit,
-    ) = launch(
+    ): Long = launch(
         where = where,
         fileName = fileName ?: "Файл",
         total = 0L,                       // размер знает сервер, полосу ведём по доле
@@ -184,6 +184,13 @@ object Transfers {
 
     // ── общая часть ───────────────────────────────────────────────────
 
+    /**
+     * Заводит передачу и возвращает её номер.
+     *
+     * Номер нужен тому, кто показывает ход прямо у себя — например пузырю
+     * видео: по нему он находит свою строку в общем списке и берёт из неё
+     * и долю, и причину срыва, не заводя собственного счёта.
+     */
     private fun launch(
         where: String,
         fileName: String,
@@ -192,8 +199,8 @@ object Transfers {
         gate: Mutex,
         table: String,
         body: suspend (onRow: (Int) -> Unit, onBytes: (Float) -> Unit) -> Unit,
-    ) {
-        if (!download && total <= 0L) return        // следить не за чем
+    ): Long {
+        if (!download && total <= 0L) return -1L    // следить не за чем
         val id = synchronized(this) { nextId++ }
         _active.update { it + Task(id, where, fileName, total, download = download) }
 
@@ -246,6 +253,7 @@ object Transfers {
         }
         synchronized(this) { jobs[id] = job }
         job.start()
+        return id
     }
 
     /**

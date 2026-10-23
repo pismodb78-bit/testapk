@@ -337,6 +337,9 @@ fun MessageBubble(
                                 scopeKind = scopeKind,
                                 fileName = msg.fileName!!,
                                 isMine = isMine,
+                                // Загрузка идёт общей очередью, и её полоса
+                                // должна встать в этой же переписке.
+                                where = transferKey,
                                 onFullscreen = onOpenVideo,
                             )
                             Spacer(Modifier.height(6.dp))
@@ -410,30 +413,24 @@ fun MessageBubble(
                                 Spacer(Modifier.width(4.dp))
                                 IconButton(
                                     onClick = {
-                                        scope.launch {
-                                            fileStatus = "Сохранение…"
-                                            val data = runCatching {
-                                                ChatRepository.loadFile(
-                                                    msg.id, scopeKind, msg.fileName,
-                                                ) { f ->
-                                                    fileStatus = "Сохранение… " +
-                                                        (f * 100).toInt() + " %"
-                                                }
-                                            }.getOrNull()
-                                            fileStatus = when {
-                                                data == null -> {
-                                                    // Причину знает файловый
-                                                    // сервис — без неё
-                                                    // непонятно, чинить сеть
-                                                    // или файл потерян.
-                                                    val why = com.pismo.messenger.data.FileService.lastError
-                                                    if (why.isNullOrBlank()) "Не удалось загрузить"
-                                                    else "Не удалось загрузить: $why"
-                                                }
-                                                MediaSaver.saveFile(context, msg.fileName, data) ->
+                                        // Сохранение идёт ОБЩЕЙ ОЧЕРЕДЬЮ, как и
+                                        // открытие: файл на сотню мегабайт
+                                        // переживает и уход из чата, и
+                                        // свёрнутое приложение, а ход виден
+                                        // полосой под перепиской и в шторке.
+                                        // Раньше загрузка жила в области
+                                        // экрана и обрывалась вместе с ним.
+                                        fileStatus = "Сохранение…"
+                                        com.pismo.messenger.data.Transfers.download(
+                                            where = transferKey,
+                                            msgId = msg.id,
+                                            scopeKind = scopeKind,
+                                            fileName = msg.fileName,
+                                        ) { data ->
+                                            fileStatus =
+                                                if (MediaSaver.saveFile(context, msg.fileName, data))
                                                     "Сохранено в загрузки"
-                                                else -> "Не удалось сохранить"
-                                            }
+                                                else "Не удалось сохранить"
                                         }
                                     },
                                     modifier = Modifier.size(32.dp),

@@ -97,6 +97,8 @@ fun InlineVideoBubble(
     scopeKind: Scope,
     fileName: String,
     isMine: Boolean = false,
+    /** Ключ переписки — чтобы полоса загрузки встала в своём чате. */
+    where: String = "",
     onFullscreen: (java.io.File, String, Int) -> Unit = { _, _, _ -> },
 ) {
     val context = LocalContext.current
@@ -107,6 +109,30 @@ fun InlineVideoBubble(
     var loading by remember(msgId) { mutableStateOf(false) }
     var status by remember(msgId) { mutableStateOf("") }
     var playing by remember(msgId) { mutableStateOf(false) }
+
+    // ВИДЕО КАЧАЕТСЯ ОБЩЕЙ ОЧЕРЕДЬЮ, а не прямо отсюда.
+    //
+    // Раньше загрузка жила в области самого пузыря: стоило уйти из чата или
+    // просто отлистать ленту так, чтобы пузырь уехал за край, — и Compose
+    // убивал его вместе с загрузкой. Полсотни мегабайт качались заново с
+    // нуля. Свернуть приложение значило то же самое.
+    //
+    // В общей очереди (Transfers) этого нет: она живёт в области процесса,
+    // поднимает на время передачи службу и показывает ход и в переписке, и
+    // в шторке. Голосовые остались на прямом пути намеренно — они весят
+    // сотни килобайт, доезжают за мгновение, и строка в списке передач была
+    // бы для них шумом.
+    val transfers by com.pismo.messenger.data.Transfers.active.collectAsState()
+    var taskId by remember(msgId) { androidx.compose.runtime.mutableLongStateOf(-1L) }
+    val task = transfers.firstOrNull { it.id == taskId }
+    val taskError = task?.error
+    val busy = loading || (task != null && taskError == null)
+    val shown = when {
+        taskError != null -> taskError
+        task != null && task.waiting -> "В очереди…"
+        task != null -> "Загрузка видео… " + (task.progress * 100).toInt() + " %"
+        else -> status
+    }
     // Позиция, с которой продолжает следующий плеер. Одновременно живым
     // должен быть РОВНО ОДИН: пока их было два, инлайновый продолжал играть
     // за диалогом, и слышно было обе дорожки с расхождением в пару секунд —
@@ -127,30 +153,28 @@ fun InlineVideoBubble(
     }
 
     fun open() {
-        if (loading) return
+        if (busy) return
         if (file != null) {
             playing = true
             return
         }
-        scope.launch {
-            loading = true
-            status = "Загрузка видео…"
-            // Доля в подписи, а не один безмолвный кружок: видео на десятки
-            // мегабайт идёт по мобильной связи минуту и больше, и без неё
-            // ожидание не отличить от «ничего не происходит».
-            val data = runCatching {
-                ChatRepository.loadFile(msgId, scopeKind, fileName) { f ->
-                    status = "Загрузка видео… " + (f * 100).toInt() + " %"
-                }
-            }.getOrNull()
-            loading = false
-            if (data == null) {
-                status = loadFailure()
-                return@launch
-            }
-            status = ""
+        // Прошлая попытка сорвалась — её строку закрываем, иначе список
+        // передач копил бы по строке на каждое нажатие.
+        if (taskError != null) {
+            com.pismo.messenger.data.Transfers.cancel(taskId)
+            taskId = -1L
+        }
+        status = ""
+        taskId = com.pismo.messenger.data.Transfers.download(
+            where = where,
+            msgId = msgId,
+            scopeKind = scopeKind,
+            fileName = fileName,
+        ) {
+            // Сюда попадаем только при успехе, и байты уже в кеше.
             file = MediaCache.fileFor(msgId, "file", fileName)
-            if (file != null) playing = true else status = "Не удалось сохранить во временную папку"
+            if (file != null) playing = true
+            else status = "Не удалось сохранить во временную папку"
         }
     }
 
@@ -210,7 +234,7 @@ fun InlineVideoBubble(
                     // Затемнение, иначе белая ▶ на светлом кадре не читается.
                     Box(Modifier.fillMaxSize().background(Color(0x55000000)))
                 }
-                if (loading) {
+                if (busy) {
                     CircularProgressIndicator(color = Color.White, strokeWidth = 3.dp)
                 } else {
                     Box(
@@ -248,8 +272,8 @@ fun InlineVideoBubble(
                     maxLines = 1,
                 )
                 Text(
-                    status.ifBlank { sizeLabel(file) ?: "Видео" },
-                    color = PismoColors.TextMuted,
+                    shown.ifBlank { sizeLabel(file) ?: "Видео" },
+                    color = if (taskError != null) PismoColors.Red else PismoColors.TextMuted,
                     fontSize = 10.sp,
                     maxLines = 1,
                 )
@@ -257,20 +281,33 @@ fun InlineVideoBubble(
             IconButton(
                 onClick = {
                     val f = file
-                    scope.launch {
-                        status = "Сохранение…"
-                        val bytes = if (f != null) withContext(Dispatchers.IO) { f.readBytes() }
-                        else runCatching {
-                            ChatRepository.loadFile(msgId, scopeKind, fileName) { fr ->
-                                status = "Загрузка… " + (fr * 100).toInt() + " %"
-                            }
-                        }.getOrNull()
-                        status = when {
-                            bytes == null -> loadFailure()
-                            MediaSaver.saveVideo(context, fileName, bytes) -> "Сохранено в галерею"
-                            else -> "Не удалось сохранить"
+                    if (f != null) {
+                        // Файл уже на диске — сохранять нечего качать.
+                        scope.launch {
+                            status = "Сохранение…"
+                            val bytes = withContext(Dispatchers.IO) { f.readBytes() }
+                            status = if (MediaSaver.saveVideo(context, fileName, bytes))
+                                "Сохранено в галерею" else "Не удалось сохранить"
                         }
-                        if (file == null) file = MediaCache.fileFor(msgId, "file", fileName)
+                        return@IconButton
+                    }
+                    if (busy) return@IconButton
+                    if (taskError != null) {
+                        com.pismo.messenger.data.Transfers.cancel(taskId)
+                        taskId = -1L
+                    }
+                    status = ""
+                    // Качаем общей очередью: сохранение на полсотни мегабайт
+                    // переживает и уход из чата, и свёрнутое приложение.
+                    taskId = com.pismo.messenger.data.Transfers.download(
+                        where = where,
+                        msgId = msgId,
+                        scopeKind = scopeKind,
+                        fileName = fileName,
+                    ) { bytes ->
+                        file = MediaCache.fileFor(msgId, "file", fileName)
+                        status = if (MediaSaver.saveVideo(context, fileName, bytes))
+                            "Сохранено в галерею" else "Не удалось сохранить"
                     }
                 },
                 modifier = Modifier.size(28.dp),
