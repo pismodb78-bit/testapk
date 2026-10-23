@@ -1068,14 +1068,25 @@ fun FullscreenVideoHost(
                 )
             }
 
-            IconButton(
-                onClick = { close() },
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .statusBarsPadding()
-                    .padding(12.dp),
+            // Крестик уходит вместе со всем остальным.
+            //
+            // Выйти всё равно есть чем: касание по кадру возвращает
+            // управление, а системная кнопка «назад» закрывает просмотр и
+            // без него.
+            AnimatedVisibility(
+                visible = chrome,
+                modifier = Modifier.align(Alignment.TopEnd),
+                enter = fadeIn(),
+                exit = fadeOut(),
             ) {
-                Icon(Icons.Default.Close, "Закрыть", tint = Color.White)
+                IconButton(
+                    onClick = { close() },
+                    modifier = Modifier
+                        .statusBarsPadding()
+                        .padding(12.dp),
+                ) {
+                    Icon(Icons.Default.Close, "Закрыть", tint = Color.White)
+                }
             }
         }
     }
