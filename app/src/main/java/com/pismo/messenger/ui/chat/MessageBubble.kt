@@ -351,7 +351,7 @@ fun MessageBubble(
                             Box(
                                 Modifier
                                     .width(260.dp)
-                                    .aspectRatio(ImageShapes.ratio(msg.id))
+                                    .aspectRatio(ImageShapes.ratio(msg.id, msg.fileName))
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(Color(0x22000000))
                             )

@@ -1,6 +1,7 @@
 package com.pismo.messenger.ui.chat
 
 import android.graphics.BitmapFactory
+import com.pismo.messenger.data.MediaCache
 
 /**
  * Пропорции картинок в переписке.
@@ -34,7 +35,31 @@ internal object ImageShapes {
             size > MAX_REMEMBERED
     }
 
-    fun ratio(msgId: Int): Float = synchronized(shapes) { shapes[msgId] ?: DEFAULT }
+    /**
+     * Пропорции для заглушки.
+     *
+     * Если картинку в этот раз ещё не показывали, но она уже лежит в кеше —
+     * смотрим прямо в файл. Это чтение заголовка, несколько килобайт, без
+     * раскодирования пикселей: дешевле, чем промах по высоте, из-за
+     * которого лента подпрыгивает на прокрутке вверх. Ответ запоминаем,
+     * так что в файл заглядываем один раз на картинку.
+     */
+    fun ratio(msgId: Int, fileName: String? = null): Float {
+        synchronized(shapes) { shapes[msgId] }?.let { return it }
+
+        val file = runCatching { MediaCache.fileFor(msgId, "img", fileName) }.getOrNull()
+            ?: return DEFAULT
+        val r = runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) null
+            else bounds.outWidth.toFloat() / bounds.outHeight
+        }.getOrNull() ?: return DEFAULT
+
+        val clamped = r.coerceIn(MIN, MAX)
+        synchronized(shapes) { shapes[msgId] = clamped }
+        return clamped
+    }
 
     fun remember(msgId: Int, bytes: ByteArray) {
         val r = runCatching {

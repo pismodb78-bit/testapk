@@ -244,8 +244,13 @@ fun ChannelChatScreen(
         // Прокручиваем вниз, только если пользователь и так был у конца
         // ленты: иначе новое сообщение выдёргивало бы его из середины
         // истории, которую он читает.
-        val atBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-            ?.index?.let { it >= listState.layoutInfo.totalItemsCount - 3 } ?: true
+        // «У конца» — когда конец ленты видно, а не «осталось три
+        // сообщения»: см. пояснение в личной переписке.
+        val info = listState.layoutInfo
+        val lastSeen = info.visibleItemsInfo.lastOrNull()
+        val atBottom = lastSeen == null ||
+            (lastSeen.index >= info.totalItemsCount - 1 &&
+                lastSeen.offset + lastSeen.size <= info.viewportEndOffset + 8)
         // Пока ленту листает пользователь — не трогаем: scrollToItem
         // мгновенно обрывает инерцию, а опрос приходит раз в две с половиной
         // секунды и легко попадает в разгон пальца.

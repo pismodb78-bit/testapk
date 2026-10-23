@@ -392,8 +392,16 @@ fun ChatScreen(
         loading = false
         // Прокручиваем вниз только если пользователь и так был у конца ленты:
         // иначе новое сообщение выдёргивало бы его из середины истории.
-        val atBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-            ?.index?.let { it >= listState.layoutInfo.totalItemsCount - 3 } ?: true
+        // «У конца» — это когда конец ленты ВИДНО, а не «осталось три
+        // сообщения». С прежней меркой человек, отлиставший на пару
+        // сообщений вверх, считался стоящим внизу, и очередной опрос уносил
+        // его к последнему — особенно заметно, когда эти сообщения с
+        // фотографиями в пол-экрана.
+        val info = listState.layoutInfo
+        val lastSeen = info.visibleItemsInfo.lastOrNull()
+        val atBottom = lastSeen == null ||
+            (lastSeen.index >= info.totalItemsCount - 1 &&
+                lastSeen.offset + lastSeen.size <= info.viewportEndOffset + 8)
         // И НЕ ТРОГАЕМ ленту, пока её листает пользователь. scrollToItem
         // мгновенно обрывает инерцию, а опрос приходит раз в две с половиной
         // секунды — попасть им в разгон пальца проще простого. Отсюда и
