@@ -249,7 +249,12 @@ fun ChannelChatScreen(
         // Пока ленту листает пользователь — не трогаем: scrollToItem
         // мгновенно обрывает инерцию, а опрос приходит раз в две с половиной
         // секунды и легко попадает в разгон пальца.
-        if (scrollToEnd && messages.isNotEmpty() && atBottom && !listState.isScrollInProgress) {
+        // И пока смотрят видео: доматывание вниз выдёргивает кадр из-под
+        // пальца ровно тогда, когда ролик перематывают.
+        if (scrollToEnd && messages.isNotEmpty() && atBottom &&
+            !listState.isScrollInProgress &&
+            !com.pismo.messenger.ui.chat.VideoPlayback.active
+        ) {
             listState.scrollToItem(messages.lastIndex)
         }
     }

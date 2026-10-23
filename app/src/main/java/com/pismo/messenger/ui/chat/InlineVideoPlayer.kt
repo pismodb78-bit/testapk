@@ -304,7 +304,8 @@ fun InlineVideoBubble(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(4.dp)
-                        .size(28.dp),
+                        .size(28.dp)
+                        .focusProperties { canFocus = false },
                 ) {
                     Icon(
                         Icons.Default.Download,
@@ -389,7 +390,9 @@ internal fun VideoSurface(
     var poke by remember(file.absolutePath) { mutableIntStateOf(0) }
 
     DisposableEffect(file.absolutePath) {
+        VideoPlayback.begin()
         onDispose {
+            VideoPlayback.end()
             runCatching { view.stopPlayback() }
             player = null
         }
@@ -540,6 +543,11 @@ internal fun VideoSurface(
         Box(
             Modifier
                 .fillMaxSize()
+                // Фокус здесь не нужен и ВРЕДЕН: сфокусированный элемент
+                // Compose подтягивает в видимую область, и лента чата
+                // прыгает под пальцем. Этим же страдали VideoView и его
+                // контейнер — см. blockHolderFocus.
+                .focusProperties { canFocus = false }
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -558,6 +566,7 @@ internal fun VideoSurface(
             exit = fadeOut(),
         ) {
             Row(
+                modifier = Modifier.focusProperties { canFocus = false },
                 horizontalArrangement = Arrangement.spacedBy(22.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -644,7 +653,13 @@ internal fun VideoSurface(
                     thumbColor = Color.White,
                     activeTrackColor = PismoColors.Blurple,
                 ),
-                modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 4.dp)
+                    // Ползунок фокусируется сам, а сфокусированное Compose
+                    // подтягивает в видимую область — отсюда и «ленту
+                    // телепортирует при перемотке».
+                    .focusProperties { canFocus = false },
             )
 
             Text(formatClock(durationMs), color = Color.White, fontSize = 10.sp)
@@ -707,6 +722,9 @@ private fun RoundControl(
             .size(if (big) 58.dp else 44.dp)
             .clip(RoundedCornerShape(50))
             .background(Color(0x66000000))
+            // Без фокуса: сфокусированную кнопку лента подтягивает к себе, и
+            // переписка прыгает прямо во время нажатия.
+            .focusProperties { canFocus = false }
             .clickable { onClick() },
         contentAlignment = Alignment.Center,
     ) {
@@ -760,6 +778,7 @@ fun InlineAudioBubble(
             .widthIn(max = 280.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(Color(0x22000000))
+            .focusProperties { canFocus = false }
             .clickable {
                 if (loading) return@clickable
                 val f = file
@@ -820,7 +839,11 @@ fun InlineAudioBubble(
                         thumbColor = PismoColors.onBubble(isMine),
                         activeTrackColor = PismoColors.onBubble(isMine),
                     ),
-                    modifier = Modifier.height(18.dp),
+                    modifier = Modifier
+                        .height(18.dp)
+                        // Та же беда, что у видео: сфокусированный ползунок
+                        // лента подтягивает к себе, и переписка прыгает.
+                        .focusProperties { canFocus = false },
                 )
             }
             Text(
@@ -903,6 +926,25 @@ object VideoPositions {
     }
 
     fun clear() = synchronized(positions) { positions.clear() }
+}
+
+/**
+ * Идёт ли сейчас просмотр видео.
+ *
+ * Лента чата перечитывается опросом раз в пару секунд и, если человек
+ * стоял у её конца, доматывает себя вниз. Пока он смотрит ролик, это
+ * выглядит как рывок: кадр уезжает из-под пальца ровно тогда, когда его
+ * перематывают. Счётчик, а не флаг: плееров на экране может быть два —
+ * в пузыре и в полном экране.
+ */
+object VideoPlayback {
+    private val running = java.util.concurrent.atomic.AtomicInteger(0)
+
+    val active: Boolean get() = running.get() > 0
+
+    internal fun begin() { running.incrementAndGet() }
+
+    internal fun end() { if (running.get() > 0) running.decrementAndGet() }
 }
 
 /**

@@ -399,7 +399,14 @@ fun ChatScreen(
         // секунды — попасть им в разгон пальца проще простого. Отсюда и
         // «скролл может застопиться» на пути от старых сообщений к новым.
         val userScrolling = listState.isScrollInProgress
-        if (messages.isNotEmpty() && !userScrolling && (force || (scrollToEnd && atBottom))) {
+        // И НЕ ТРОГАЕМ, пока смотрят видео. Опрос приходит раз в пару
+        // секунд, и доматывание вниз выдёргивает кадр из-под пальца ровно
+        // в тот момент, когда ролик перематывают: со стороны это выглядит
+        // как «ленту телепортирует».
+        val watching = com.pismo.messenger.ui.chat.VideoPlayback.active
+        if (messages.isNotEmpty() && !userScrolling && !watching &&
+            (force || (scrollToEnd && atBottom))
+        ) {
             listState.scrollToItem(messages.lastIndex)
         }
     }
