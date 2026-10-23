@@ -86,67 +86,80 @@ private fun newShotFile(context: Context): File? = runCatching {
     File(dir, "IMG_" + System.currentTimeMillis() + ".jpg")
 }.getOrNull()
 
-/** Длинная сторона снимка после уменьшения. */
-private const val MAX_SIDE = 2048
-
 /**
- * Готовит снимок к отправке: поворачивает и уменьшает.
+ * Готовит снимок к отправке.
  *
- * ПОВОРОТ. Камера почти всегда пишет кадр как есть, а «верх» отмечает
- * строчкой EXIF. Эту строчку читают галереи — но не BitmapFactory и не
- * ПК-клиент, поэтому снятое вертикально приходило к собеседнику лежащим на
- * боку. Поворачиваем сами и отдаём уже правильный кадр.
+ * КАДР УХОДИТ КАК ЕСТЬ. Ни уменьшения, ни пережатия: что сняла камера, то
+ * и получит собеседник — полное разрешение и родной файл камеры, байт в
+ * байт. Поэтому в обычном случае здесь вообще ничего не происходит, только
+ * чтение файла.
  *
- * РАЗМЕР. Двенадцать мегапикселей — это шесть-восемь мегабайт, которые по
- * мобильной связи идут минуту, а в переписке всё равно показываются
- * размером с ладонь. Уменьшаем до 2048 по длинной стороне: на экране
- * разницы не видно, а отправка становится мгновенной. Снимок целиком, без
- * потерь, по-прежнему можно отправить через «прикрепить» — там файл идёт
- * как есть.
+ * ЕДИНСТВЕННОЕ ИСКЛЮЧЕНИЕ — ПОВОРОТ. Камера часто пишет кадр так, как его
+ * видит матрица, а «верх» отмечает строчкой EXIF. Эту строчку читают
+ * галереи, но не Android-декодер в переписке и не ПК-клиент: снятое
+ * вертикально пришло бы собеседнику лежащим на боку. Повернуть кадр,
+ * не пересобрав его, нельзя — поэтому только в этом случае он
+ * раскодируется и сжимается заново, с качеством 100 и БЕЗ изменения
+ * разрешения. Если кадр и так стоит правильно (а это обычное дело), файл
+ * остаётся нетронутым.
+ *
+ * Не хватило памяти на поворот — отдаём исходный файл: лучше кадр на боку,
+ * чем закрывшееся приложение.
  */
 private fun prepare(file: File): Pair<ByteArray, String>? = runCatching {
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeFile(file.absolutePath, bounds)
-    val longest = maxOf(bounds.outWidth, bounds.outHeight)
-    if (longest <= 0) return@runCatching null
+    val raw = file.readBytes()
+    if (raw.isEmpty()) return@runCatching null
 
-    // Грубое уменьшение при чтении: полный кадр в память не поднимаем вовсе.
-    var sample = 1
-    while (longest / sample > MAX_SIDE * 2) sample *= 2
+    val degrees = exifDegrees(file)
+    if (degrees == 0f) {
+        // Кадр уходит байт в байт. toPortableImage здесь — страховка, а не
+        // обработка: JPEG она возвращает нетронутым и вмешивается только
+        // если камера отдала формат, который ПК-клиент не покажет (HEIC с
+        // «высокой эффективностью»). Тогда выбор не между качеством и
+        // размером, а между картинкой и ничем.
+        return@runCatching com.pismo.messenger.core.toPortableImage(raw, file.name)
+    }
 
-    var bmp: Bitmap = BitmapFactory.decodeFile(
-        file.absolutePath, BitmapFactory.Options().apply { inSampleSize = sample }
-    ) ?: return@runCatching null
+    (rotated(raw, degrees) ?: raw) to file.name
+}.getOrNull()
 
-    val degrees = when (
-        runCatching {
-            @Suppress("DEPRECATION")
-            android.media.ExifInterface(file.absolutePath).getAttributeInt(
-                android.media.ExifInterface.TAG_ORIENTATION,
-                android.media.ExifInterface.ORIENTATION_NORMAL,
-            )
-        }.getOrDefault(android.media.ExifInterface.ORIENTATION_NORMAL)
+/** Насколько повёрнут кадр по метке камеры. 0 — стоит правильно. */
+private fun exifDegrees(file: File): Float = runCatching {
+    @Suppress("DEPRECATION")
+    val exif = android.media.ExifInterface(file.absolutePath)
+    when (
+        exif.getAttributeInt(
+            android.media.ExifInterface.TAG_ORIENTATION,
+            android.media.ExifInterface.ORIENTATION_NORMAL,
+        )
     ) {
         android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90f
         android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180f
         android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270f
         else -> 0f
     }
+}.getOrDefault(0f)
 
-    val side = maxOf(bmp.width, bmp.height)
-    val scale = if (side > MAX_SIDE) MAX_SIDE.toFloat() / side else 1f
-    if (degrees != 0f || scale < 1f) {
-        val m = Matrix().apply {
-            if (scale < 1f) postScale(scale, scale)
-            if (degrees != 0f) postRotate(degrees)
-        }
-        val out = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
-        if (out !== bmp) { runCatching { bmp.recycle() }; bmp = out }
+/**
+ * Тот же кадр, повёрнутый как надо. Разрешение прежнее, качество 100.
+ * null — не вышло (чаще всего не хватило памяти на большой снимок).
+ */
+private fun rotated(raw: ByteArray, degrees: Float): ByteArray? = try {
+    val bmp: Bitmap? = BitmapFactory.decodeByteArray(raw, 0, raw.size)
+    if (bmp == null) null else {
+        val turned = Bitmap.createBitmap(
+            bmp, 0, 0, bmp.width, bmp.height,
+            Matrix().apply { postRotate(degrees) },
+            true,
+        )
+        if (turned !== bmp) runCatching { bmp.recycle() }
+        val stream = java.io.ByteArrayOutputStream(raw.size)
+        turned.compress(Bitmap.CompressFormat.JPEG, 100, stream)
+        runCatching { turned.recycle() }
+        stream.toByteArray().takeIf { it.isNotEmpty() }
     }
-
-    val stream = java.io.ByteArrayOutputStream(512 * 1024)
-    bmp.compress(Bitmap.CompressFormat.JPEG, 90, stream)
-    runCatching { bmp.recycle() }
-    val bytes = stream.toByteArray()
-    if (bytes.isEmpty()) null else bytes to file.name
-}.getOrNull()
+} catch (e: OutOfMemoryError) {
+    null
+} catch (e: Throwable) {
+    null
+}
