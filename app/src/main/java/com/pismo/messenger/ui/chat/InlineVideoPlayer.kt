@@ -227,7 +227,7 @@ fun InlineVideoBubble(
     // и меньшей ширины: во всю ширину переписки он занял бы пол-экрана, как
     // это и было, пока любое видео показывалось в рамке 4:3.
     val shape = VideoShapes.ratio(msgId)
-    val maxW = if (shape < 1f) 220.dp else 280.dp
+    val maxW = if (shape < 1f) 244.dp else 304.dp
     Column(Modifier.widthIn(max = maxW)) {
         Box(
             Modifier
@@ -793,7 +793,7 @@ fun InlineAudioBubble(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .widthIn(max = 280.dp)
+            .widthIn(max = 304.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(Color(0x22000000))
             .focusProperties { canFocus = false }

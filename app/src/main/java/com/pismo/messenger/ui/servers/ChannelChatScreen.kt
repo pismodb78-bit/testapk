@@ -843,7 +843,9 @@ fun ChannelChatScreen(
                         Box(Modifier.padding(end = 8.dp)) {
                             Box(
                                 Modifier
-                                    .size(56.dp)
+                                    // Крупнее: на 56 точках не видно, что
+                                    // именно приложено.
+                                    .size(72.dp)
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(Color(0x22000000)),
                                 contentAlignment = Alignment.Center,
@@ -859,7 +861,7 @@ fun ChannelChatScreen(
                                     com.pismo.messenger.ui.components.FileBadge(
                                         com.pismo.messenger.core.fileBadge(p.fileName),
                                         com.pismo.messenger.core.fileColor(p.fileName),
-                                        34.dp,
+                                        44.dp,
                                     )
                                 }
                             }

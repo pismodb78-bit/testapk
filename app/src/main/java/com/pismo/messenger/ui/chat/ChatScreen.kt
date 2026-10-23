@@ -1392,7 +1392,9 @@ fun ChatScreen(
                         Box(Modifier.padding(end = 8.dp)) {
                             Box(
                                 Modifier
-                                    .size(56.dp)
+                                    // Крупнее: на 56 точках не видно, что
+                                    // именно приложено.
+                                    .size(72.dp)
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(Color(0x22000000)),
                                 contentAlignment = Alignment.Center,
@@ -1406,7 +1408,7 @@ fun ChatScreen(
                                     )
                                 } else {
                                     FileBadge(
-                                        fileBadge(att.fileName), fileColor(att.fileName), 34.dp,
+                                        fileBadge(att.fileName), fileColor(att.fileName), 44.dp,
                                     )
                                 }
                             }
