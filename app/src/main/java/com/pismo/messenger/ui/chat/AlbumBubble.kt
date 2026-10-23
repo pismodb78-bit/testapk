@@ -129,7 +129,7 @@ fun AlbumBubble(
             }
 
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 5.dp, bottom = 2.dp),
+                Modifier.fillMaxWidth().padding(start = 5.dp, end = 5.dp, bottom = 2.dp),
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -174,7 +174,7 @@ private fun AlbumGrid(
     onSelect: () -> Unit,
 ) {
     val cols = if (msgs.size <= 4) 2 else 3
-    val side = (262.dp - (cols - 1) * 2.dp) / cols
+    val side = (262.dp - 2.dp * (cols - 1)) / cols
     val rows = msgs.chunked(cols)
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         rows.forEach { row ->
