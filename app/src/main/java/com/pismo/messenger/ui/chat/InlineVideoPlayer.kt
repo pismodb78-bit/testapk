@@ -178,6 +178,38 @@ fun InlineVideoBubble(
         }
     }
 
+    fun saveToGallery() {
+        val f = file
+        if (f != null) {
+            // Файл уже на диске — качать нечего.
+            scope.launch {
+                status = "Сохранение…"
+                val bytes = withContext(Dispatchers.IO) { f.readBytes() }
+                status = if (MediaSaver.saveVideo(context, fileName, bytes))
+                    "Сохранено в галерею" else "Не удалось сохранить"
+            }
+            return
+        }
+        if (busy) return
+        if (taskError != null) {
+            com.pismo.messenger.data.Transfers.cancel(taskId)
+            taskId = -1L
+        }
+        status = ""
+        // Качаем общей очередью: сохранение на полсотни мегабайт переживает
+        // и уход из чата, и свёрнутое приложение.
+        taskId = com.pismo.messenger.data.Transfers.download(
+            where = where,
+            msgId = msgId,
+            scopeKind = scopeKind,
+            fileName = fileName,
+        ) { bytes ->
+            file = MediaCache.fileFor(msgId, "file", fileName)
+            status = if (MediaSaver.saveVideo(context, fileName, bytes))
+                "Сохранено в галерею" else "Не удалось сохранить"
+        }
+    }
+
     Column(Modifier.widthIn(max = 280.dp)) {
         Box(
             Modifier
@@ -252,73 +284,44 @@ fun InlineVideoBubble(
                         )
                     }
                 }
+
+                // «Сохранить» — углом на самой обложке. У запущенного плеера
+                // такая кнопка есть в его собственной панели, и вторая, под
+                // видео, была лишней.
+                IconButton(
+                    onClick = { saveToGallery() },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp)
+                        .size(28.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Download,
+                        contentDescription = "Сохранить в галерею",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
         }
 
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .background(Color(0x22000000))
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    fileName,
-                    // Подпись лежит уже НЕ на видео, а на самом пузыре, и в
-                    // светлой теме белым по светлому её не видно.
-                    color = PismoColors.onBubble(isMine),
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                )
-                Text(
-                    shown.ifBlank { sizeLabel(file) ?: "Видео" },
-                    color = if (taskError != null) PismoColors.Red else PismoColors.TextMuted,
-                    fontSize = 10.sp,
-                    maxLines = 1,
-                )
-            }
-            IconButton(
-                onClick = {
-                    val f = file
-                    if (f != null) {
-                        // Файл уже на диске — сохранять нечего качать.
-                        scope.launch {
-                            status = "Сохранение…"
-                            val bytes = withContext(Dispatchers.IO) { f.readBytes() }
-                            status = if (MediaSaver.saveVideo(context, fileName, bytes))
-                                "Сохранено в галерею" else "Не удалось сохранить"
-                        }
-                        return@IconButton
-                    }
-                    if (busy) return@IconButton
-                    if (taskError != null) {
-                        com.pismo.messenger.data.Transfers.cancel(taskId)
-                        taskId = -1L
-                    }
-                    status = ""
-                    // Качаем общей очередью: сохранение на полсотни мегабайт
-                    // переживает и уход из чата, и свёрнутое приложение.
-                    taskId = com.pismo.messenger.data.Transfers.download(
-                        where = where,
-                        msgId = msgId,
-                        scopeKind = scopeKind,
-                        fileName = fileName,
-                    ) { bytes ->
-                        file = MediaCache.fileFor(msgId, "file", fileName)
-                        status = if (MediaSaver.saveVideo(context, fileName, bytes))
-                            "Сохранено в галерею" else "Не удалось сохранить"
-                    }
-                },
-                modifier = Modifier.size(28.dp),
-            ) {
-                Icon(
-                    Icons.Default.Download,
-                    contentDescription = "Сохранить в галерею",
-                    tint = PismoColors.TextSecondary,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
+        // ПОД ВИДЕО — НИЧЕГО ЛИШНЕГО.
+        //
+        // Здесь была постоянная полоска с именем файла, словом «Видео» и
+        // второй кнопкой сохранения — та же, что уже есть в панели плеера.
+        // Для человека это шум: имя файла у видео ничего не значит, а
+        // полоска отодвигала от кадра то единственное, что там и правда
+        // нужно, — подпись к видео (и имя отправителя в группе, оно стоит
+        // над пузырём). Поэтому строка остаётся только тогда, когда ей есть
+        // что сказать: доля загрузки, причина срыва, «Сохранено в галерею».
+        if (shown.isNotBlank()) {
+            Text(
+                shown,
+                color = if (taskError != null) PismoColors.Red else PismoColors.TextMuted,
+                fontSize = 11.sp,
+                maxLines = 2,
+                modifier = Modifier.padding(top = 4.dp),
+            )
         }
     }
 }
