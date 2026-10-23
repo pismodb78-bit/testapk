@@ -31,9 +31,19 @@ object Notifications {
     /** Прежний канал фоновой работы — удаляем, чтобы не висел в настройках. */
     private const val CHANNEL_SERVICE_OLD = "pismo_service"
 
+    /**
+     * Передача файлов. Отдельный канал, а не «фоновая работа»: у того
+     * важность MIN и значка в строке состояния нет вовсе — ради того он и
+     * заведён. Здесь всё наоборот: процент отправки для того и показывают,
+     * чтобы его было видно, не раскрывая шторку.
+     */
+    const val CHANNEL_TRANSFERS = "pismo_transfers"
+
     const val ID_SERVICE = 1001
     const val ID_CALL = 1002
     const val ID_SCREEN = 1003
+    const val ID_TRANSFER = 1004
+    const val ID_TRANSFER_DONE = 1005
     private const val ID_MESSAGE_BASE = 2000
 
     fun createChannels(context: Context) {
@@ -62,6 +72,15 @@ object Notifications {
         // ОБЯЗАНА показывать уведомление — это её способ сообщить, что
         // приложение работает за спиной. Выключить целиком можно только
         // вместе с самой фоновой проверкой, переключателем в настройках.
+        nm.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_TRANSFERS, "Передача файлов", NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Ход отправки и загрузки вложений"
+                setShowBadge(false)
+                enableVibration(false)
+            }
+        )
         runCatching { nm.deleteNotificationChannel(CHANNEL_SERVICE_OLD) }
         nm.createNotificationChannel(
             NotificationChannel(

@@ -65,6 +65,9 @@ object FileService {
     /** Сколько раз пробуем дослать файл, прежде чем сдаться. */
     private const val MAX_ATTEMPTS = 6
 
+    /** Сколько ждём возвращения сети, прежде чем считать попытку неудачной. */
+    private const val NET_WAIT_MS = 90_000L
+
     /**
      * Сколько частей держим в полёте одновременно.
      *
@@ -300,10 +303,32 @@ object FileService {
                 // Обрыв на полпути: сервер засчитал принятое, и повтор везёт
                 // только остаток. Пока что-то доезжает, попытки не тратим.
                 sent.set(maxOf(before, sent.get()))
+                // И сеть ждём отдельно от попыток. Переход с Wi-Fi на
+                // мобильную, лифт, метро — это секунды и десятки секунд без
+                // сети; раньше они съедали все попытки разом, и отправка
+                // «отваливалась» именно тогда, когда телефон лежал в кармане.
+                if (awaitNetwork(NET_WAIT_MS)) continue
                 if (++attempt > MAX_ATTEMPTS) giveUp(sent.get().toInt())
                 delay(1000L * attempt)
             }
         }
+    }
+
+    /**
+     * Ждёт возвращения сети — но только если её и правда нет.
+     *
+     * true — ждали и дождались: попытка не потрачена, повторяем сразу.
+     * false — сеть на месте (значит дело не в ней) либо не дождались.
+     */
+    private suspend fun awaitNetwork(limitMs: Long): Boolean {
+        if (NetInfo.hasNetwork()) return false
+        val until = System.currentTimeMillis() + limitMs
+        while (System.currentTimeMillis() < until) {
+            currentCoroutineContext().ensureActive()
+            delay(1000)
+            if (NetInfo.hasNetwork()) return true
+        }
+        return false
     }
 
     /**

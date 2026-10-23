@@ -196,6 +196,23 @@ object Transfers {
         if (!download && total <= 0L) return        // следить не за чем
         val id = synchronized(this) { nextId++ }
         _active.update { it + Task(id, where, fileName, total, download = download) }
+
+        // СЛУЖБА НА ВРЕМЯ ПЕРЕДАЧИ.
+        //
+        // Без неё свёрнутое приложение через минуту-другую замораживается
+        // как ненужное: соединение рвётся, и отправка «отваливается» на
+        // середине. Для Android «работа, которую нельзя прерывать» — это
+        // foreground-служба, другого способа сказать ему об этом нет. Она
+        // же показывает процент в шторке и сама уходит, когда передавать
+        // станет нечего.
+        //
+        // Поднимаем отсюда, потому что передача начинается с открытого
+        // экрана: из фона такую службу просто так не поднять.
+        runCatching {
+            com.pismo.messenger.service.TransferService.start(
+                com.pismo.messenger.PismoApp.appContext
+            )
+        }
         synchronized(this) {
             retries[id] = { launch(where, fileName, total, download, gate, table, body) }
         }
@@ -248,6 +265,14 @@ object Transfers {
         ) return "Файл слишком большой для сервера."
         if (text.isBlank()) return if (download) "Не удалось скачать." else "Не удалось отправить."
         return text
+    }
+
+    /**
+     * Отменить всё, что идёт прямо сейчас. Кнопка на уведомлении: отменять
+     * приходится там же, где об этом вспомнил, не открывая приложение.
+     */
+    fun cancelAll() {
+        _active.value.filter { it.error == null }.forEach { cancel(it.id) }
     }
 
     /** Можно ли повторить сорвавшуюся передачу. */

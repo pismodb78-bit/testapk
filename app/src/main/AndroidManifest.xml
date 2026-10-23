@@ -97,6 +97,24 @@
                 android:value="Проверка новых сообщений и звонков: приложение работает напрямую с базой, push-сервиса у него нет" />
         </service>
 
+        <!-- Передача файлов. dataSync — ровно наш случай: файл уходит на
+             сервер и приходит обратно. Суточный предел этого типа на
+             Android 15 (шесть часов) нам не помеха: передача живёт минуты,
+             а не часы. -->
+        <service
+            android:name=".service.TransferService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Кнопка «Отменить» на уведомлении о передаче. -->
+        <receiver
+            android:name=".service.TransferActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.pismo.messenger.TRANSFER_CANCEL" />
+            </intent-filter>
+        </receiver>
+
         <!-- mediaProjection тут НЕ объявлен намеренно: демонстрацию экрана
              держит свой foreground-сервис LiveKit (ScreenCaptureService),
              он приходит из манифеста SDK при слиянии. Если объявить тип и

@@ -1176,9 +1176,15 @@ object ChatRepository {
                 throw e
             } catch (e: Throwable) {
                 attempt++
-                if (attempt >= 4 || !Db.looksLikeConnectionLoss(e)) throw e
+                if (attempt >= 6 || !Db.looksLikeConnectionLoss(e)) throw e
                 compress = false
-                kotlinx.coroutines.delay(1500L * attempt)
+                // Ждём не «сколько-нибудь», а именно возвращения связи.
+                // Фиксированной паузы хватало ровно на мгновенную помеху:
+                // смена сети занимает секунды и десятки секунд, и четыре
+                // попытки по полторы секунды сгорали впустую, пока телефон
+                // лежал в кармане.
+                Db.awaitOnline(90_000)
+                kotlinx.coroutines.delay(1000L * attempt)
             }
         }
     }

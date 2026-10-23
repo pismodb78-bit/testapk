@@ -40,6 +40,25 @@ object NetInfo {
     /** Мобильная ли сеть сейчас. До инициализации считаем, что нет. */
     fun isCellular(): Boolean = cellular
 
+    /**
+     * Есть ли сеть вообще.
+     *
+     * Нужно, чтобы отличить «связь пропала» от «сервер отказал»: первое —
+     * повод подождать (телефон переходит с Wi-Fi на мобильную, едет в
+     * лифте), второе — повод прекратить. Раньше и то и другое считалось
+     * неудачной попыткой, и несколько секунд без сети съедали их все.
+     *
+     * До инициализации отвечаем «есть»: лучше попробовать и узнать, чем
+     * ждать того, о чём нам нечем справиться.
+     */
+    fun hasNetwork(): Boolean {
+        val manager = cm ?: return true
+        return runCatching {
+            val caps = manager.getNetworkCapabilities(manager.activeNetwork)
+            caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }.getOrDefault(true)
+    }
+
     fun init(context: Context) {
         if (cm != null) return
         val manager = context.applicationContext

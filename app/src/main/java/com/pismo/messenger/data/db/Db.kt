@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -313,6 +314,24 @@ object Db {
                 if (ok) markOnline()
             }
         }
+    }
+
+    /**
+     * Ждёт, пока связь с базой вернётся.
+     *
+     * Нужно затяжной передаче: пока файл идёт, сеть может смениться с Wi-Fi
+     * на мобильную или пропасть на въезде в лифт. Отсчитывать в такие
+     * секунды неудачные попытки бессмысленно — их съест первая же пауза, и
+     * отправка сорвётся ровно тогда, когда телефон лежит в кармане. Связь
+     * восстанавливает цикл проб выше, здесь мы только дожидаемся его.
+     *
+     * false — не дождались за отведённое время.
+     */
+    suspend fun awaitOnline(timeoutMs: Long): Boolean {
+        if (_online.value) return true
+        return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+            online.first { it }
+        } != null
     }
 
     /** Период проб при обрыве — тот же, что у ConnectionGuard на ПК. */
