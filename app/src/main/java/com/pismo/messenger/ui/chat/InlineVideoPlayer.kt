@@ -1066,8 +1066,9 @@ fun FullscreenVideoHost(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        // Над полосой времени, которая сама приподнята.
-                        .padding(start = 16.dp, end = 16.dp, bottom = 136.dp),
+                        // Над полосой времени, и с запасом: вплотную они
+                        // читаются как одна куча, а полоса сама приподнята.
+                        .padding(start = 16.dp, end = 16.dp, bottom = 152.dp),
                 )
             }
 
