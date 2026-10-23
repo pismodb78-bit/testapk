@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PushPin
@@ -900,15 +901,24 @@ private fun VoiceRow(msgId: Int, audio: ByteArray?, isMine: Boolean) {
             .background(Color(0x22000000))
             .padding(horizontal = 10.dp, vertical = 8.dp),
     ) {
-        Icon(
-            if (playing) Icons.Default.Stop else Icons.Default.PlayArrow,
-            contentDescription = if (playing) "Остановить" else "Воспроизвести",
-            tint = PismoColors.onBubble(isMine),
-            modifier = Modifier
-                .size(22.dp)
+        // Круглая кнопка, как в Telegram: у голосового она главная, и
+        // голая иконка размером с букву терялась среди текста.
+        Box(
+            Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(if (isMine) Color(0x33FFFFFF) else PismoColors.Blurple)
                 .clickable { audio?.let { WavPlayer.toggle(msgId, it) } },
-        )
-        Spacer(Modifier.width(8.dp))
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                if (playing) Icons.Default.Stop else Icons.Default.PlayArrow,
+                contentDescription = if (playing) "Остановить" else "Воспроизвести",
+                tint = Color.White,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        Spacer(Modifier.width(10.dp))
 
         Column(Modifier.weight(1f, fill = false)) {
             if (audio == null) {

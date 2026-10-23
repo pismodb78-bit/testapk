@@ -824,21 +824,30 @@ fun InlineAudioBubble(
             }
             .padding(horizontal = 10.dp, vertical = 8.dp),
     ) {
-        if (loading) {
-            CircularProgressIndicator(
-                color = PismoColors.onBubble(isMine),
-                strokeWidth = 2.dp,
-                modifier = Modifier.size(20.dp),
-            )
-        } else {
-            Icon(
-                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = if (isPlaying) "Пауза" else "Воспроизвести",
-                tint = PismoColors.onBubble(isMine),
-                modifier = Modifier.size(22.dp),
-            )
+        // Круглая «обложка» с кнопкой — формат музыки как в Telegram.
+        Box(
+            Modifier
+                .size(44.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .background(if (isMine) Color(0x33FFFFFF) else PismoColors.Blurple),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (loading) {
+                CircularProgressIndicator(
+                    color = Color.White,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(20.dp),
+                )
+            } else {
+                Icon(
+                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (isPlaying) "Пауза" else "Воспроизвести",
+                    tint = Color.White,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
         }
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 fileName,
