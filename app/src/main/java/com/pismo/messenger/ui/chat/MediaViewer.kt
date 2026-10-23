@@ -3,7 +3,10 @@ package com.pismo.messenger.ui.chat
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -239,10 +242,33 @@ private fun PhotoPage(item: MediaItem, scopeKind: Scope, onToggleChrome: () -> U
     Box(
         Modifier
             .fillMaxSize()
+            // ЖЕСТЫ РАЗВЕДЕНЫ С ЛИСТАНИЕМ.
+            //
+            // Обычный detectTransformGestures забирает себе ЛЮБОЕ движение —
+            // и свайп в сторону не доходил до пролистывания, то есть соседний
+            // снимок пальцем было не достать. Поэтому разбираем события сами:
+            // два пальца — это зум и перенос, один палец при увеличенном
+            // снимке — перенос, а одиночный свайп на обычном масштабе не
+            // трогаем вовсе: его подхватывает лента просмотра.
             .pointerInput(item.msgId) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    scale = (scale * zoom).coerceIn(1f, 6f)
-                    if (scale > 1f) { dx += pan.x; dy += pan.y } else { dx = 0f; dy = 0f }
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val event = awaitPointerEvent()
+                        val many = event.changes.count { it.pressed } >= 2
+                        if (many) {
+                            val zoom = event.calculateZoom()
+                            val pan = event.calculatePan()
+                            scale = (scale * zoom).coerceIn(1f, 6f)
+                            if (scale > 1f) { dx += pan.x; dy += pan.y } else { dx = 0f; dy = 0f }
+                            event.changes.forEach { it.consume() }
+                        } else if (scale > 1f) {
+                            val pan = event.calculatePan()
+                            dx += pan.x
+                            dy += pan.y
+                            event.changes.forEach { it.consume() }
+                        }
+                    } while (event.changes.any { it.pressed })
                 }
             }
             .clickable { onToggleChrome() },
