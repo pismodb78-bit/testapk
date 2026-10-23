@@ -80,17 +80,27 @@ import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.launch
 
 /**
- * Пузырь сообщения — Android-аналог BuildBubble из MainForm.cs:
- * цитата ответа, картинка/GIF, голосовое, карточка файла, текст,
- * время с пометкой «изменено», реакции и меню по долгому нажатию.
- */
-@OptIn(ExperimentalFoundationApi::class)
-/**
  * Высота полоски с цитатой: полоса слева 30 dp плюс поля по 6 dp. Держим
  * константой, потому что под неё заранее резервируется место (см. пузырь).
  */
 private val QUOTE_HEIGHT = 42.dp
 
+/**
+ * До скольких точек раскодируем картинку в пузыре.
+ *
+ * Пузырь шириной 260 dp — это около восьмисот точек даже на плотном
+ * экране. Раскодировать ради него снимок целиком незачем: памяти уходит в
+ * разы больше, а на глаз разницы нет. Полноразмерный снимок по-прежнему
+ * открывается нажатием — там он и нужен.
+ */
+private const val IMAGE_DECODE_PX = 1024
+
+/**
+ * Пузырь сообщения — Android-аналог BuildBubble из MainForm.cs:
+ * цитата ответа, картинка/GIF, голосовое, карточка файла, текст,
+ * время с пометкой «изменено», реакции и меню по долгому нажатию.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MessageBubble(
     msg: ChatMessage,
@@ -157,6 +167,11 @@ fun MessageBubble(
     val context = androidx.compose.ui.platform.LocalContext.current
 
     LaunchedEffect(msg.id) {
+        // Картинка могла прийти готовой из памяти — пропорции всё равно
+        // снимаем: в следующий раз, когда память её вытеснит, под неё нужно
+        // будет держать место той же высоты.
+        image?.let { ImageShapes.remember(msg.id, it) }
+
         if (quote == null && msg.replyToId > 0 && !msg.isDeleted) {
             quote = runCatching { ChatRepository.loadReplyQuote(msg.replyToId, scopeKind) }
                 .getOrNull()
@@ -354,8 +369,28 @@ fun MessageBubble(
                             if (MediaKinds.isGif(bytes)) {
                                 AnimatedImage(bytes, contentDescription = null, modifier = mod)
                             } else {
+                                // КАРТИНКУ РАСКОДИРУЕМ ОДИН РАЗ И ПО РАЗМЕРУ ПУЗЫРЯ.
+                                //
+                                // Без этого быстрая прокрутка по переписке с
+                                // фотографиями дёргалась: пузырь, ушедший за
+                                // край, Compose уничтожает, и на обратном
+                                // пути Coil раскодировал снимок ЗАНОВО — и
+                                // целиком, во все свои четыре тысячи точек.
+                                // Это десятки миллисекунд и десятки мегабайт
+                                // на каждую картинку, то есть пропущенные
+                                // кадры ровно в момент пролистывания.
+                                //
+                                // Постоянный ключ даёт Coil узнать уже
+                                // раскодированное (у голого массива байтов
+                                // ключа нет вовсе), а размер — раскодировать
+                                // под пузырь, а не под печать плаката.
                                 AsyncImage(
-                                    model = bytes,
+                                    model = coil.request.ImageRequest.Builder(context)
+                                        .data(bytes)
+                                        .memoryCacheKey("msg-" + msg.id)
+                                        .size(IMAGE_DECODE_PX)
+                                        .crossfade(false)
+                                        .build(),
                                     contentDescription = null,
                                     modifier = mod,
                                 )
