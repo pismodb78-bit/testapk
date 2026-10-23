@@ -190,6 +190,8 @@ fun ChannelChatScreen(
     /** Сообщение, к которому только что прыгнули по цитате: мигает и гаснет. */
     var flashId by remember(channelId) { mutableIntStateOf(0) }
     var showGifPicker by remember { mutableStateOf(false) }
+    // Свой лист вложений — тот же, что в личной переписке.
+    var showAttach by remember { mutableStateOf(false) }
 
     var attachNote by remember(channelId) { mutableStateOf("") }
 
@@ -617,17 +619,51 @@ fun ChannelChatScreen(
                         //
                         // asReversed — вид на список, а не копия: разворот
                         // ничего не перекладывает в памяти.
-                        val feed = messages.asReversed()
-                        items(feed.size, key = { feed[it].id }) { index ->
-                            val msg = feed[index]
+                        // Пачка вложений, отправленная разом, показывается
+                        // одной плиткой — как в личной переписке.
+                        val feed = com.pismo.messenger.core.Albums.group(messages) {
+                            reactions[it.id]?.isNotEmpty() == true
+                        }.asReversed()
+                        items(feed.size, key = { feed[it].first().id }) { index ->
+                            val group = feed[index]
+                            val msg = group.first()
                             // Сосед по номеру СТАРШЕ: список перевёрнут. Черта
                             // с датой стоит над самым ранним сообщением дня —
                             // у того, чей сосед сверху уже из другого дня.
-                            val older = feed.getOrNull(index + 1)
+                            val older = feed.getOrNull(index + 1)?.last()
                             val showDate = older == null ||
                                     formatDateSeparator(older.createdAtMs) !=
                                     formatDateSeparator(msg.createdAtMs)
                             if (showDate) DateSeparator(formatDateSeparator(msg.createdAtMs))
+
+                            if (group.size > 1) {
+                                com.pismo.messenger.ui.chat.AlbumBubble(
+                                    msgs = group,
+                                    scopeKind = Scope.SERVER,
+                                    isGroup = true,
+                                    transferKey = Transfers.channelKey(channelId),
+                                    onOpenVideo = { file, name, id, sender, cap ->
+                                        fullscreenVideo =
+                                            com.pismo.messenger.ui.chat.FullscreenVideo(
+                                                file, name, id, sender, cap
+                                            )
+                                    },
+                                    selectMode = selectMode,
+                                    selected = group.all { it.id in selectedIds },
+                                    onEnterSelect = {
+                                        selectMode = true
+                                        selectedIds = group.map { it.id }.toSet()
+                                    },
+                                    onToggleSelect = {
+                                        val ids = group.map { it.id }.toSet()
+                                        selectedIds =
+                                            if (ids.all { it in selectedIds }) selectedIds - ids
+                                            else selectedIds + ids
+                                        if (selectedIds.isEmpty()) selectMode = false
+                                    },
+                                )
+                                return@items
+                            }
 
                             MessageBubble(
                                 transferKey = Transfers.channelKey(channelId),
@@ -885,7 +921,7 @@ fun ChannelChatScreen(
                 // ввода на узком экране. 40 dp — палец попадает, а строке
                 // остаётся место для текста.
                 IconButton(
-                    onClick = { filePicker.launch(arrayOf("*/*")) },
+                    onClick = { showAttach = true },
                     enabled = !sending,
                     modifier = Modifier.size(40.dp),
                 ) {
@@ -978,6 +1014,39 @@ fun ChannelChatScreen(
                 val chrono = messages.indexOfFirst { it.id == found.id }
                 val idx = if (chrono < 0) -1 else messages.lastIndex - chrono
                 if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
+            },
+        )
+    }
+
+    if (showAttach) {
+        com.pismo.messenger.ui.chat.AttachSheet(
+            onDismiss = { showAttach = false },
+            onCamera = { takePhoto() },
+            onSend = { picked, cap ->
+                val replyId = replyTo?.id ?: 0
+                val text = cap.ifBlank { input.text.trim() }
+                replyTo = null
+                if (cap.isBlank()) input = TextFieldValue("")
+                scope.launch {
+                    com.pismo.messenger.ui.chat.sendPickedAttachments(
+                        context = context,
+                        picked = picked,
+                        caption = text,
+                        replyToId = replyId,
+                        where = Transfers.channelKey(channelId),
+                        enqueue = { bytes, name, isImage, t, rid ->
+                            Transfers.sendChannel(
+                                channelId = channelId,
+                                text = t,
+                                replyToId = rid,
+                                image = bytes.takeIf { isImage },
+                                file = bytes.takeIf { !isImage },
+                                fileName = name,
+                            )
+                        },
+                        note = { jumpNote = it },
+                    )
+                }
             },
         )
     }

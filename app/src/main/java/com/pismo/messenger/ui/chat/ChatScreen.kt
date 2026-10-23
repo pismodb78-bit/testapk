@@ -268,6 +268,9 @@ fun ChatScreen(
     var recordSeconds by remember { mutableStateOf(0) }
     var showCircleRecorder by remember { mutableStateOf(false) }
     var showGifPicker by remember { mutableStateOf(false) }
+    // Свой лист вложений вместо системного выбора файлов: плитка галереи,
+    // кружки с номерами, просмотр по нажатию. См. AttachSheet.
+    var showAttach by remember { mutableStateOf(false) }
 
     // Режим множественного выделения — порт «Выбрано: N» с ПК.
     var selectMode by remember(targetId) { mutableStateOf(false) }
@@ -1198,20 +1201,56 @@ fun ChatScreen(
                         // двигает: список состоит только из сообщений, и
                         // держится он всегда за сообщение.
 
+                        // Пачка вложений, отправленная разом, показывается
+                        // ОДНОЙ плиткой — см. core/Albums. Закреплённые и те,
+                        // на которых висят реакции, в плитку не прячем: там
+                        // их негде показать.
+                        //
                         // asReversed — это ВИД на список, а не копия: разворот
                         // ничего не перекладывает в памяти.
-                        val visible = messages.filter { !readOnly || it.isMine }.asReversed()
-                        itemsIndexedCompat(visible) { index, msg ->
+                        val visible = com.pismo.messenger.core.Albums.group(
+                            messages.filter { !readOnly || it.isMine },
+                        ) { reactions[it.id]?.isNotEmpty() == true }.asReversed()
+                        itemsIndexedGroups(visible) { index, group ->
+                            val msg = group.first()
                             // Сосед по номеру СТАРШЕ: список перевёрнут. Черта
                             // с датой стоит над самым ранним сообщением дня, а
                             // это тот, у кого сосед сверху — уже из другого
                             // дня (внутри пузыря порядок обычный, сверху вниз,
                             // переворот касается только самих элементов).
-                            val older = visible.getOrNull(index + 1)
+                            val older = visible.getOrNull(index + 1)?.last()
                             val showDate = older == null ||
                                     formatDateSeparator(older.createdAtMs) !=
                                     formatDateSeparator(msg.createdAtMs)
                             if (showDate) DateSeparator(formatDateSeparator(msg.createdAtMs))
+
+                            // Пачка из нескольких вложений — одна плитка.
+                            if (group.size > 1) {
+                                AlbumBubble(
+                                    msgs = group,
+                                    scopeKind = scopeKind,
+                                    isGroup = isGroup,
+                                    transferKey = Transfers.chatKey(isGroup, targetId),
+                                    onOpenVideo = { file, name, id, sender, cap ->
+                                        fullscreenVideo =
+                                            FullscreenVideo(file, name, id, sender, cap)
+                                    },
+                                    selectMode = selectMode,
+                                    selected = group.all { it.id in selectedIds },
+                                    onEnterSelect = {
+                                        selectMode = true
+                                        selectedIds = group.map { it.id }.toSet()
+                                    },
+                                    onToggleSelect = {
+                                        val ids = group.map { it.id }.toSet()
+                                        selectedIds =
+                                            if (ids.all { it in selectedIds }) selectedIds - ids
+                                            else selectedIds + ids
+                                        if (selectedIds.isEmpty()) selectMode = false
+                                    },
+                                )
+                                return@itemsIndexedGroups
+                            }
 
                             MessageBubble(
                                 transferKey = Transfers.chatKey(isGroup, targetId),
@@ -1403,7 +1442,16 @@ fun ChatScreen(
                             maxLines = 1,
                         )
                     }
-                    IconButton(onClick = { replyTo = null; editing = null; input = "" }) {
+                    IconButton(onClick = {
+                        // Набранное НЕ стираем, если это была отмена ответа:
+                        // текст писал человек, и к ответу он отношения не
+                        // имеет. Поле очищается только при отмене
+                        // РЕДАКТИРОВАНИЯ — там в нём лежит не его текст, а
+                        // копия правимого сообщения.
+                        if (editing != null) input = ""
+                        replyTo = null
+                        editing = null
+                    }) {
                         Icon(Icons.Default.Close, "Отменить", tint = PismoColors.TextMuted)
                     }
                 }
@@ -1481,7 +1529,7 @@ fun ChatScreen(
                     // съедали поле ввода на узком экране. 40 dp — палец всё
                     // ещё попадает, а строке остаётся место для текста.
                     IconButton(
-                        onClick = { filePicker.launch(arrayOf("*/*")) },
+                        onClick = { showAttach = true },
                         enabled = !sending,
                         modifier = Modifier.size(40.dp),
                     ) {
@@ -1703,6 +1751,41 @@ fun ChatScreen(
         )
     }
 
+    if (showAttach) {
+        AttachSheet(
+            onDismiss = { showAttach = false },
+            onCamera = { takePhoto() },
+            onSend = { picked, cap ->
+                val replyId = replyTo?.id ?: 0
+                val text = cap.ifBlank { input.trim() }
+                replyTo = null
+                if (cap.isBlank()) input = ""
+                scope.launch {
+                    sendPickedAttachments(
+                        context = context,
+                        picked = picked,
+                        caption = text,
+                        replyToId = replyId,
+                        where = Transfers.chatKey(isGroup, targetId),
+                        enqueue = { bytes, name, isImage, t, rid ->
+                            Transfers.sendChat(
+                                scopeKind = scopeKind,
+                                target = targetId,
+                                isGroup = isGroup,
+                                text = t,
+                                image = bytes.takeIf { isImage },
+                                file = bytes.takeIf { !isImage },
+                                fileName = name,
+                                replyToId = rid,
+                            )
+                        },
+                        note = { jumpNote = it },
+                    )
+                }
+            },
+        )
+    }
+
     if (showGifPicker) {
         GifPickerDialog(
             onPicked = { bytes ->
@@ -1796,6 +1879,20 @@ internal fun queryFileName(context: android.content.Context, uri: android.net.Ur
         }
     }
     return name
+}
+
+/**
+ * itemsIndexed для ГРУПП сообщений: одиночное сообщение — группа из одного,
+ * альбом — из нескольких. Ключ берём у первого в группе: он не меняется ни
+ * от подгрузки истории, ни от прихода новых сообщений.
+ */
+private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedGroups(
+    groups: List<List<ChatMessage>>,
+    content: @androidx.compose.runtime.Composable (Int, List<ChatMessage>) -> Unit,
+) {
+    items(groups.size, key = { index -> groups[index].first().id }) { index ->
+        content(index, groups[index])
+    }
 }
 
 /** itemsIndexed для LazyColumn без импорта экспериментального API. */

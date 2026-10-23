@@ -628,11 +628,12 @@ internal fun VideoSurface(
                     start = 6.dp,
                     end = 6.dp,
                     top = 6.dp,
-                    // Ещё выше: у нижнего края полоса мешает и жестовой
-                    // черте снизу, и собственной подписи под кадром, а
-                    // попасть по ползунку тем труднее, чем он ближе к
-                    // границе экрана.
-                    bottom = if (insetBottom) 84.dp else 24.dp,
+                    // В полном экране полоса поднята высоко: там под ней
+                    // жестовая черта и подпись к ролику. А в пузыре чата
+                    // такой высоты нет и мешать нечему — поднятая, она
+                    // закрывала середину кадра, поэтому в ленте она лежит
+                    // почти по нижнему краю, оставляя только зазор под палец.
+                    bottom = if (insetBottom) 84.dp else 8.dp,
                 )
                 .clip(RoundedCornerShape(18.dp))
                 // Полупрозрачнее: сквозь полосу видно кадр, а читается она
@@ -898,7 +899,7 @@ private fun sizeLabel(file: File?): String? =
     file?.takeIf { it.exists() }?.let { formatBytesShort(it.length()) }
 
 /** Первый кадр видео — обложка до запуска плеера. */
-private fun firstFrame(file: File): Bitmap? = runCatching {
+internal fun firstFrame(file: File): Bitmap? = runCatching {
     val r = MediaMetadataRetriever()
     try {
         r.setDataSource(file.absolutePath)
