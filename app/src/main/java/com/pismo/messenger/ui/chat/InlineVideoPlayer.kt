@@ -362,6 +362,16 @@ internal fun VideoSurface(
     var dragValue by remember(file.absolutePath) { mutableFloatStateOf(0f) }
     var player by remember(file.absolutePath) { mutableStateOf<MediaPlayer?>(null) }
     var failed by remember(file.absolutePath) { mutableStateOf(false) }
+    /**
+     * Перемотка идёт, ответа ещё нет.
+     *
+     * Пока она в пути, проигрыватель честно отвечает СТАРЫМ временем — и
+     * тикер, не зная об этом, возвращал ползунок назад, к тому месту,
+     * откуда его только что утащили. Со стороны это и выглядит как «видео
+     * перематывается назад»: рывок к прежнему кадру и только потом прыжок
+     * вперёд. Поэтому на время перемотки время берём своё, запрошенное.
+     */
+    var seeking by remember(file.absolutePath) { mutableStateOf(false) }
 
     DisposableEffect(file.absolutePath) {
         onDispose {
@@ -375,12 +385,21 @@ internal fun VideoSurface(
     LaunchedEffect(isPlaying, prepared) {
         if (!prepared) return@LaunchedEffect
         while (isPlaying) {
-            if (!dragging) {
+            if (!dragging && !seeking) {
                 positionMs = runCatching { view.currentPosition }.getOrDefault(0)
                 onPositionChange(positionMs)
             }
             kotlinx.coroutines.delay(200)
         }
+    }
+
+    // Ответа о конце перемотки может и не прийти — например, если файл
+    // оборвали. Тогда время так и осталось бы замороженным, поэтому ждём
+    // его не дольше трёх секунд.
+    LaunchedEffect(seeking) {
+        if (!seeking) return@LaunchedEffect
+        kotlinx.coroutines.delay(3000)
+        seeking = false
     }
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -433,6 +452,9 @@ internal fun VideoSurface(
                         }
                         if (isPlaying) start() else pause()
                     }
+                    // Перемотка закончилась — снова верим тому, что говорит
+                    // сам проигрыватель.
+                    mp.setOnSeekCompleteListener { seeking = false }
                     setOnCompletionListener {
                         isPlaying = false
                         positionMs = durationMs
@@ -550,6 +572,7 @@ internal fun VideoSurface(
                         }
                     }
                     positionMs = target
+                    seeking = true
                     dragging = false
                 },
                 colors = SliderDefaults.colors(
