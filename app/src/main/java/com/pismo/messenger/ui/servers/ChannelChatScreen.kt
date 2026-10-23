@@ -3,6 +3,8 @@ package com.pismo.messenger.ui.servers
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -824,27 +826,65 @@ fun ChannelChatScreen(
             chanTransfers.filter { it.where == Transfers.channelKey(channelId) }
                 .forEach { UploadBar(it) }
 
-            pending.forEach { p ->
+            // Ряд миниатюр с номерами — как в личной переписке и на ПК:
+            // видно, что именно выбрано и в каком порядке уйдёт, а крестик
+            // убирает именно эту вещь.
+            if (pending.isNotEmpty()) {
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .background(PismoColors.BgDarkest)
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                        .horizontalScroll(androidx.compose.foundation.rememberScrollState())
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        (if (p.isImage) "🖼 " else "📎 ") + p.fileName,
-                        color = PismoColors.TextSecondary,
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    IconButton(onClick = { pending = pending - p }, modifier = Modifier.size(28.dp)) {
-                        Icon(
-                            Icons.Default.Close, "Убрать вложение",
-                            tint = PismoColors.TextMuted, modifier = Modifier.size(16.dp),
-                        )
+                    pending.forEachIndexed { i, p ->
+                        Box(Modifier.padding(end = 8.dp)) {
+                            Box(
+                                Modifier
+                                    .size(56.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0x22000000)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (p.isImage) {
+                                    coil.compose.AsyncImage(
+                                        model = p.bytes,
+                                        contentDescription = null,
+                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                } else {
+                                    com.pismo.messenger.ui.components.FileBadge(
+                                        com.pismo.messenger.core.fileBadge(p.fileName),
+                                        com.pismo.messenger.core.fileColor(p.fileName),
+                                        34.dp,
+                                    )
+                                }
+                            }
+                            Text(
+                                "${i + 1}",
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(2.dp)
+                                    .background(Color(0xFF1E8FE1), RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 5.dp, vertical = 1.dp),
+                            )
+                            Icon(
+                                Icons.Default.Close,
+                                "Убрать вложение",
+                                tint = Color.White,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(2.dp)
+                                    .size(18.dp)
+                                    .background(Color(0x99000000), RoundedCornerShape(9.dp))
+                                    .clickable { pending = pending - p },
+                            )
+                        }
                     }
                 }
             }

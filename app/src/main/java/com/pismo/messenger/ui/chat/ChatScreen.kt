@@ -5,6 +5,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -70,6 +72,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -1369,39 +1372,74 @@ fun ChatScreen(
                 }
             }
 
-            // Панель прикреплённых файлов: они ждут отправки вместе с текстом.
-            pending.forEach { att ->
+            // Панель прикреплённого — РЯД МИНИАТЮР, а не список строк.
+            //
+            // Строки «Изображение прикреплено» занимали по экрану на каждое
+            // вложение и не показывали ни что именно выбрано, ни в каком
+            // порядке уйдёт. Теперь это миниатюры с номерами по порядку, и
+            // крестик у каждой убирает именно её — как в Telegram и как в
+            // панели вложений на ПК.
+            if (pending.isNotEmpty()) {
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .background(PismoColors.BgElevated)
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(
-                        Modifier
-                            .width(3.dp)
-                            .height(32.dp)
-                            .background(PismoColors.Green)
+                    pending.forEachIndexed { i, att ->
+                        Box(Modifier.padding(end = 8.dp)) {
+                            Box(
+                                Modifier
+                                    .size(56.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0x22000000)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (att.isImage) {
+                                    AsyncImage(
+                                        model = att.bytes,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                } else {
+                                    FileBadge(
+                                        fileBadge(att.fileName), fileColor(att.fileName), 34.dp,
+                                    )
+                                }
+                            }
+                            Text(
+                                "${i + 1}",
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(2.dp)
+                                    .background(Color(0xFF1E8FE1), RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 5.dp, vertical = 1.dp),
+                            )
+                            Icon(
+                                Icons.Default.Close,
+                                "Убрать вложение",
+                                tint = Color.White,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(2.dp)
+                                    .size(18.dp)
+                                    .background(Color(0x99000000), RoundedCornerShape(9.dp))
+                                    .clickable { pending = pending - att },
+                            )
+                        }
+                    }
+                    Text(
+                        formatBytesShort(pending.sumOf { it.bytes.size.toLong() }),
+                        color = PismoColors.TextMuted,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(start = 2.dp),
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            if (att.isImage) "Изображение прикреплено" else "Файл прикреплён",
-                            color = PismoColors.Green,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            att.fileName + " · " + formatBytesShort(att.bytes.size.toLong()),
-                            color = PismoColors.TextMuted,
-                            fontSize = 12.sp,
-                            maxLines = 1,
-                        )
-                    }
-                    IconButton(onClick = { pending = pending - att }) {
-                        Icon(Icons.Default.Close, "Убрать вложение", tint = PismoColors.TextMuted)
-                    }
                 }
             }
 
