@@ -21,6 +21,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.Mic
@@ -465,6 +466,12 @@ fun ChannelChatScreen(
         }
     }
 
+    // Снимок с камеры прикрепляется так же, как выбранный файл: к нему
+    // можно дописать подпись, и уходит всё одним сообщением.
+    val takePhoto = com.pismo.messenger.ui.chat.rememberCameraShot { bytes, name ->
+        pending = pending + PendingFile(bytes = bytes, fileName = name, isImage = true)
+    }
+
     Scaffold(
         containerColor = PismoColors.BgMain,
         topBar = {
@@ -830,8 +837,24 @@ fun ChannelChatScreen(
                     .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = { filePicker.launch(arrayOf("*/*")) }, enabled = !sending) {
+                // Кнопок четыре, и в стандартные 48 dp они съедали поле
+                // ввода на узком экране. 40 dp — палец попадает, а строке
+                // остаётся место для текста.
+                IconButton(
+                    onClick = { filePicker.launch(arrayOf("*/*")) },
+                    enabled = !sending,
+                    modifier = Modifier.size(40.dp),
+                ) {
                     Icon(Icons.Default.AttachFile, "Прикрепить", tint = PismoColors.TextMuted)
+                }
+                // Камера — то же, что в личной переписке: снять и отправить
+                // одним нажатием, не выходя в галерею за снимком.
+                IconButton(
+                    onClick = { takePhoto() },
+                    enabled = !sending,
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Icon(Icons.Default.PhotoCamera, "Снять фото", tint = PismoColors.TextMuted)
                 }
                 IconButton(
                     onClick = {
@@ -839,10 +862,15 @@ fun ChannelChatScreen(
                         else recording = recorder.start()
                     },
                     enabled = !sending,
+                    modifier = Modifier.size(40.dp),
                 ) {
                     Icon(Icons.Default.Mic, "Голосовое", tint = PismoColors.TextMuted)
                 }
-                IconButton(onClick = { showGifPicker = true }, enabled = !sending) {
+                IconButton(
+                    onClick = { showGifPicker = true },
+                    enabled = !sending,
+                    modifier = Modifier.size(40.dp),
+                ) {
                     Icon(Icons.Default.Gif, "Гифки", tint = PismoColors.TextMuted)
                 }
 

@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -772,6 +773,12 @@ fun ChatScreen(
         }
     }
 
+    // Снимок с камеры прикрепляется так же, как выбранный файл: к нему
+    // можно дописать подпись, и уходит всё одним сообщением.
+    val takePhoto = rememberCameraShot { bytes, name ->
+        pending = pending + PendingFile(bytes = bytes, fileName = name, isImage = true)
+    }
+
     fun send() {
         val text = input.trim()
         val attach = pending
@@ -1363,18 +1370,44 @@ fun ChatScreen(
                         .padding(horizontal = 6.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = { filePicker.launch(arrayOf("*/*")) }, enabled = !sending) {
+                    // Кнопок слева стало четыре, и в стандартные 48 dp они
+                    // съедали поле ввода на узком экране. 40 dp — палец всё
+                    // ещё попадает, а строке остаётся место для текста.
+                    IconButton(
+                        onClick = { filePicker.launch(arrayOf("*/*")) },
+                        enabled = !sending,
+                        modifier = Modifier.size(40.dp),
+                    ) {
                         Icon(Icons.Default.AttachFile, "Прикрепить", tint = PismoColors.TextMuted)
                     }
 
-                    IconButton(onClick = { showCircleRecorder = true }, enabled = !sending) {
+                    // Камера — рядом с «прикрепить». Снять и отправить фото
+                    // раньше значило выйти в камеру, вернуться и искать
+                    // снимок среди файлов.
+                    IconButton(
+                        onClick = { takePhoto() },
+                        enabled = !sending,
+                        modifier = Modifier.size(40.dp),
+                    ) {
+                        Icon(Icons.Default.PhotoCamera, "Снять фото", tint = PismoColors.TextMuted)
+                    }
+
+                    IconButton(
+                        onClick = { showCircleRecorder = true },
+                        enabled = !sending,
+                        modifier = Modifier.size(40.dp),
+                    ) {
                         Icon(Icons.Default.Videocam, "Видео-кружочек", tint = PismoColors.TextMuted)
                     }
 
                     // Кнопка GIF — как на ПК (и как в Discord). Гифка
                     // прикрепляется вложением, а не улетает сразу: к ней
                     // можно дописать подпись.
-                    IconButton(onClick = { showGifPicker = true }, enabled = !sending) {
+                    IconButton(
+                        onClick = { showGifPicker = true },
+                        enabled = !sending,
+                        modifier = Modifier.size(40.dp),
+                    ) {
                         Icon(Icons.Default.Gif, "Гифки", tint = PismoColors.TextMuted)
                     }
 
