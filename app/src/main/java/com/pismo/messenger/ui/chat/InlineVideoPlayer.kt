@@ -448,23 +448,36 @@ internal fun VideoSurface(
             }
         }
 
+        // ПАНЕЛЬ УПРАВЛЕНИЯ ПРИПОДНЯТА НАД КАДРОМ.
+        //
+        // Раньше она лежала ровно по нижнему краю, во всю ширину и с
+        // прямыми углами: у нижнего края кадра ползунок перемотки липнет к
+        // самой границе, промахнуться по нему пальцем проще, чем попасть, а
+        // в пузыре чата панель читалась как продолжение переписки, а не как
+        // часть видео. Теперь она отступает от краёв и лежит отдельной
+        // скруглённой плашкой поверх кадра — так же, как в любом плеере.
+        //
+        // Порядок отступов важен: первый padding — это поля СНАРУЖИ плашки,
+        // второй, после фона, — внутри неё.
         Row(
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .focusProperties { canFocus = false }
-                .background(Color(0x99000000))
                 // navigationBarsPadding отступает от жестовой полосы, если
-                // диалог рисуется под ней; фиксированные 20.dp снизу нужны
+                // плеер рисуется под ней; фиксированный отступ снизу нужен
                 // всё равно — иначе ползунок липнет к самому краю экрана и
                 // тащить его пальцем невозможно, палец попадает в систему.
                 .then(if (insetBottom) Modifier.navigationBarsPadding() else Modifier)
                 .padding(
-                    start = 4.dp,
-                    end = 4.dp,
-                    top = if (insetBottom) 6.dp else 0.dp,
-                    bottom = if (insetBottom) 44.dp else 0.dp,
-                ),
+                    start = 6.dp,
+                    end = 6.dp,
+                    top = 6.dp,
+                    bottom = if (insetBottom) 44.dp else 8.dp,
+                )
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color(0xB3000000))
+                .padding(horizontal = 4.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(
