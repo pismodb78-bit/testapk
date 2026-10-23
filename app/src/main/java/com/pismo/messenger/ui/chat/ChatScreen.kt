@@ -77,6 +77,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.pismo.messenger.core.PresenceReporter
@@ -1112,6 +1113,23 @@ fun ChatScreen(
             // схлопывалась по нему, а align(Center) центрировал кружок
             // внутри него же, то есть выбрасывал к левому краю экрана.
             Box(Modifier.fillMaxWidth().weight(1f)) {
+                // Кружок подгрузки истории — ПОВЕРХ ленты, у верхнего края.
+                // Почему не элементом списка — см. пояснение внутри
+                // LazyColumn ниже.
+                if (loadingOlder && !loading) {
+                    Box(
+                        Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 6.dp)
+                            .zIndex(1f),
+                    ) {
+                        CircularProgressIndicator(
+                            Modifier.size(20.dp),
+                            color = PismoColors.Blurple,
+                            strokeWidth = 2.dp,
+                        )
+                    }
+                }
                 if (loading) {
                     CircularProgressIndicator(
                         Modifier.align(Alignment.Center),
@@ -1125,36 +1143,23 @@ fun ChatScreen(
                             horizontal = 10.dp, vertical = 8.dp
                         ),
                     ) {
-                        // Полоска сверху, пока едет следующая порция истории.
+                        // КРУЖКА ЗАГРУЗКИ В СПИСКЕ НЕТ НАМЕРЕННО — он
+                        // рисуется поверх ленты, ниже по коду.
                         //
-                        // ЭЛЕМЕНТ ЕСТЬ ВСЕГДА, И У НЕГО СВОЙ КЛЮЧ. Раньше он
-                        // появлялся и исчезал, и ключа у него не было —
-                        // значит для списка он опознавался по НОМЕРУ. Пока
-                        // кружок виден, он и есть самый верхний элемент, то
-                        // есть тот, за который список держится при
-                        // прокрутке. Стоило порции приехать, кружок исчезал,
-                        // а на его номер вставало другое сообщение — список
-                        // честно оставался «на том же номере» и улетал на
-                        // страницу вверх. Это и есть «телепортирует к
-                        // следующей черте прогрузки».
+                        // Пока он был элементом списка, он стоял первым, а
+                        // список при изменении данных держится за ПЕРВЫЙ
+                        // ВИДИМЫЙ элемент. Подгрузка же начинается ровно
+                        // тогда, когда человек у самого верха, то есть когда
+                        // первый видимый — этот самый кружок. Приехавшая
+                        // порция ложилась НИЖЕ него, кружок оставался на
+                        // месте, и вместе с ним на месте оставался взгляд —
+                        // а содержимое уезжало на страницу. Отсюда и
+                        // «телепортирует к следующей черте прогрузки», в том
+                        // числе не сразу, а на следующем движении вверх.
                         //
-                        // С постоянным ключом такого не бывает: список
-                        // держится за сообщение, а кружок просто перестаёт
-                        // занимать место.
-                        item(key = "older-spinner") {
-                            if (loadingOlder) {
-                                Box(
-                                    Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    CircularProgressIndicator(
-                                        Modifier.size(20.dp),
-                                        color = PismoColors.Blurple,
-                                        strokeWidth = 2.dp,
-                                    )
-                                }
-                            }
-                        }
+                        // Поверх ленты он ничего не держит и ничего не
+                        // двигает: список состоит только из сообщений, и
+                        // держится он всегда за сообщение.
 
                         val visible = messages.filter { !readOnly || it.isMine }
                         itemsIndexedCompat(visible) { index, msg ->
