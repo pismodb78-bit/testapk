@@ -469,6 +469,11 @@ internal fun VideoSurface(
                     blockHolderFocus(this)
                     setOnPreparedListener { mp ->
                         player = mp
+                        // Перемотка закончилась — снова верим тому, что
+                        // говорит сам проигрыватель. Слушатель ставится
+                        // здесь: раньше он стоял за пределами этого
+                        // обработчика, где самого проигрывателя ещё нет.
+                        mp.setOnSeekCompleteListener { seeking = false }
                         prepared = true
                         durationMs = duration.coerceAtLeast(0)
                         mp.setVolume(if (muted) 0f else 1f, if (muted) 0f else 1f)
@@ -499,9 +504,6 @@ internal fun VideoSurface(
                         }
                         if (isPlaying) start() else pause()
                     }
-                    // Перемотка закончилась — снова верим тому, что говорит
-                    // сам проигрыватель.
-                    mp.setOnSeekCompleteListener { seeking = false }
                     setOnCompletionListener {
                         isPlaying = false
                         positionMs = durationMs
