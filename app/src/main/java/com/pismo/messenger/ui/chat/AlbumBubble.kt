@@ -72,6 +72,8 @@ fun AlbumBubble(
     isGroup: Boolean,
     transferKey: String,
     onOpenVideo: (java.io.File, String, Int, String, String) -> Unit,
+    /** Открыть ленту просмотра на этой ячейке — с переходами по соседям. */
+    onOpenMedia: ((Int) -> Unit)? = null,
     selectMode: Boolean = false,
     selected: Boolean = false,
     onEnterSelect: () -> Unit = {},
@@ -113,6 +115,7 @@ fun AlbumBubble(
                 scopeKind = scopeKind,
                 transferKey = transferKey,
                 selectMode = selectMode,
+                onOpenMedia = onOpenMedia,
                 onPhoto = { bytes -> viewerBytes = bytes },
                 onVideo = { f, name, id -> onOpenVideo(f, name, id, head.senderName, caption) },
                 onLongPress = onEnterSelect,
@@ -168,6 +171,7 @@ private fun AlbumGrid(
     scopeKind: Scope,
     transferKey: String,
     selectMode: Boolean,
+    onOpenMedia: ((Int) -> Unit)?,
     onPhoto: (ByteArray) -> Unit,
     onVideo: (java.io.File, String, Int) -> Unit,
     onLongPress: () -> Unit,
@@ -186,6 +190,7 @@ private fun AlbumGrid(
                             scopeKind = scopeKind,
                             transferKey = transferKey,
                             selectMode = selectMode,
+                            onOpenMedia = onOpenMedia,
                             onPhoto = onPhoto,
                             onVideo = onVideo,
                             onLongPress = onLongPress,
@@ -206,6 +211,7 @@ private fun AlbumCell(
     scopeKind: Scope,
     transferKey: String,
     selectMode: Boolean,
+    onOpenMedia: ((Int) -> Unit)?,
     onPhoto: (ByteArray) -> Unit,
     onVideo: (java.io.File, String, Int) -> Unit,
     onLongPress: () -> Unit,
@@ -245,6 +251,9 @@ private fun AlbumCell(
                 onLongClick = onLongPress,
                 onClick = {
                     if (selectMode) { onSelect(); return@combinedClickable }
+                    // Лента просмотра: из неё листаются и соседние ячейки, и
+                    // остальные снимки переписки.
+                    if (onOpenMedia != null) { onOpenMedia(msg.id); return@combinedClickable }
                     if (isVideo) {
                         val f = file
                         if (f != null) { onVideo(f, msg.fileName ?: "video.mp4", msg.id); return@combinedClickable }

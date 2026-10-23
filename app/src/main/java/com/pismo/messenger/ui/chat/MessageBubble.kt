@@ -131,6 +131,11 @@ fun MessageBubble(
      */
     onOpenVideo: (java.io.File, String, Int) -> Unit = { _, _, _ -> },
     /**
+     * Открыть ленту просмотра на этом сообщении. Если не задан — показываем
+     * снимок в одиночку, как раньше.
+     */
+    onOpenMedia: ((Int) -> Unit)? = null,
+    /**
      * Ключ переписки для полосы передач. Скачивание идёт вне экрана, и по
      * этому ключу полоса показывается там, откуда её запустили.
      */
@@ -367,7 +372,12 @@ fun MessageBubble(
                             val mod = Modifier
                                 .widthIn(max = 304.dp)
                                 .clip(RoundedCornerShape(8.dp))
-                                .clickable { viewerBytes = bytes }
+                                .clickable {
+                                    // Через ленту просмотра: из неё можно
+                                    // листать соседние снимки и ролики.
+                                    if (onOpenMedia != null) onOpenMedia(msg.id)
+                                    else viewerBytes = bytes
+                                }
                             // GIF узнаём по содержимому, как IsGif на ПК:
                             // имя у картинок больше не хранится, да и из
                             // буфера обмена оно и не приходило.

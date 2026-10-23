@@ -195,6 +195,8 @@ fun ChannelChatScreen(
     var showGifPicker by remember { mutableStateOf(false) }
     // Свой лист вложений — тот же, что в личной переписке.
     var showAttach by remember { mutableStateOf(false) }
+    // Открытый просмотр медиа канала — с переходами по соседям.
+    var mediaViewerAt by remember(channelId) { mutableStateOf<Int?>(null) }
 
     var attachNote by remember(channelId) { mutableStateOf("") }
 
@@ -645,6 +647,7 @@ fun ChannelChatScreen(
                                     scopeKind = Scope.SERVER,
                                     isGroup = true,
                                     transferKey = Transfers.channelKey(channelId),
+                                    onOpenMedia = { id -> mediaViewerAt = id },
                                     onOpenVideo = { file, name, id, sender, cap ->
                                         fullscreenVideo =
                                             com.pismo.messenger.ui.chat.FullscreenVideo(
@@ -670,6 +673,7 @@ fun ChannelChatScreen(
 
                             MessageBubble(
                                 transferKey = Transfers.channelKey(channelId),
+                                onOpenMedia = { id -> mediaViewerAt = id },
                                 onQuoteClick = { id ->
                                     scope.launch {
                                         // Сообщения может не быть на
@@ -1059,6 +1063,36 @@ fun ChannelChatScreen(
                 if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
             },
         )
+    }
+
+    mediaViewerAt?.let { openAt ->
+        val media = messages
+            .filter {
+                !it.isDeleted && (it.hasImage ||
+                    (it.hasFile && com.pismo.messenger.core.MediaKinds.isVideo(it.fileName)))
+            }
+            .map {
+                com.pismo.messenger.ui.chat.MediaItem(
+                    msgId = it.id,
+                    isVideo = it.hasFile &&
+                        com.pismo.messenger.core.MediaKinds.isVideo(it.fileName),
+                    fileName = it.fileName,
+                    sender = it.senderName,
+                    timeMs = it.createdAtMs,
+                )
+            }
+        val at = media.indexOfFirst { it.msgId == openAt }
+        if (at >= 0) {
+            com.pismo.messenger.ui.chat.MediaViewerHost(
+                items = media,
+                startIndex = at,
+                scopeKind = Scope.SERVER,
+                transferKey = Transfers.channelKey(channelId),
+                onClose = { mediaViewerAt = null },
+            )
+        } else {
+            mediaViewerAt = null
+        }
     }
 
     if (showAttach) {
