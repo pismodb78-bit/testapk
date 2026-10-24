@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
@@ -915,7 +916,7 @@ fun ChannelChatScreen(
                                         modifier = Modifier.fillMaxSize(),
                                     )
                                     Icon(
-                                        androidx.compose.material.icons.Icons.Default.PlayArrow,
+                                        Icons.Default.PlayArrow,
                                         null,
                                         tint = Color.White,
                                         modifier = Modifier.size(28.dp),

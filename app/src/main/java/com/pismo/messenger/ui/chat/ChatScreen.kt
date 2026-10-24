@@ -1859,7 +1859,9 @@ fun ChatScreen(
             )
         } else {
             LaunchedEffect(idx) {
-                val f = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val f: java.io.File? = kotlinx.coroutines.withContext(
+                    kotlinx.coroutines.Dispatchers.IO
+                ) {
                     runCatching {
                         val tmp = java.io.File(context.cacheDir, "attach-preview-" + idx)
                         tmp.writeBytes(att.bytes)
