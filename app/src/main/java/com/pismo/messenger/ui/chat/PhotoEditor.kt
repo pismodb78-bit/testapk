@@ -10,6 +10,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,13 +22,17 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoFixNormal
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Redo
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.AlertDialog
@@ -48,12 +53,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -75,14 +83,16 @@ import java.io.ByteArrayOutputStream
 /**
  * Рисование поверх снимка — как в редакторе Telegram.
  *
- * Три инструмента и ничего лишнего: кисть, надпись прямо на фотографии и
+ * Инструменты: перо, маркер, неон, ластик, надпись прямо на фотографии и
  * стикер — другой снимок с телефона (гифки не берём: в наклейке они всё
- * равно замрут первым кадром, а весят как ролик).
+ * равно замрут первым кадром, а весят как ролик). Любое действие можно
+ * отменить и вернуть обратно.
  *
- * Слои хранятся в ДОЛЯХ от размера снимка, а не в точках экрана. Поэтому
- * нарисованное ложится одинаково и на экране, и в готовом файле, какого бы
- * размера ни была фотография: при сохранении доли просто умножаются на её
- * настоящие пиксели.
+ * Слои хранятся в ДОЛЯХ от размера снимка — и положение, и толщина линии, и
+ * кегль надписи. Поэтому нарисованное ложится одинаково и на экране, и в
+ * готовом файле, какого бы размера ни была фотография. Раньше толщина
+ * задавалась в точках экрана, а при сборке домножалась на три — тонкая линия
+ * в готовом снимке превращалась в жирную полосу.
  */
 @Composable
 fun PhotoEditor(
@@ -97,15 +107,16 @@ fun PhotoEditor(
     }
     val image = remember(source) { source?.asImageBitmap() }
 
-    val strokes = remember { mutableStateListOf<PenStroke>() }
-    val texts = remember { mutableStateListOf<TextMark>() }
-    val stickers = remember { mutableStateListOf<StickerMark>() }
-    /** Порядок добавления — чтобы «отменить» убирало последнее по времени. */
-    val order = remember { mutableStateListOf<String>() }
+    // ОДИН список на всё нарисованное, в порядке появления: только так
+    // «отменить» и «вернуть» работают по-человечески — шаг за шагом, что бы
+    // это ни было: линия, надпись или наклейка.
+    val marks = remember { mutableStateListOf<Mark>() }
+    val undone = remember { mutableStateListOf<Mark>() }
 
-    var tool by remember { mutableStateOf(Tool.Brush) }
+    var tool by remember { mutableStateOf(Tool.Pen) }
     var color by remember { mutableStateOf(Color(0xFFFF3B30)) }
-    var width by remember { mutableFloatStateOf(10f) }
+    /** Толщина — ДОЛЯ ширины снимка, а не точки экрана. */
+    var width by remember { mutableFloatStateOf(0.012f) }
     var askText by remember { mutableStateOf(false) }
     var askColor by remember { mutableStateOf(false) }
     /** Свои цвета из палитры — встают рядом с готовыми. */
@@ -114,6 +125,12 @@ fun PhotoEditor(
 
     var frame by remember { mutableStateOf(Rect.Zero) }
     val measurer = rememberTextMeasurer()
+
+    fun add(m: Mark) {
+        marks += m
+        // Новое действие обрывает ветку «вернуть» — как в любом редакторе.
+        undone.clear()
+    }
 
     val stickerPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -130,8 +147,7 @@ fun PhotoEditor(
                     }
                 }.getOrNull()
             } ?: return@launch
-            stickers += StickerMark(bmp, Offset(0.5f, 0.45f), 0.35f)
-            order += "sticker"
+            add(StickerMark(bmp, Offset(0.5f, 0.45f), 0.35f))
         }
     }
 
@@ -147,20 +163,30 @@ fun PhotoEditor(
                 Canvas(
                     Modifier
                         .fillMaxSize()
-                        .pointerInput(tool) {
+                        .pointerInput(tool, color, width) {
                             detectDragGestures(
                                 onDragStart = { p ->
-                                    if (tool != Tool.Brush) return@detectDragGestures
+                                    if (!tool.draws) return@detectDragGestures
                                     val n = frame.normalize(p) ?: return@detectDragGestures
-                                    strokes += PenStroke(mutableStateListOf(n), color, width)
-                                    order += "stroke"
+                                    add(PenStroke(mutableStateListOf(n), color, width, tool))
                                 },
                                 onDrag = { change, _ ->
-                                    val n = frame.normalize(change.position) ?: return@detectDragGestures
+                                    val n = frame.normalize(change.position)
+                                        ?: return@detectDragGestures
+                                    // Надпись и наклейку таскаем ПОСЛЕДНЮЮ
+                                    // СВОЮ, а не последнюю вообще: иначе,
+                                    // нарисовав что-то после надписи, сдвинуть
+                                    // её было уже нельзя.
                                     when (tool) {
-                                        Tool.Brush -> strokes.lastOrNull()?.points?.add(n)
-                                        Tool.Text -> texts.lastOrNull()?.let { it.pos = n }
-                                        Tool.Sticker -> stickers.lastOrNull()?.let { it.pos = n }
+                                        Tool.Text ->
+                                            (marks.lastOrNull { it is TextMark } as? TextMark)
+                                                ?.pos = n
+
+                                        Tool.Sticker ->
+                                            (marks.lastOrNull { it is StickerMark } as? StickerMark)
+                                                ?.pos = n
+
+                                        else -> (marks.lastOrNull() as? PenStroke)?.points?.add(n)
                                     }
                                 },
                             )
@@ -181,55 +207,59 @@ fun PhotoEditor(
                         dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()),
                     )
 
-                    strokes.forEach { s ->
-                        if (s.points.size < 2) return@forEach
-                        val path = Path()
-                        val first = frame.denormalize(s.points.first())
-                        path.moveTo(first.x, first.y)
-                        s.points.drop(1).forEach { p ->
-                            val q = frame.denormalize(p)
-                            path.lineTo(q.x, q.y)
+                    // Линии рисуем в ОТДЕЛЬНОМ слое: ластик стирает
+                    // нарисованное, а не выедает дыру в самой фотографии.
+                    val pens = marks.filterIsInstance<PenStroke>()
+                    if (pens.isNotEmpty()) {
+                        drawIntoCanvas { canvas ->
+                            canvas.saveLayer(frame, androidx.compose.ui.graphics.Paint())
+                            pens.forEach { drawStroke(it, frame) }
+                            canvas.restore()
                         }
-                        drawPath(
-                            path = path,
-                            color = s.color,
-                            style = Stroke(width = s.width * k.coerceAtLeast(0.2f), cap = StrokeCap.Round),
-                        )
                     }
 
-                    stickers.forEach { st ->
-                        val img = st.bitmap.asImageBitmap()
-                        val sw = frame.width * st.scale
-                        val sh = sw * img.height / img.width.toFloat()
-                        val c = frame.denormalize(st.pos)
-                        drawImage(
-                            image = img,
-                            dstOffset = androidx.compose.ui.unit.IntOffset(
-                                (c.x - sw / 2f).toInt(), (c.y - sh / 2f).toInt()
-                            ),
-                            dstSize = androidx.compose.ui.unit.IntSize(sw.toInt(), sh.toInt()),
-                        )
-                    }
+                    marks.forEach { m ->
+                        when (m) {
+                            is StickerMark -> {
+                                val img = m.bitmap.asImageBitmap()
+                                val sw = frame.width * m.scale
+                                val sh = sw * img.height / img.width.toFloat()
+                                val c = frame.denormalize(m.pos)
+                                drawImage(
+                                    image = img,
+                                    dstOffset = androidx.compose.ui.unit.IntOffset(
+                                        (c.x - sw / 2f).toInt(), (c.y - sh / 2f).toInt()
+                                    ),
+                                    dstSize = androidx.compose.ui.unit.IntSize(sw.toInt(), sh.toInt()),
+                                )
+                            }
 
-                    texts.forEach { t ->
-                        val c = frame.denormalize(t.pos)
-                        val layout = measurer.measure(
-                            t.text,
-                            TextStyle(
-                                color = t.color,
-                                fontSize = (t.size * k).sp,
-                                fontWeight = FontWeight.Bold,
-                            ),
-                        )
-                        drawText(
-                            layout,
-                            topLeft = Offset(c.x - layout.size.width / 2f, c.y - layout.size.height / 2f),
-                        )
+                            is TextMark -> {
+                                val c = frame.denormalize(m.pos)
+                                val layout = measurer.measure(
+                                    m.text,
+                                    TextStyle(
+                                        color = m.color,
+                                        fontSize = (m.size * frame.width).toSp(),
+                                        fontWeight = FontWeight.Bold,
+                                    ),
+                                )
+                                drawText(
+                                    layout,
+                                    topLeft = Offset(
+                                        c.x - layout.size.width / 2f,
+                                        c.y - layout.size.height / 2f,
+                                    ),
+                                )
+                            }
+
+                            else -> Unit
+                        }
                     }
                 }
             }
 
-            // Верх: отмена, отменить последнее, готово.
+            // Верх: выйти, отменить, вернуть, готово.
             Row(
                 Modifier
                     .align(Alignment.TopCenter)
@@ -240,20 +270,17 @@ fun PhotoEditor(
             ) {
                 EditorButton(Icons.Default.Close, "Отмена") { onCancel() }
                 Box(Modifier.weight(1f))
-                EditorButton(Icons.Default.Undo, "Отменить последнее") {
-                    when (order.removeLastOrNull()) {
-                        "stroke" -> strokes.removeLastOrNull()
-                        "text" -> texts.removeLastOrNull()
-                        "sticker" -> stickers.removeLastOrNull()
-                    }
+                EditorButton(Icons.Default.Undo, "Отменить", enabled = marks.isNotEmpty()) {
+                    marks.removeLastOrNull()?.let { undone.add(it) }
+                }
+                EditorButton(Icons.Default.Redo, "Вернуть", enabled = undone.isNotEmpty()) {
+                    undone.removeLastOrNull()?.let { marks.add(it) }
                 }
                 EditorButton(Icons.Default.Check, "Готово", enabled = !busy, onClick = {
                     val src = source ?: return@EditorButton
                     busy = true
                     scope.launch {
-                        val out = withContext(Dispatchers.IO) {
-                            render(src, strokes.toList(), texts.toList(), stickers.toList())
-                        }
+                        val out = withContext(Dispatchers.IO) { render(src, marks.toList()) }
                         busy = false
                         if (out != null) onDone(out)
                     }
@@ -305,11 +332,25 @@ fun PhotoEditor(
                     }
                 }
 
+                // Инструментов больше, чем влезает в узкий экран, — ряд
+                // прокручивается вбок.
                 Row(
-                    Modifier.fillMaxWidth().padding(top = 10.dp),
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp)
+                        .horizontalScroll(rememberScrollState()),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    ToolChip("Кисть", Icons.Default.Brush, tool == Tool.Brush) { tool = Tool.Brush }
+                    ToolChip("Перо", Icons.Default.Create, tool == Tool.Pen) { tool = Tool.Pen }
+                    ToolChip("Маркер", Icons.Default.Brush, tool == Tool.Marker) {
+                        tool = Tool.Marker
+                    }
+                    ToolChip("Неон", Icons.Default.AutoFixNormal, tool == Tool.Neon) {
+                        tool = Tool.Neon
+                    }
+                    ToolChip("Ластик", Icons.Default.Close, tool == Tool.Eraser) {
+                        tool = Tool.Eraser
+                    }
                     ToolChip("Текст", Icons.Default.TextFields, tool == Tool.Text) {
                         tool = Tool.Text
                         askText = true
@@ -318,12 +359,18 @@ fun PhotoEditor(
                         tool = Tool.Sticker
                         stickerPicker.launch(arrayOf("image/*"))
                     }
-                    Box(Modifier.weight(1f))
-                    listOf(6f, 10f, 18f, 28f).forEach { w ->
+                }
+
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 10.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    listOf(0.006f, 0.012f, 0.022f, 0.036f).forEach { w ->
                         Box(
                             Modifier
-                                .padding(start = 8.dp)
-                                .size((w / 2 + 10).dp)
+                                .padding(start = 10.dp)
+                                .size((w * 700 + 10).dp)
                                 .clip(CircleShape)
                                 .background(if (width == w) Color.White else Color(0x66FFFFFF))
                                 .clickable { width = w },
@@ -365,10 +412,10 @@ fun PhotoEditor(
             confirmButton = {
                 TextButton(onClick = {
                     askText = false
-                    if (draft.isNotBlank()) {
-                        texts += TextMark(draft, Offset(0.5f, 0.5f), color, 26f)
-                        order += "text"
-                    }
+                    // Кегль — тоже доля ширины снимка: иначе надпись на
+                    // большом снимке вышла бы мелкой, а на маленьком — во
+                    // весь кадр.
+                    if (draft.isNotBlank()) add(TextMark(draft, Offset(0.5f, 0.5f), color, 0.06f))
                 }) { Text("Добавить", color = PismoColors.Blurple) }
             },
             dismissButton = {
@@ -380,19 +427,26 @@ fun PhotoEditor(
     }
 }
 
-private enum class Tool { Brush, Text, Sticker }
+private enum class Tool(val draws: Boolean) {
+    Pen(true), Marker(true), Neon(true), Eraser(true), Text(false), Sticker(false)
+}
+
+/** Что нарисовано поверх снимка — в порядке появления. */
+private sealed interface Mark
 
 private class PenStroke(
     val points: androidx.compose.runtime.snapshots.SnapshotStateList<Offset>,
     val color: Color,
+    /** Доля ширины снимка. */
     val width: Float,
-)
+    val kind: Tool,
+) : Mark
 
-private class TextMark(val text: String, pos: Offset, val color: Color, val size: Float) {
+private class TextMark(val text: String, pos: Offset, val color: Color, val size: Float) : Mark {
     var pos by mutableStateOf(pos)
 }
 
-private class StickerMark(val bitmap: Bitmap, pos: Offset, val scale: Float) {
+private class StickerMark(val bitmap: Bitmap, pos: Offset, val scale: Float) : Mark {
     var pos by mutableStateOf(pos)
 }
 
@@ -406,6 +460,58 @@ private fun Rect.normalize(p: Offset): Offset? {
 }
 
 private fun Rect.denormalize(p: Offset): Offset = Offset(left + p.x * width, top + p.y * height)
+
+/**
+ * Линия на экране. Толщина — доля ширины снимка, помноженная на его ширину
+ * НА ЭКРАНЕ; при сборке готового файла та же доля множится на настоящие
+ * пиксели. Поэтому что видно, то и уходит.
+ */
+private fun DrawScope.drawStroke(s: PenStroke, frame: Rect) {
+    val w = s.width * frame.width
+    if (s.points.size == 1) {
+        val c = frame.denormalize(s.points[0])
+        val r = (if (s.kind == Tool.Marker) w * 0.9f else w) / 2f
+        if (s.kind == Tool.Eraser) drawCircle(Color.Transparent, r * 1.6f, c, blendMode = BlendMode.Clear)
+        else drawCircle(s.color, r, c)
+        return
+    }
+    if (s.points.size < 2) return
+    val path = Path()
+    val first = frame.denormalize(s.points.first())
+    path.moveTo(first.x, first.y)
+    s.points.drop(1).forEach { p ->
+        val q = frame.denormalize(p)
+        path.lineTo(q.x, q.y)
+    }
+    when (s.kind) {
+        Tool.Marker -> drawPath(
+            path, s.color.copy(alpha = 0.4f),
+            style = Stroke(w * 1.8f, cap = StrokeCap.Square, join = StrokeJoin.Round),
+        )
+
+        Tool.Neon -> {
+            drawPath(
+                path, s.color.copy(alpha = 0.35f),
+                style = Stroke(w * 2.6f, cap = StrokeCap.Round, join = StrokeJoin.Round),
+            )
+            drawPath(
+                path, Color.White,
+                style = Stroke(w * 0.6f, cap = StrokeCap.Round, join = StrokeJoin.Round),
+            )
+        }
+
+        Tool.Eraser -> drawPath(
+            path, Color.Transparent,
+            style = Stroke(w * 1.6f, cap = StrokeCap.Round, join = StrokeJoin.Round),
+            blendMode = BlendMode.Clear,
+        )
+
+        else -> drawPath(
+            path, s.color,
+            style = Stroke(w, cap = StrokeCap.Round, join = StrokeJoin.Round),
+        )
+    }
+}
 
 @Composable
 private fun EditorButton(
@@ -423,7 +529,7 @@ private fun EditorButton(
             .clickable(enabled = enabled) { onClick() },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, hint, tint = Color.White)
+        Icon(icon, hint, tint = if (enabled) Color.White else Color(0x66FFFFFF))
     }
 }
 
@@ -456,55 +562,109 @@ private fun ToolChip(
 /**
  * Собрать готовый снимок: доли умножаем на настоящие пиксели, поэтому
  * нарисованное ложится ровно так, как было видно на экране.
+ *
+ * Линии идут в отдельный прозрачный слой — ластик стирает нарисованное, а не
+ * протирает дыру в фотографии.
  */
-private fun render(
-    src: Bitmap,
-    strokes: List<PenStroke>,
-    texts: List<TextMark>,
-    stickers: List<StickerMark>,
-): ByteArray? = runCatching {
+private fun render(src: Bitmap, marks: List<Mark>): ByteArray? = runCatching {
     val out = src.copy(Bitmap.Config.ARGB_8888, true) ?: return null
     val canvas = android.graphics.Canvas(out)
     val w = out.width.toFloat()
     val h = out.height.toFloat()
-    // Кисть задавалась в точках экрана при ширине снимка на экране; переводим
-    // через отношение ширин, иначе на большом снимке линия вышла бы волоском.
-    val penK = w / 1080f
 
-    strokes.forEach { s ->
-        if (s.points.size < 2) return@forEach
-        val paint = android.graphics.Paint().apply {
-            isAntiAlias = true
-            color = s.color.toArgb()
-            style = android.graphics.Paint.Style.STROKE
-            strokeWidth = s.width * 3f * penK
-            strokeCap = android.graphics.Paint.Cap.ROUND
-            strokeJoin = android.graphics.Paint.Join.ROUND
+    val pens = marks.filterIsInstance<PenStroke>()
+    if (pens.isNotEmpty()) {
+        val layer = Bitmap.createBitmap(out.width, out.height, Bitmap.Config.ARGB_8888)
+        val lc = android.graphics.Canvas(layer)
+        pens.forEach { s ->
+            val sw = s.width * w
+            val paint = android.graphics.Paint().apply {
+                isAntiAlias = true
+                color = s.color.toArgb()
+                style = android.graphics.Paint.Style.STROKE
+                strokeCap = android.graphics.Paint.Cap.ROUND
+                strokeJoin = android.graphics.Paint.Join.ROUND
+                strokeWidth = sw
+                when (s.kind) {
+                    Tool.Marker -> {
+                        alpha = 102
+                        strokeWidth = sw * 1.8f
+                        strokeCap = android.graphics.Paint.Cap.SQUARE
+                    }
+
+                    Tool.Eraser -> {
+                        strokeWidth = sw * 1.6f
+                        xfermode = android.graphics.PorterDuffXfermode(
+                            android.graphics.PorterDuff.Mode.CLEAR
+                        )
+                    }
+
+                    else -> Unit
+                }
+            }
+            if (s.points.size == 1) {
+                val c = s.points[0]
+                val fill = android.graphics.Paint(paint).apply {
+                    style = android.graphics.Paint.Style.FILL
+                }
+                lc.drawCircle(c.x * w, c.y * h, paint.strokeWidth / 2f, fill)
+                return@forEach
+            }
+            if (s.points.size < 2) return@forEach
+            val path = android.graphics.Path()
+            path.moveTo(s.points[0].x * w, s.points[0].y * h)
+            s.points.drop(1).forEach { p -> path.lineTo(p.x * w, p.y * h) }
+            if (s.kind == Tool.Neon) {
+                val glow = android.graphics.Paint(paint).apply {
+                    alpha = 90
+                    strokeWidth = sw * 2.6f
+                }
+                lc.drawPath(path, glow)
+                val core = android.graphics.Paint(paint).apply {
+                    color = android.graphics.Color.WHITE
+                    strokeWidth = sw * 0.6f
+                }
+                lc.drawPath(path, core)
+                return@forEach
+            }
+            lc.drawPath(path, paint)
         }
-        val path = android.graphics.Path()
-        path.moveTo(s.points[0].x * w, s.points[0].y * h)
-        s.points.drop(1).forEach { p -> path.lineTo(p.x * w, p.y * h) }
-        canvas.drawPath(path, paint)
+        canvas.drawBitmap(layer, 0f, 0f, null)
+        layer.recycle()
     }
 
-    stickers.forEach { st ->
-        val sw = w * st.scale
-        val sh = sw * st.bitmap.height / st.bitmap.width.toFloat()
-        val cx = st.pos.x * w
-        val cy = st.pos.y * h
-        val dst = android.graphics.RectF(cx - sw / 2f, cy - sh / 2f, cx + sw / 2f, cy + sh / 2f)
-        canvas.drawBitmap(st.bitmap, null, dst, android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
-    }
+    marks.forEach { m ->
+        when (m) {
+            is StickerMark -> {
+                val sw = w * m.scale
+                val sh = sw * m.bitmap.height / m.bitmap.width.toFloat()
+                val cx = m.pos.x * w
+                val cy = m.pos.y * h
+                val dst = android.graphics.RectF(
+                    cx - sw / 2f, cy - sh / 2f, cx + sw / 2f, cy + sh / 2f
+                )
+                canvas.drawBitmap(
+                    m.bitmap, null, dst,
+                    android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG),
+                )
+            }
 
-    texts.forEach { t ->
-        val paint = android.graphics.Paint().apply {
-            isAntiAlias = true
-            color = t.color.toArgb()
-            textSize = t.size * 3f * penK
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            textAlign = android.graphics.Paint.Align.CENTER
+            is TextMark -> {
+                val paint = android.graphics.Paint().apply {
+                    isAntiAlias = true
+                    color = m.color.toArgb()
+                    textSize = m.size * w
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    textAlign = android.graphics.Paint.Align.CENTER
+                }
+                // По середине строки: на экране надпись тоже стоит серединой
+                // в своей точке.
+                val mid = (paint.descent() + paint.ascent()) / 2f
+                canvas.drawText(m.text, m.pos.x * w, m.pos.y * h - mid, paint)
+            }
+
+            else -> Unit
         }
-        canvas.drawText(t.text, t.pos.x * w, t.pos.y * h, paint)
     }
 
     val bos = ByteArrayOutputStream()

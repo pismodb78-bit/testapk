@@ -615,7 +615,9 @@ fun ChannelChatScreen(
             // fillMaxWidth: без него ширину задаёт самый широкий ребёнок, и
             // на время загрузки им был сам индикатор — кружок уезжал влево.
             Box(Modifier.fillMaxWidth().weight(1f)) {
-                if (loading) {
+                // Кружок — только когда показывать нечего: перезагрузка
+                // ленты больше не стирает переписку серым полем.
+                if (loading && messages.isEmpty()) {
                     CircularProgressIndicator(
                         Modifier.align(Alignment.Center), color = PismoColors.Blurple,
                     )
@@ -1120,6 +1122,11 @@ fun ChannelChatScreen(
                 transferKey = Transfers.channelKey(channelId),
                 onClose = { mediaViewerAt = null },
                 target = channelId,
+                onEdited = { out ->
+                    pending = pending + PendingFile(
+                        bytes = out, fileName = "drawing.jpg", isImage = true,
+                    )
+                },
                 onShowInChat = { id ->
                     scope.launch {
                         // Просмотр листает весь канал, а лента держит только
@@ -1156,28 +1163,20 @@ fun ChannelChatScreen(
         com.pismo.messenger.ui.chat.AttachSheet(
             onDismiss = { showAttach = false },
             onCamera = { takePhoto() },
+            // Выбранное НЕ уходит сразу: прикрепляется к полю ввода, как в
+            // личной переписке. Подпись из листа переезжает в поле.
             onSend = { picked, cap ->
-                val replyId = replyTo?.id ?: 0
-                val text = cap.ifBlank { input.text.trim() }
-                replyTo = null
-                if (cap.isBlank()) input = TextFieldValue("")
+                if (cap.isNotBlank()) {
+                    val cur = input.text
+                    val merged = if (cur.isBlank()) cap else cur.trimEnd() + " " + cap
+                    input = TextFieldValue(merged, androidx.compose.ui.text.TextRange(merged.length))
+                }
                 scope.launch {
-                    com.pismo.messenger.ui.chat.sendPickedAttachments(
+                    com.pismo.messenger.ui.chat.attachPicked(
                         context = context,
                         picked = picked,
-                        caption = text,
-                        replyToId = replyId,
-                        where = Transfers.channelKey(channelId),
-                        enqueue = { bytes, name, isImage, t, rid ->
-                            Transfers.sendChannel(
-                                channelId = channelId,
-                                text = t,
-                                replyToId = rid,
-                                image = bytes.takeIf { isImage },
-                                file = bytes.takeIf { !isImage },
-                                fileName = name,
-                            )
-                        },
+                        used = pending.sumOf { it.bytes.size.toLong() },
+                        onAdd = { added -> pending = pending + added },
                         note = { jumpNote = it },
                     )
                 }

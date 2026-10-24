@@ -542,18 +542,12 @@ fun ChatScreen(
     // количество и на нуле ничего не менял.
     val reconnects by Db.reconnects.collectAsState()
 
-    // Счётчик переподключений монотонный, поэтому «был ли это реконнект»
-    // определяется сравнением с запомненным значением, а не проверкой > 0:
-    // иначе после первого же обрыва связи кружок появлялся бы навсегда.
-    var seenReconnects by remember(targetId) { mutableStateOf(reconnects) }
-
     LaunchedEffect(targetId, reconnects) {
-        val isReconnect = reconnects != seenReconnects
-        seenReconnects = reconnects
-        // Кружок ставим, только если показать нечего: с запомненной лентой
-        // он перекрыл бы уже нарисованные сообщения ради того же результата.
-        // После переподключения — ставим всегда, лента могла устареть.
-        if (remembered == null || isReconnect) loading = true
+        // Кружок ставим, только если показать нечего: с запомненной лентой он
+        // перекрыл бы уже нарисованные сообщения ради того же результата.
+        // После переподключения — тоже не ставим: лента обновится на месте, а
+        // «соединение» и «обновление» и так написаны в шапке.
+        if (remembered == null) loading = true
         reload(scrollToEnd = true)
     }
 
@@ -1178,7 +1172,14 @@ fun ChatScreen(
                         )
                     }
                 }
-                if (loading) {
+                // Кружок — ТОЛЬКО когда показывать нечего.
+                //
+                // Раньше любая перезагрузка ленты (переподключение, прыжок к
+                // сообщению вглубь истории) стирала переписку с экрана и
+                // оставляла серое поле с кружком посередине. Состояние и так
+                // написано в шапке — «соединение», «обновление»; выбрасывать
+                // ради него уже нарисованные сообщения незачем.
+                if (loading && messages.isEmpty()) {
                     CircularProgressIndicator(
                         Modifier.align(Alignment.Center),
                         color = PismoColors.Blurple,
@@ -1883,16 +1884,11 @@ fun ChatScreen(
                     }
                 },
                 // Нарисованное уходит новым снимком в эту же переписку.
-                onSendEdited = { out ->
-                    Transfers.sendChat(
-                        scopeKind = scopeKind,
-                        target = targetId,
-                        isGroup = isGroup,
-                        text = "",
-                        image = out,
-                        file = null,
-                        fileName = null,
-                        replyToId = 0,
+                // Нарисованное прикрепляем к полю ввода: к снимку можно
+                // дописать текст, и уходит всё одним сообщением.
+                onEdited = { out ->
+                    pending = pending + PendingFile(
+                        bytes = out, fileName = "drawing.jpg", isImage = true,
                     )
                 },
             )
@@ -1905,30 +1901,19 @@ fun ChatScreen(
         AttachSheet(
             onDismiss = { showAttach = false },
             onCamera = { takePhoto() },
+            // Выбранное НЕ уходит сразу: оно прикрепляется к полю ввода —
+            // как файл со скрепки и как снимок с камеры. Подпись из листа
+            // просто переезжает в поле, там её можно дописать.
             onSend = { picked, cap ->
-                val replyId = replyTo?.id ?: 0
-                val text = cap.ifBlank { input.trim() }
-                replyTo = null
-                if (cap.isBlank()) input = ""
+                if (cap.isNotBlank()) {
+                    input = if (input.isBlank()) cap else input.trimEnd() + " " + cap
+                }
                 scope.launch {
-                    sendPickedAttachments(
+                    attachPicked(
                         context = context,
                         picked = picked,
-                        caption = text,
-                        replyToId = replyId,
-                        where = Transfers.chatKey(isGroup, targetId),
-                        enqueue = { bytes, name, isImage, t, rid ->
-                            Transfers.sendChat(
-                                scopeKind = scopeKind,
-                                target = targetId,
-                                isGroup = isGroup,
-                                text = t,
-                                image = bytes.takeIf { isImage },
-                                file = bytes.takeIf { !isImage },
-                                fileName = name,
-                                replyToId = rid,
-                            )
-                        },
+                        used = pending.sumOf { it.bytes.size.toLong() },
+                        onAdd = { added -> pending = pending + added },
                         note = { jumpNote = it },
                     )
                 }

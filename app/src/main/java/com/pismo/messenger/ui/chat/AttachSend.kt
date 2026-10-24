@@ -2,9 +2,7 @@ package com.pismo.messenger.ui.chat
 
 import android.content.Context
 import com.pismo.messenger.core.toPortableImage
-import com.pismo.messenger.data.Transfers
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
@@ -14,76 +12,61 @@ import kotlinx.coroutines.withContext
  */
 private const val ALBUM_MAX = com.pismo.messenger.core.Albums.MAX
 
-/**
- * Сколько вложений держим «в полёте» одновременно.
- *
- * Очередь передач хранит байты задачи в памяти до её конца. Пачка из десяти
- * роликов, прочитанная разом, кладёт приложение ещё до первого байта на
- * сервере, поэтому следующий файл читаем только когда предыдущие
- * разгрузились.
- */
-private const val IN_FLIGHT_MAX = 2
 
 /**
- * Отправка выбранной пачки: читает по одному, режет на плитки по десять и
- * ставит в очередь передач.
+ * Выбранная пачка — В ПОЛЕ ВВОДА, а не сразу в чат.
  *
- * Подпись достаётся ПЕРВОМУ вложению первой плитки — как в Telegram. У
- * остальных текст пустой, и именно по этому признаку лента потом собирает их
- * обратно в одну плитку (см. core/Albums).
+ * Байты читаются здесь: до этого лист держал только ссылки. Общий предел —
+ * на всю пачку разом, потому что прикреплённое лежит в памяти до отправки, и
+ * десяток роликов иначе просто уронит приложение. Что не поместилось —
+ * называем поимённо, остальное прикрепляем: терять девять снимков из-за
+ * одного тяжёлого обидно.
+ *
+ * Дальше всё как со скрепкой: подпись дописывается в поле, а отправка режет
+ * пачку на плитки по десять (см. Albums) — порядок тот, в котором выбирали.
  */
-internal suspend fun sendPickedAttachments(
+internal suspend fun attachPicked(
     context: Context,
     picked: List<Picked>,
-    caption: String,
-    replyToId: Int,
-    where: String,
-    enqueue: (bytes: ByteArray, fileName: String?, isImage: Boolean, text: String, replyTo: Int) -> Unit,
+    used: Long,
+    onAdd: (List<PendingFile>) -> Unit,
     note: (String) -> Unit,
 ) {
     if (picked.isEmpty()) return
-    val tooBig = mutableListOf<String>()
-    var index = 0
+    val skipped = mutableListOf<String>()
+    val out = ArrayList<PendingFile>(picked.size)
+    var busy = used
 
     for (p in picked) {
-        // Ждём, пока очередь разгрузится: иначе вся пачка окажется в памяти.
-        while (Transfers.active.value.count { it.where == where } >= IN_FLIGHT_MAX) {
-            delay(250)
-        }
-
         val prepared = withContext(Dispatchers.IO) {
             runCatching {
+                // Размер узнаём ДО чтения: файл на 300 МБ иначе успел бы
+                // положить приложение ещё до проверки.
                 val declared = fileSizeOf(context, p.uri)
-                if (declared > MAX_ATTACH_BYTES) return@runCatching null
+                if (declared > 0 && busy + declared > MAX_ATTACH_BYTES) return@runCatching null
                 val bytes = context.contentResolver.openInputStream(p.uri)?.use { it.readBytes() }
                     ?: return@runCatching null
-                if (bytes.size > MAX_ATTACH_BYTES) return@runCatching null
+                if (busy + bytes.size > MAX_ATTACH_BYTES) return@runCatching null
                 // Картинку приводим к формату, который прочтут все клиенты:
                 // WebP и HEIC ПК не открывает.
                 if (p.isImage) toPortableImage(bytes, p.name) else bytes to p.name
             }.getOrNull()
         }
 
-        if (prepared == null) { tooBig += p.name; continue }
-        val (bytes, name) = prepared
-
-        val first = index == 0
-        enqueue(
-            bytes,
-            // Имя пишем только не-картинкам: с именем ПК рисует под фото
-            // вторую строку — карточку файла.
-            if (p.isImage) null else name,
-            p.isImage,
-            if (first) caption else "",
-            if (first) replyToId else 0,
+        if (prepared == null) { skipped += p.name; continue }
+        busy += prepared.first.size
+        out += PendingFile(
+            bytes = prepared.first,
+            fileName = prepared.second,
+            isImage = p.isImage,
         )
-        index++
     }
 
-    if (tooBig.isNotEmpty()) {
+    if (out.isNotEmpty()) onAdd(out)
+    if (skipped.isNotEmpty()) {
         note(
-            "Не отправлено — больше ${MAX_ATTACH_BYTES / 1024 / 1024} МБ за файл: " +
-                    tooBig.joinToString(", ")
+            "Не приложено — всего можно ${MAX_ATTACH_BYTES / 1024 / 1024} МБ за раз: " +
+                    skipped.joinToString(", ")
         )
     }
 }

@@ -94,8 +94,11 @@ fun MediaViewerHost(
     onShowInChat: ((Int) -> Unit)? = null,
     onReply: ((Int) -> Unit)? = null,
     onDelete: ((Int) -> Unit)? = null,
-    /** Отправить нарисованное новым снимком в этот же чат. */
-    onSendEdited: ((ByteArray) -> Unit)? = null,
+    /**
+     * Нарисованное — В ПОЛЕ ВВОДА, а не сразу в чат: к снимку можно дописать
+     * текст и отправить одним сообщением.
+     */
+    onEdited: ((ByteArray) -> Unit)? = null,
 ) {
     if (items.isEmpty()) return
 
@@ -218,7 +221,7 @@ fun MediaViewerHost(
                                     scope.launch { shareItem(context, cur, scopeKind) }
                                 },
                             )
-                            if (!cur.isVideo && onSendEdited != null) {
+                            if (!cur.isVideo && onEdited != null) {
                                 androidx.compose.material3.DropdownMenuItem(
                                     text = { Text("Рисовать") },
                                     onClick = {
@@ -346,7 +349,7 @@ fun MediaViewerHost(
                     onCancel = { editing = null },
                     onDone = { out ->
                         editing = null
-                        onSendEdited?.invoke(out)
+                        onEdited?.invoke(out)
                         onClose()
                     },
                 )
