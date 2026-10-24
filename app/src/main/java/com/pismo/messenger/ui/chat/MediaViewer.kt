@@ -122,6 +122,8 @@ fun MediaViewerHost(
     )
 
     // Полный список приехал — встаём на то же сообщение, что открывали.
+    // Переход мгновенный и без анимации: это не листание, а выравнивание
+    // номеров под новую ленту.
     LaunchedEffect(feed) {
         val at = feed.indexOfFirst { it.msgId == openedAt }
         if (at >= 0 && at != pager.currentPage) runCatching { pager.scrollToPage(at) }
@@ -140,7 +142,19 @@ fun MediaViewerHost(
 
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
+            // КЛЮЧ СТРАНИЦЫ — НОМЕР СООБЩЕНИЯ.
+            //
+            // Сразу после открытия лента подменяется полной (её привозит
+            // запрос по всей переписке), и тот же кадр оказывается под другим
+            // номером страницы. Без ключа Compose считает это новой страницей
+            // и собирает её заново: проигрыватель поднимается второй раз, и
+            // его кнопки видно мельканием. С ключом страница узнаётся по
+            // сообщению и переживает подмену целиком.
+            HorizontalPager(
+                state = pager,
+                key = { page -> feed.getOrNull(page)?.msgId ?: page },
+                modifier = Modifier.fillMaxSize(),
+            ) { page ->
                 val item = feed[page]
                 if (item.isVideo) {
                     VideoPage(
