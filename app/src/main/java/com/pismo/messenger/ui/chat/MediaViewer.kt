@@ -16,7 +16,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -203,7 +206,20 @@ fun MediaViewerHost(
             // ЗА нижним краем и просто не нажимался. Отдельный слой с
             // отступами под системные панели держит их в поле зрения, какой бы
             // ни была навигация на телефоне.
-            Box(Modifier.fillMaxSize().safeDrawingPadding()) {
+            // Отступы считаем САМИ и с запасом: внутри диалога система на
+            // части телефонов отдаёт их нулевыми, и кнопки ложились под
+            // жестовую черту. Берём большее из системного значения и
+            // гарантированного минимума — так панели всегда в поле зрения.
+            val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+            val statusInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .padding(
+                        top = maxOf(statusInset, 28.dp),
+                        bottom = maxOf(navInset, 44.dp) + 12.dp,
+                    ),
+            ) {
             if (chrome) {
                 // Стрелки — как в настольном Telegram: листать можно и свайпом,
                 // но нажатием по краю удобнее одной рукой.
@@ -335,7 +351,7 @@ fun MediaViewerHost(
                         // Снизу запас: если отступ системной панели вдруг
                         // придёт нулевым, кнопки всё равно не лягут на самый
                         // край и останутся нажимаемыми.
-                        .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 22.dp),
+                        .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
                 ) {
                     Text(
                         (if (cur.isVideo) "Видео " else "Фото ") +

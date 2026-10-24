@@ -21,7 +21,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -176,11 +179,18 @@ fun PhotoEditor(
         // колонку: диалог занимает экран целиком, включая зоны системных
         // панелей, и без этого нижняя полоса оказывалась ровно под жестовой
         // чертой — то есть за краем видимого.
+        // Отступы — свои и с запасом (см. то же в просмотре): системные в
+        // диалоге на части телефонов приходят нулевыми.
+        val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        val statusInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
         Column(
             Modifier
                 .fillMaxSize()
                 .background(Color.Black)
-                .safeDrawingPadding(),
+                .padding(
+                    top = maxOf(statusInset, 28.dp),
+                    bottom = maxOf(navInset, 44.dp) + 8.dp,
+                ),
         ) {
             EditorTopBar(
                 busy = busy,
@@ -336,7 +346,7 @@ fun PhotoEditor(
                     .fillMaxWidth()
                     .background(Color(0xAA000000))
                     // Снизу запас — см. то же в просмотре.
-                    .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 18.dp),
+                    .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
             ) {
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
