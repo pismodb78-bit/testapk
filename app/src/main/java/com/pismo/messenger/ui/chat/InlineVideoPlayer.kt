@@ -369,6 +369,10 @@ internal fun VideoSurface(
      * а живёт это состояние здесь.
      */
     onControlsChange: (Boolean) -> Unit = {},
+    /** Скорость воспроизведения: 0.2 … 2.0, как в меню плеера. */
+    speed: Float = 1f,
+    /** Проигрывать по кругу. */
+    looping: Boolean = false,
 ) {
     val context = LocalContext.current
     val view = remember(file.absolutePath) { VideoView(context) }
@@ -409,6 +413,20 @@ internal fun VideoSurface(
             runCatching { view.stopPlayback() }
             player = null
         }
+    }
+
+    // Скорость и «по кругу» — на живом проигрывателе.
+    //
+    // setPlaybackParams на ОСТАНОВЛЕННОМ плеере сам запускает
+    // воспроизведение, поэтому трогаем её только когда ролик и так идёт.
+    LaunchedEffect(speed, prepared, isPlaying) {
+        val mp = player ?: return@LaunchedEffect
+        if (!prepared || !isPlaying) return@LaunchedEffect
+        runCatching { mp.playbackParams = mp.playbackParams.setSpeed(speed) }
+    }
+    LaunchedEffect(looping, prepared) {
+        val mp = player ?: return@LaunchedEffect
+        runCatching { mp.isLooping = looping }
     }
 
     // Тикер позиции. Крутится только пока идёт воспроизведение: иначе он

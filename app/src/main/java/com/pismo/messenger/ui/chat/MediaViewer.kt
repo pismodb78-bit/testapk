@@ -128,13 +128,23 @@ fun MediaViewerHost(
     val context = LocalContext.current
     var chrome by remember { mutableStateOf(true) }
     var note by remember { mutableStateOf("") }
+    // Скорость и «по кругу» — как в меню плеера Telegram. Живут на уровне
+    // просмотра: переключил и листаешь дальше с тем же выбором.
+    var speed by remember { mutableFloatStateOf(1f) }
+    var looping by remember { mutableStateOf(false) }
+    var speedMenu by remember { mutableStateOf(false) }
 
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
                 val item = feed[page]
                 if (item.isVideo) {
-                    VideoPage(item, scopeKind, transferKey, onToggleChrome = { chrome = !chrome })
+                    VideoPage(
+                        item, scopeKind, transferKey,
+                        onToggleChrome = { chrome = !chrome },
+                        speed = speed,
+                        looping = looping,
+                    )
                 } else {
                     PhotoPage(item, scopeKind, onToggleChrome = { chrome = !chrome })
                 }
@@ -190,6 +200,23 @@ fun MediaViewerHost(
                                     scope.launch { shareItem(context, cur, scopeKind) }
                                 },
                             )
+                            if (cur.isVideo) {
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("Скорость · ${speedLabel(speed)}") },
+                                    onClick = { menu = false; speedMenu = true },
+                                )
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text(if (looping) "Не зацикливать" else "Зациклить") },
+                                    onClick = { menu = false; looping = !looping },
+                                )
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("Открыть в…") },
+                                    onClick = {
+                                        menu = false
+                                        scope.launch { openWith(context, cur, scopeKind) }
+                                    },
+                                )
+                            }
                             if (onShowInChat != null) {
                                 androidx.compose.material3.DropdownMenuItem(
                                     text = { Text("Показать в чате") },
@@ -211,6 +238,24 @@ fun MediaViewerHost(
                         }
                     }
                     RoundButton(Icons.Default.Close, "Закрыть", onClose)
+
+                    // Выбор скорости — отдельным списком, как в плеере.
+                    androidx.compose.material3.DropdownMenu(
+                        expanded = speedMenu,
+                        onDismissRequest = { speedMenu = false },
+                    ) {
+                        listOf(0.2f, 0.5f, 1f, 1.5f, 2f).forEach { v ->
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        speedLabel(v) + "  " + speedName(v),
+                                        color = if (v == speed) Color(0xFF4EA1FF) else Color.Unspecified,
+                                    )
+                                },
+                                onClick = { speedMenu = false; speed = v },
+                            )
+                        }
+                    }
                 }
 
                 // Подпись и инструменты.
@@ -373,6 +418,8 @@ private fun VideoPage(
     scopeKind: Scope,
     transferKey: String,
     onToggleChrome: () -> Unit,
+    speed: Float = 1f,
+    looping: Boolean = false,
 ) {
     val name = item.fileName ?: "video.mp4"
     var file by remember(item.msgId) { mutableStateOf(MediaCache.fileFor(item.msgId, "file", name)) }
@@ -398,6 +445,8 @@ private fun VideoPage(
                     onFullscreen = {},
                     onSave = {},
                     insetBottom = true,
+                    speed = speed,
+                    looping = looping,
                     // Стрелки и подписи просмотра НЕ прячем вместе с кнопками
                     // плеера: иначе у открытого ролика не было видно, чем
                     // перейти к соседнему.
@@ -506,5 +555,34 @@ private suspend fun shareBytes(
             android.content.Intent.createChooser(intent, "Поделиться")
                 .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
         )
+    }
+}
+
+/** «1x», «1.5x» — подпись скорости. */
+private fun speedLabel(v: Float): String =
+    if (v == v.toInt().toFloat()) "${v.toInt()}x" else "${v}x"
+
+/** Человеческое имя скорости, как в меню плеера. */
+private fun speedName(v: Float): String = when {
+    v < 0.4f -> "очень медленно"
+    v < 0.9f -> "медленно"
+    v < 1.1f -> "обычно"
+    v < 1.9f -> "быстро"
+    else -> "очень быстро"
+}
+
+/** Отдать ролик системному плееру — «Открыть в…». */
+private suspend fun openWith(
+    context: android.content.Context,
+    item: MediaItem,
+    scopeKind: Scope,
+) {
+    runCatching {
+        val name = item.fileName ?: "video.mp4"
+        val data = withContext(Dispatchers.IO) {
+            MediaCache.fileFor(item.msgId, "file", name)?.readBytes()
+                ?: ChatRepository.loadFile(item.msgId, scopeKind, name)
+        } ?: return
+        saveAndOpenFile(context, name, data)
     }
 }
