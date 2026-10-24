@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -105,6 +106,9 @@ fun PhotoEditor(
     var color by remember { mutableStateOf(Color(0xFFFF3B30)) }
     var width by remember { mutableFloatStateOf(10f) }
     var askText by remember { mutableStateOf(false) }
+    var askColor by remember { mutableStateOf(false) }
+    /** Свои цвета из палитры — встают рядом с готовыми. */
+    val custom = remember { mutableStateListOf<Color>() }
     var busy by remember { mutableStateOf(false) }
 
     var frame by remember { mutableStateOf(Rect.Zero) }
@@ -265,10 +269,26 @@ fun PhotoEditor(
                     .padding(horizontal = 12.dp, vertical = 10.dp),
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    listOf(
+                    // Палитра — любой оттенок, а не только семь готовых.
+                    Box(
+                        Modifier
+                            .size(26.dp)
+                            .clip(CircleShape)
+                            .background(
+                                androidx.compose.ui.graphics.Brush.sweepGradient(
+                                    listOf(
+                                        Color.Red, Color.Yellow, Color.Green,
+                                        Color.Cyan, Color.Blue, Color.Magenta, Color.Red,
+                                    )
+                                )
+                            )
+                            .border(1.dp, Color(0x99FFFFFF), CircleShape)
+                            .clickable { askColor = true },
+                    )
+                    (listOf(
                         Color(0xFFFF3B30), Color(0xFFFFCC00), Color(0xFF34C759),
                         Color(0xFF007AFF), Color(0xFFAF52DE), Color.White, Color.Black,
-                    ).forEach { c ->
+                    ) + custom).forEach { c ->
                         Box(
                             Modifier
                                 .size(26.dp)
@@ -311,6 +331,21 @@ fun PhotoEditor(
                 }
             }
         }
+    }
+
+    if (askColor) {
+        ColorPickerDialog(
+            initial = color,
+            onDismiss = { askColor = false },
+            onPick = { picked ->
+                askColor = false
+                color = picked
+                if (custom.none { it == picked }) {
+                    custom.add(0, picked)
+                    while (custom.size > 4) custom.removeAt(custom.lastIndex)
+                }
+            },
+        )
     }
 
     if (askText) {
@@ -475,3 +510,123 @@ private fun render(
     out.compress(Bitmap.CompressFormat.JPEG, 92, bos)
     bos.toByteArray()
 }.getOrNull()
+
+/**
+ * Палитра: оттенок, насыщенность и яркость тремя полосами.
+ *
+ * Системного выбора цвета на Android нет, а семи готовых кружков для
+ * рисования мало — здесь получается любой оттенок, и выбранный остаётся
+ * рядом с готовыми до конца правки.
+ */
+@Composable
+private fun ColorPickerDialog(
+    initial: Color,
+    onDismiss: () -> Unit,
+    onPick: (Color) -> Unit,
+) {
+    val start = remember(initial) {
+        val hsv = FloatArray(3)
+        android.graphics.Color.colorToHSV(initial.toArgb(), hsv)
+        hsv
+    }
+    var hue by remember { mutableFloatStateOf(start[0]) }
+    var sat by remember { mutableFloatStateOf(start[1].coerceAtLeast(0.05f)) }
+    var value by remember { mutableFloatStateOf(start[2].coerceAtLeast(0.05f)) }
+
+    val current = Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, value)))
+    val pure = Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, 1f, 1f)))
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = PismoColors.BgElevated,
+        title = { Text("Цвет", color = PismoColors.TextPrimary) },
+        text = {
+            Column {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(current)
+                        .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(10.dp)),
+                )
+
+                GradientBar(
+                    colors = listOf(
+                        Color.Red, Color.Yellow, Color.Green,
+                        Color.Cyan, Color.Blue, Color.Magenta, Color.Red,
+                    ),
+                    fraction = hue / 360f,
+                ) { hue = (it * 360f).coerceIn(0f, 360f) }
+
+                GradientBar(
+                    colors = listOf(Color.White, pure),
+                    fraction = sat,
+                ) { sat = it }
+
+                GradientBar(
+                    colors = listOf(Color.Black, pure),
+                    fraction = value,
+                ) { value = it }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onPick(current) }) {
+                Text("Выбрать", color = PismoColors.Blurple)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Отмена", color = PismoColors.TextSecondary)
+            }
+        },
+    )
+}
+
+/** Полоса-градиент с бегунком: нажатие и перетаскивание выбирают долю. */
+@Composable
+private fun GradientBar(
+    colors: List<Color>,
+    fraction: Float,
+    onChange: (Float) -> Unit,
+) {
+    var width by remember { mutableFloatStateOf(1f) }
+    Box(
+        Modifier
+            .padding(top = 12.dp)
+            .fillMaxWidth()
+            .height(28.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(androidx.compose.ui.graphics.Brush.horizontalGradient(colors))
+            .pointerInput(colors) {
+                width = size.width.toFloat()
+                detectDragGestures(
+                    onDragStart = { p -> onChange((p.x / size.width).coerceIn(0f, 1f)) },
+                    onDrag = { change, _ ->
+                        onChange((change.position.x / size.width).coerceIn(0f, 1f))
+                    },
+                )
+            }
+            .pointerInput(colors) {
+                androidx.compose.foundation.gestures.awaitEachGesture {
+                    val down = androidx.compose.foundation.gestures.awaitFirstDown()
+                    onChange((down.position.x / size.width).coerceIn(0f, 1f))
+                }
+            },
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                .height(28.dp),
+            contentAlignment = Alignment.CenterEnd,
+        ) {
+            Box(
+                Modifier
+                    .size(18.dp)
+                    .clip(CircleShape)
+                    .background(Color.White)
+                    .border(2.dp, Color(0x66000000), CircleShape),
+            )
+        }
+    }
+}
