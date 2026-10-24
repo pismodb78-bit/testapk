@@ -156,6 +156,7 @@ fun MediaViewerHost(
             // отступы считает уже сама разметка.
             decorFitsSystemWindows = false,
         )) {
+        com.pismo.messenger.ui.components.FullScreenDialogWindow()
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             // КЛЮЧ СТРАНИЦЫ — НОМЕР СООБЩЕНИЯ.
             //
@@ -579,6 +580,9 @@ private fun VideoPage(
                     onFullscreen = {},
                     onSave = {},
                     insetBottom = true,
+                    // Под полосой времени в просмотре лежат подпись и ряд
+                    // кнопок — поднимаем её над ними, иначе они бы спорили.
+                    barLift = 150.dp,
                     speed = speed,
                     looping = looping,
                     // Стрелки и подписи просмотра НЕ прячем вместе с кнопками

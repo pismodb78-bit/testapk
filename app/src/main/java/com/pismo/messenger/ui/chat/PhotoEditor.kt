@@ -166,6 +166,7 @@ fun PhotoEditor(
             // отступы считает уже сама разметка.
             decorFitsSystemWindows = false,
         )) {
+        com.pismo.messenger.ui.components.FullScreenDialogWindow()
         // ПАНЕЛИ — ОТДЕЛЬНЫМИ СТРОКАМИ, А НЕ ПОВЕРХ СНИМКА.
         //
         // Пока они лежали поверх и держались за края, нижняя уезжала под

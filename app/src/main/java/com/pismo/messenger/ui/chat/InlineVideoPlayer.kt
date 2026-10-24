@@ -386,6 +386,12 @@ internal fun VideoSurface(
     onPositionChange: (Int) -> Unit = {},
     insetBottom: Boolean = false,
     /**
+     * Насколько поднять полосу времени над нижним краем — если под ней лежит
+     * что-то своё (в окне просмотра это подпись и ряд кнопок). null — как
+     * обычно: высоко в полном экране, у края в пузыре.
+     */
+    barLift: androidx.compose.ui.unit.Dp? = null,
+    /**
      * Видно ли сейчас управление. Нужно полному экрану: ник и подпись
      * лежат поверх кадра рядом с кнопками и должны уходить вместе с ними,
      * а живёт это состояние здесь.
@@ -683,7 +689,7 @@ internal fun VideoSurface(
                     // такой высоты нет и мешать нечему — поднятая, она
                     // закрывала середину кадра, поэтому в ленте она лежит
                     // почти по нижнему краю, оставляя только зазор под палец.
-                    bottom = if (insetBottom) 84.dp else 8.dp,
+                    bottom = barLift ?: if (insetBottom) 84.dp else 8.dp,
                 )
                 .clip(RoundedCornerShape(18.dp))
                 // Полупрозрачнее: сквозь полосу видно кадр, а читается она
@@ -1085,6 +1091,7 @@ fun FullscreenVideoHost(
             decorFitsSystemWindows = false,
         ),
     ) {
+        com.pismo.messenger.ui.components.FullScreenDialogWindow()
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             VideoSurface(
                 file = video.file,
