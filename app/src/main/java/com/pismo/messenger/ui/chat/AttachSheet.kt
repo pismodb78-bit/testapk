@@ -32,7 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -272,8 +272,9 @@ fun AttachSheet(
 
             }
 
-            // Подпись и отправка — как в Telegram, прямо в листе: подпись
-            // уходит вместе с пачкой, а не отдельным сообщением следом.
+            // Подпись и галочка. Галочка НЕ отправляет: выбранное
+            // прикрепляется к полю ввода, и там к нему можно дописать текст —
+            // подпись из листа просто переезжает в поле.
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -317,7 +318,7 @@ fun AttachSheet(
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            Icons.Default.Send, "Отправить",
+                            Icons.Default.Check, "Прикрепить",
                             tint = if (chosen.isEmpty()) PismoColors.TextMuted else Color.White,
                         )
                     }
