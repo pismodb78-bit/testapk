@@ -192,7 +192,12 @@ private fun AlbumGrid(
             from = to
         }
     }
-    Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+    // Внешние углы мозаики скруглены, внутренние стыки — почти прямые, как в
+    // телеграме: альбом читается одной карточкой, а не россыпью квадратиков.
+    Column(
+        Modifier.clip(RoundedCornerShape(8.dp)),
+        verticalArrangement = Arrangement.spacedBy(gap),
+    ) {
         slices.forEach { range ->
             val count = range.last - range.first + 1
             val side = (width - gap * (count - 1)) / count
@@ -274,7 +279,7 @@ private fun AlbumCell(
     Box(
         Modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(4.dp))
+            .clip(RoundedCornerShape(2.dp))
             .background(Color(0x33000000))
             .focusProperties { canFocus = false }
             .combinedClickable(
