@@ -319,7 +319,11 @@ fun PhotoEditor(
                     .navigationBarsPadding()
                     .padding(horizontal = 12.dp, vertical = 10.dp),
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     // Палитра — любой оттенок, а не только семь готовых.
                     Box(
                         Modifier
@@ -355,12 +359,15 @@ fun PhotoEditor(
                     }
                 }
 
-                // Инструментов больше, чем влезает в узкий экран, — ряд
-                // прокручивается вбок.
+                // ИНСТРУМЕНТЫ И ТОЛЩИНА — В ОДНОМ РЯДУ.
+                //
+                // Тремя рядами панель переставала помещаться: нижний ряд с
+                // толщиной уезжал за край экрана, и выбрать её было нельзя.
+                // Ряд прокручивается вбок, поэтому длина ему не мешает.
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(top = 10.dp)
+                        .padding(top = 8.dp)
                         .horizontalScroll(rememberScrollState()),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -382,18 +389,20 @@ fun PhotoEditor(
                         tool = Tool.Sticker
                         stickerPicker.launch(arrayOf("image/*"))
                     }
-                }
 
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 10.dp),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                    // Толщина — тут же, за инструментами: кружки растут, как
+                    // и сама линия.
+                    Box(
+                        Modifier
+                            .padding(start = 4.dp, end = 6.dp)
+                            .size(width = 1.dp, height = 22.dp)
+                            .background(Color(0x44FFFFFF)),
+                    )
                     listOf(0.006f, 0.012f, 0.022f, 0.036f).forEach { w ->
                         Box(
                             Modifier
-                                .padding(start = 10.dp)
-                                .size((w * 700 + 10).dp)
+                                .padding(start = 8.dp)
+                                .size((w * 560 + 10).dp)
                                 .clip(CircleShape)
                                 .background(if (width == w) Color.White else Color(0x66FFFFFF))
                                 .clickable { width = w },
