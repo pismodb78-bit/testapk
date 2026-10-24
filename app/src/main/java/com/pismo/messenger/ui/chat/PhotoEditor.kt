@@ -10,6 +10,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -62,6 +63,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -164,6 +166,23 @@ fun PhotoEditor(
                     Modifier
                         .fillMaxSize()
                         .pointerInput(tool, color, width) {
+                            // Наклейку двигают, крутят и растягивают ДВУМЯ
+                            // пальцами — обычным щипком, как в телеграме.
+                            if (tool == Tool.Sticker) {
+                                detectTransformGestures { _, pan, zoom, rot ->
+                                    val st = marks.lastOrNull { it is StickerMark } as? StickerMark
+                                        ?: return@detectTransformGestures
+                                    if (frame.width > 0f && frame.height > 0f) {
+                                        st.pos = Offset(
+                                            (st.pos.x + pan.x / frame.width).coerceIn(0f, 1f),
+                                            (st.pos.y + pan.y / frame.height).coerceIn(0f, 1f),
+                                        )
+                                    }
+                                    st.scale = (st.scale * zoom).coerceIn(0.05f, 1.6f)
+                                    st.angle += rot
+                                }
+                                return@pointerInput
+                            }
                             detectDragGestures(
                                 onDragStart = { p ->
                                     if (!tool.draws) return@detectDragGestures
@@ -225,13 +244,17 @@ fun PhotoEditor(
                                 val sw = frame.width * m.scale
                                 val sh = sw * img.height / img.width.toFloat()
                                 val c = frame.denormalize(m.pos)
-                                drawImage(
-                                    image = img,
-                                    dstOffset = androidx.compose.ui.unit.IntOffset(
-                                        (c.x - sw / 2f).toInt(), (c.y - sh / 2f).toInt()
-                                    ),
-                                    dstSize = androidx.compose.ui.unit.IntSize(sw.toInt(), sh.toInt()),
-                                )
+                                rotate(m.angle, pivot = c) {
+                                    drawImage(
+                                        image = img,
+                                        dstOffset = androidx.compose.ui.unit.IntOffset(
+                                            (c.x - sw / 2f).toInt(), (c.y - sh / 2f).toInt()
+                                        ),
+                                        dstSize = androidx.compose.ui.unit.IntSize(
+                                            sw.toInt(), sh.toInt()
+                                        ),
+                                    )
+                                }
                             }
 
                             is TextMark -> {
@@ -446,8 +469,12 @@ private class TextMark(val text: String, pos: Offset, val color: Color, val size
     var pos by mutableStateOf(pos)
 }
 
-private class StickerMark(val bitmap: Bitmap, pos: Offset, val scale: Float) : Mark {
+private class StickerMark(val bitmap: Bitmap, pos: Offset, scale: Float) : Mark {
     var pos by mutableStateOf(pos)
+    /** Доля ширины снимка. Щипком — больше или меньше. */
+    var scale by mutableFloatStateOf(scale)
+    /** Поворот в градусах — тем же щипком, двумя пальцами. */
+    var angle by mutableFloatStateOf(0f)
 }
 
 /** Экранная точка → доля от снимка (0..1). Вне снимка — null. */
@@ -643,10 +670,13 @@ private fun render(src: Bitmap, marks: List<Mark>): ByteArray? = runCatching {
                 val dst = android.graphics.RectF(
                     cx - sw / 2f, cy - sh / 2f, cx + sw / 2f, cy + sh / 2f
                 )
+                val save = canvas.save()
+                canvas.rotate(m.angle, cx, cy)
                 canvas.drawBitmap(
                     m.bitmap, null, dst,
                     android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG),
                 )
+                canvas.restoreToCount(save)
             }
 
             is TextMark -> {

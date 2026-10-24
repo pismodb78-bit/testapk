@@ -107,6 +107,12 @@ fun InlineVideoBubble(
     isMine: Boolean = false,
     /** Ключ переписки — чтобы полоса загрузки встала в своём чате. */
     where: String = "",
+    /**
+     * Обложка, пришедшая ВМЕСТЕ с сообщением: отправитель кладёт кадр ролика
+     * картинкой в ту же строку. По ней видно, что за ролик, ещё до загрузки
+     * файла, и по ней же пузырь сразу встаёт правильной формы.
+     */
+    poster: ByteArray? = null,
     onFullscreen: (java.io.File, String, Int) -> Unit = { _, _, _ -> },
 ) {
     val context = LocalContext.current
@@ -147,6 +153,18 @@ fun InlineVideoBubble(
     // это и есть «рассинхрон звука в полном экране».
     var handoffMs by remember(msgId) { mutableIntStateOf(VideoPositions.get(msgId)) }
     var livePosMs by remember(msgId) { mutableIntStateOf(VideoPositions.get(msgId)) }
+
+    // Обложка из самого сообщения — она есть ещё до загрузки файла.
+    LaunchedEffect(poster) {
+        if (cover != null || poster == null || poster.isEmpty()) return@LaunchedEffect
+        val bmp = withContext(Dispatchers.IO) {
+            runCatching {
+                android.graphics.BitmapFactory.decodeByteArray(poster, 0, poster.size)
+            }.getOrNull()
+        } ?: return@LaunchedEffect
+        VideoShapes.remember(msgId, bmp.width, bmp.height)
+        cover = bmp
+    }
 
     // Обложка = первый кадр. Достаём в фоне: MediaMetadataRetriever
     // раскодирует кадр, на главном потоке это заметная пауза.

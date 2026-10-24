@@ -416,7 +416,8 @@ fun ChannelChatScreen(
                     channelId = channelId,
                     text = if (i == 0) text else "",
                     replyToId = if (i == 0) replyTo?.id ?: 0 else 0,
-                    image = att.bytes.takeIf { att.isImage },
+                    // У ролика картинка — это его обложка (см. VideoCover).
+                    image = if (att.isImage) att.bytes else att.cover,
                     file = att.bytes.takeIf { !att.isImage },
                     // Имя файла только для не-картинок: с ним ПК рисует под
                     // фото вторую строку-карточку того же вложения.
@@ -482,11 +483,14 @@ fun ChannelChatScreen(
                     val (outBytes, outName) =
                         if (isImg) com.pismo.messenger.core.toPortableImage(bytes, name)
                         else bytes to name
+                    val img = com.pismo.messenger.core.isImageName(name) ||
+                            com.pismo.messenger.core.isGifName(name)
                     added += PendingFile(
                         bytes = outBytes,
                         fileName = outName,
-                        isImage = com.pismo.messenger.core.isImageName(name) ||
-                                com.pismo.messenger.core.isGifName(name),
+                        isImage = img,
+                        cover = if (!img && com.pismo.messenger.core.MediaKinds.isVideo(outName))
+                            com.pismo.messenger.ui.chat.videoCoverJpeg(outBytes) else null,
                     )
                 }
             }

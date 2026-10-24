@@ -342,6 +342,12 @@ fun MessageBubble(
                             Spacer(Modifier.height(6.dp))
                         }
 
+                        // У РОЛИКА КАРТИНКА — ЭТО ЕГО ОБЛОЖКА, а не второе
+                        // вложение: отправитель кладёт в сообщение и кадр, и
+                        // сам файл. Рисовать её отдельной фотографией нельзя —
+                        // получилось бы два вложения на одно сообщение.
+                        val videoCover = msg.hasFile && MediaKinds.isVideo(msg.fileName)
+
                         // И ПОД КАРТИНКУ — ТОЖЕ.
                         //
                         // Она тоже едет отдельно, и до её приезда пузырь не
@@ -353,7 +359,7 @@ fun MessageBubble(
                         // самой картинки, дальше заглушка встаёт ровно той же
                         // высоты, и сдвига нет вовсе. Пока их неоткуда взять,
                         // держим обычные для фотографии 4:3.
-                        if (image == null && msg.hasImage) {
+                        if (image == null && msg.hasImage && !videoCover) {
                             Box(
                                 Modifier
                                     // Ширина у всех медиа-пузырей одна (280):
@@ -368,7 +374,7 @@ fun MessageBubble(
                             Spacer(Modifier.height(6.dp))
                         }
 
-                        image?.let { bytes ->
+                        image?.takeIf { !videoCover }?.let { bytes ->
                             val mod = Modifier
                                 .widthIn(max = 304.dp)
                                 .clip(RoundedCornerShape(8.dp))
@@ -426,7 +432,7 @@ fun MessageBubble(
                         // Видео и музыка играют прямо в пузыре — как на ПК,
                         // где для них создаётся InlineVideoPlayer, а не
                         // карточка «нажмите для загрузки».
-                        val playableVideo = msg.hasFile && MediaKinds.isVideo(msg.fileName)
+                        val playableVideo = videoCover
                         val playableAudio = msg.hasFile && MediaKinds.isAudio(msg.fileName)
                         if (playableVideo) {
                             InlineVideoBubble(
@@ -437,6 +443,11 @@ fun MessageBubble(
                                 // Загрузка идёт общей очередью, и её полоса
                                 // должна встать в этой же переписке.
                                 where = transferKey,
+                                // Обложка — та самая картинка сообщения: по
+                                // ней видно, что за ролик, ещё до загрузки, и
+                                // по ней же пузырь сразу встаёт правильной
+                                // формы (вертикальное видео — вертикальным).
+                                poster = image,
                                 onFullscreen = onOpenVideo,
                             )
                             Spacer(Modifier.height(6.dp))

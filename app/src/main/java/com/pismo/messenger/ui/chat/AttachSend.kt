@@ -55,10 +55,16 @@ internal suspend fun attachPicked(
 
         if (prepared == null) { skipped += p.name; continue }
         busy += prepared.first.size
+        // У ролика достаём кадр: он уйдёт обложкой в ту же строку сообщения
+        // (см. VideoCover) и будет виден собеседнику до загрузки файла.
+        val cover = if (p.isVideo) withContext(Dispatchers.IO) {
+            videoCoverJpeg(prepared.first)
+        } else null
         out += PendingFile(
             bytes = prepared.first,
             fileName = prepared.second,
             isImage = p.isImage,
+            cover = cover,
         )
     }
 

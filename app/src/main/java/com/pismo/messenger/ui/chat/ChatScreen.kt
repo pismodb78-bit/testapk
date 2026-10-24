@@ -822,7 +822,13 @@ fun ChatScreen(
                     // прикрепляется, к нему можно дописать текст, и уходит всё
                     // одним сообщением; здесь же получалось два — сначала файл,
                     // потом отдельно подпись.
-                    added += PendingFile(bytes = outBytes, fileName = outName, isImage = isImage)
+                    added += PendingFile(
+                        bytes = outBytes,
+                        fileName = outName,
+                        isImage = isImage,
+                        cover = if (!isImage && com.pismo.messenger.core.MediaKinds.isVideo(outName))
+                            videoCoverJpeg(outBytes) else null,
+                    )
                 }
             }
             if (added.isNotEmpty()) pending = pending + added
@@ -910,7 +916,9 @@ fun ChatScreen(
                     target = targetId,
                     isGroup = isGroup,
                     text = if (i == 0) text else "",
-                    image = att.bytes.takeIf { att.isImage },
+                    // У ролика в картинку кладётся ОБЛОЖКА: место под неё в
+                    // строке свободно, а собеседник видит кадр сразу.
+                    image = if (att.isImage) att.bytes else att.cover,
                     file = att.bytes.takeIf { !att.isImage },
                     // Имя файла — ТОЛЬКО для не-картинок. Пока оно писалось
                     // и для изображений, собеседник на ПК видел под фото
@@ -2070,6 +2078,11 @@ internal data class PendingFile(
     val bytes: ByteArray,
     val fileName: String,
     val isImage: Boolean,
+    /**
+     * Кадр ролика — уходит картинкой в ту же строку сообщения, чтобы
+     * собеседник видел обложку ещё до загрузки файла (см. VideoCover).
+     */
+    val cover: ByteArray? = null,
 ) {
     // ByteArray сравнивается по ссылке, поэтому equals/hashCode пишем руками:
     // без них Compose считал бы одинаковые вложения разными и лишний раз
