@@ -182,14 +182,23 @@ private fun AlbumGrid(
     // мозаика получается плотной, без синих проплешин.
     val width = 304.dp
     val gap = 2.dp
-    var taken = 0
-    Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+    // Ряды считаем ЗАРАНЕЕ, здесь же: внутри Column нельзя вести счётчик —
+    // Compose перезапускает вложенные куски сам по себе, и счётчик уехал бы.
+    val slices = ArrayList<IntRange>(4).also { out ->
+        var from = 0
         albumRows(msgs.size).forEach { count ->
+            val to = minOf(from + count, msgs.size)
+            if (from < to) out.add(from until to)
+            from = to
+        }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+        slices.forEach { range ->
+            val count = range.last - range.first + 1
             val side = (width - gap * (count - 1)) / count
             Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
-                repeat(count) {
-                    val m = msgs[taken]
-                    taken++
+                range.forEach { i ->
+                    val m = msgs[i]
                     Box(Modifier.width(side).height(side)) {
                         AlbumCell(
                             msg = m,
