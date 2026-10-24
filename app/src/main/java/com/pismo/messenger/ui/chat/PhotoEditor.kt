@@ -154,7 +154,33 @@ fun PhotoEditor(
     }
 
     Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(Modifier.fillMaxSize().background(Color.Black)) {
+        // ПАНЕЛИ — ОТДЕЛЬНЫМИ СТРОКАМИ, А НЕ ПОВЕРХ СНИМКА.
+        //
+        // Пока они лежали поверх и держались за края, нижняя уезжала под
+        // экран: в диалоге отступы системных панелей считаются не так, как в
+        // обычном окне, и на часть телефонов панель просто не помещалась.
+        // Колонка этого не умеет в принципе: сверху кнопки, снизу
+        // инструменты, снимку — всё, что осталось между ними.
+        Column(Modifier.fillMaxSize().background(Color.Black)) {
+            EditorTopBar(
+                busy = busy,
+                canUndo = marks.isNotEmpty(),
+                canRedo = undone.isNotEmpty(),
+                onCancel = onCancel,
+                onUndo = { marks.removeLastOrNull()?.let { undone.add(it) } },
+                onRedo = { undone.removeLastOrNull()?.let { marks.add(it) } },
+                onDone = {
+                    val src = source ?: return@EditorTopBar
+                    busy = true
+                    scope.launch {
+                        val out = withContext(Dispatchers.IO) { render(src, marks.toList()) }
+                        busy = false
+                        if (out != null) onDone(out)
+                    }
+                },
+            )
+
+            Box(Modifier.weight(1f).fillMaxWidth()) {
             if (image == null) {
                 Text(
                     "Не удалось открыть снимок",
@@ -282,38 +308,11 @@ fun PhotoEditor(
                 }
             }
 
-            // Верх: выйти, отменить, вернуть, готово.
-            Row(
-                Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                EditorButton(Icons.Default.Close, "Отмена") { onCancel() }
-                Box(Modifier.weight(1f))
-                EditorButton(Icons.Default.Undo, "Отменить", enabled = marks.isNotEmpty()) {
-                    marks.removeLastOrNull()?.let { undone.add(it) }
-                }
-                EditorButton(Icons.Default.Redo, "Вернуть", enabled = undone.isNotEmpty()) {
-                    undone.removeLastOrNull()?.let { marks.add(it) }
-                }
-                EditorButton(Icons.Default.Check, "Готово", enabled = !busy, onClick = {
-                    val src = source ?: return@EditorButton
-                    busy = true
-                    scope.launch {
-                        val out = withContext(Dispatchers.IO) { render(src, marks.toList()) }
-                        busy = false
-                        if (out != null) onDone(out)
-                    }
-                })
             }
 
             // Низ: инструменты, цвета и толщина.
             Column(
                 Modifier
-                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .background(Color(0xAA000000))
                     .navigationBarsPadding()
@@ -456,6 +455,33 @@ fun PhotoEditor(
                 }
             },
         )
+    }
+}
+
+/** Верхняя полоса редактора: выйти, отменить, вернуть, готово. */
+@Composable
+private fun EditorTopBar(
+    busy: Boolean,
+    canUndo: Boolean,
+    canRedo: Boolean,
+    onCancel: () -> Unit,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
+    onDone: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(Color(0xAA000000))
+            .statusBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        EditorButton(Icons.Default.Close, "Отмена") { onCancel() }
+        Box(Modifier.weight(1f))
+        EditorButton(Icons.Default.Undo, "Отменить", enabled = canUndo) { onUndo() }
+        EditorButton(Icons.Default.Redo, "Вернуть", enabled = canRedo) { onRedo() }
+        EditorButton(Icons.Default.Check, "Готово", enabled = !busy) { onDone() }
     }
 }
 
