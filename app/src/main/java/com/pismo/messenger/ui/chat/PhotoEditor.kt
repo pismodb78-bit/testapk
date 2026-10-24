@@ -152,7 +152,17 @@ fun PhotoEditor(
         }
     }
 
-    Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = onCancel, properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            // БЕЗ ЭТОГО ОТСТУПЫ СИСТЕМНЫХ ПАНЕЛЕЙ НЕ ДОХОДЯТ.
+            //
+            // Окно диалога по умолчанию «подогнано под декор», и внутри него
+            // отступы под строку состояния и жестовую черту приходят нулевыми.
+            // Нижний ряд кнопок из-за этого ложился под черту и за край
+            // экрана. Со сброшенной подгонкой окно идёт во весь экран, а
+            // отступы считает уже сама разметка.
+            decorFitsSystemWindows = false,
+        )) {
         // ПАНЕЛИ — ОТДЕЛЬНЫМИ СТРОКАМИ, А НЕ ПОВЕРХ СНИМКА.
         //
         // Пока они лежали поверх и держались за края, нижняя уезжала под
@@ -325,7 +335,8 @@ fun PhotoEditor(
                 Modifier
                     .fillMaxWidth()
                     .background(Color(0xAA000000))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    // Снизу запас — см. то же в просмотре.
+                    .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 18.dp),
             ) {
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),

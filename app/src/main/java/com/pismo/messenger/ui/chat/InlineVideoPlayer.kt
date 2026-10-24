@@ -1073,7 +1073,17 @@ fun FullscreenVideoHost(
 
     Dialog(
         onDismissRequest = { close() },
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            // БЕЗ ЭТОГО ОТСТУПЫ СИСТЕМНЫХ ПАНЕЛЕЙ НЕ ДОХОДЯТ.
+            //
+            // Окно диалога по умолчанию «подогнано под декор», и внутри него
+            // отступы под строку состояния и жестовую черту приходят нулевыми.
+            // Нижний ряд кнопок из-за этого ложился под черту и за край
+            // экрана. Со сброшенной подгонкой окно идёт во весь экран, а
+            // отступы считает уже сама разметка.
+            decorFitsSystemWindows = false,
+        ),
     ) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             VideoSurface(

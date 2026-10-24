@@ -14,10 +14,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -143,7 +142,17 @@ fun MediaViewerHost(
     // Снимок, открытый в рисовании.
     var editing by remember { mutableStateOf<ByteArray?>(null) }
 
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            // БЕЗ ЭТОГО ОТСТУПЫ СИСТЕМНЫХ ПАНЕЛЕЙ НЕ ДОХОДЯТ.
+            //
+            // Окно диалога по умолчанию «подогнано под декор», и внутри него
+            // отступы под строку состояния и жестовую черту приходят нулевыми.
+            // Нижний ряд кнопок из-за этого ложился под черту и за край
+            // экрана. Со сброшенной подгонкой окно идёт во весь экран, а
+            // отступы считает уже сама разметка.
+            decorFitsSystemWindows = false,
+        )) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             // КЛЮЧ СТРАНИЦЫ — НОМЕР СООБЩЕНИЯ.
             //
@@ -186,6 +195,15 @@ fun MediaViewerHost(
             val cur = feed.getOrNull(pager.currentPage) ?: return@Box
             var menu by remember { mutableStateOf(false) }
 
+            // ВЕСЬ ИНТЕРФЕЙС ПРОСМОТРА — СТРОГО ВНУТРИ ВИДИМОЙ ОБЛАСТИ.
+            //
+            // Кадр занимает экран целиком, вместе с зонами строки состояния и
+            // жестовой черты, — так и надо. А вот кнопки туда попадать не
+            // должны: нижний ряд (сохранить, поделиться, ответить) оказывался
+            // ЗА нижним краем и просто не нажимался. Отдельный слой с
+            // отступами под системные панели держит их в поле зрения, какой бы
+            // ни была навигация на телефоне.
+            Box(Modifier.fillMaxSize().safeDrawingPadding()) {
             if (chrome) {
                 // Стрелки — как в настольном Telegram: листать можно и свайпом,
                 // но нажатием по краю удобнее одной рукой.
@@ -206,7 +224,6 @@ fun MediaViewerHost(
                 Row(
                     Modifier
                         .align(Alignment.TopEnd)
-                        .statusBarsPadding()
                         .padding(8.dp),
                 ) {
                     Box {
@@ -315,8 +332,10 @@ fun MediaViewerHost(
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
                         .background(Color(0x99000000))
-                        .navigationBarsPadding()
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                        // Снизу запас: если отступ системной панели вдруг
+                        // придёт нулевым, кнопки всё равно не лягут на самый
+                        // край и останутся нажимаемыми.
+                        .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 22.dp),
                 ) {
                     Text(
                         (if (cur.isVideo) "Видео " else "Фото ") +
@@ -352,6 +371,7 @@ fun MediaViewerHost(
                         }
                     }
                 }
+            }
             }
 
             // Рисование поверх снимка — кисть, надпись, стикер.
