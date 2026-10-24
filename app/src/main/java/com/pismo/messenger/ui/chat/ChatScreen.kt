@@ -979,10 +979,18 @@ fun ChatScreen(
 
     // Отправка закончилась (или отменена) — перечитываем: сообщение с файлом
     // появилось целиком, отменённое исчезло.
+    //
+    // СЧИТАЕМ ТОЛЬКО ОТПРАВКИ и ленту вниз НЕ ТАЩИМ.
+    //
+    // Раньше считались все передачи чата, включая ЗАГРУЗКИ с сервера, а
+    // перемотка просилась силой. Из-за этого любой докачавшийся файл —
+    // например ролик, который человек открыл, читая историю, — кидал ленту в
+    // самый низ. Теперь перемотка обычная: она сработает, только если человек
+    // и так стоял у конца.
     val uploadCount = Transfers.active.collectAsState().value
-        .count { it.where == Transfers.chatKey(isGroup, targetId) }
+        .count { it.where == Transfers.chatKey(isGroup, targetId) && !it.download }
     LaunchedEffect(uploadCount) {
-        if (uploadCount == 0) reload(scrollToEnd = true, force = true)
+        if (uploadCount == 0) reload(scrollToEnd = true)
     }
 
     val readOnly = !isGroup && (iBlocked || theyBlocked)

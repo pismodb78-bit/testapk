@@ -459,8 +459,10 @@ fun ChannelChatScreen(
     }
 
     // Отправка файла закончилась или отменена — перечитываем канал.
+    // Только ОТПРАВКИ: докачавшийся с сервера файл не повод трогать ленту
+    // (см. то же в личной переписке).
     val chanUploadCount = Transfers.active.collectAsState().value
-        .count { it.where == Transfers.channelKey(channelId) }
+        .count { it.where == Transfers.channelKey(channelId) && !it.download }
     LaunchedEffect(chanUploadCount) {
         if (chanUploadCount == 0) reload(scrollToEnd = true)
     }
