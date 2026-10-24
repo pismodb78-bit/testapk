@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -598,6 +599,11 @@ private fun GradientBar(
             .height(28.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(androidx.compose.ui.graphics.Brush.horizontalGradient(colors))
+            // Нажатие и перетаскивание — двумя обработчиками: тап сам по
+            // себе перетаскиванием не считается, а ловить его нужно.
+            .pointerInput(colors) {
+                detectTapGestures { p -> onChange((p.x / size.width).coerceIn(0f, 1f)) }
+            }
             .pointerInput(colors) {
                 width = size.width.toFloat()
                 detectDragGestures(
@@ -606,12 +612,6 @@ private fun GradientBar(
                         onChange((change.position.x / size.width).coerceIn(0f, 1f))
                     },
                 )
-            }
-            .pointerInput(colors) {
-                androidx.compose.foundation.gestures.awaitEachGesture {
-                    val down = androidx.compose.foundation.gestures.awaitFirstDown()
-                    onChange((down.position.x / size.width).coerceIn(0f, 1f))
-                }
             },
     ) {
         Box(
