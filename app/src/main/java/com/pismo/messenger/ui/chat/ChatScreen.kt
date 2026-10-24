@@ -971,19 +971,25 @@ fun ChatScreen(
     val readOnly = !isGroup && (iBlocked || theyBlocked)
 
     /**
+     * Лента ровно в том виде, в каком её рисует LazyColumn: пачка вложений —
+     * ОДИН элемент, порядок перевёрнут (нулевой элемент — самое свежее).
+     * Разметка и прыжки берут список отсюда, чтобы не разъехаться.
+     */
+    fun feedGroups(): List<List<ChatMessage>> =
+        com.pismo.messenger.core.Albums.group(
+            messages.filter { !readOnly || it.isMine },
+        ) { reactions[it.id]?.isNotEmpty() == true }.asReversed()
+
+    /**
      * Номер ЭЛЕМЕНТА ЛЕНТЫ для сообщения, подходящего под условие.
      *
-     * Лента перевёрнута, поэтому номер в хронологическом списке и номер
-     * элемента списка — разные вещи: нулевой элемент это самое свежее
-     * сообщение. Все прыжки — по цитате, из поиска, на дату — ходят только
-     * через эту функцию, чтобы не разъехаться. Фильтр тот же, что у ленты: в
-     * закрытой переписке часть сообщений скрыта, и без него номера съезжают.
+     * Все прыжки — по цитате, из поиска, на дату, «показать в чате» — ходят
+     * только через эту функцию. Считать по хронологическому списку нельзя:
+     * альбом занимает один элемент на десяток сообщений, и прыжок промахивался
+     * тем сильнее, чем больше пачек вложений выше цели.
      */
-    fun feedIndexOf(match: (ChatMessage) -> Boolean): Int {
-        val chrono = messages.filter { !readOnly || it.isMine }
-        val i = chrono.indexOfFirst(match)
-        return if (i < 0) -1 else chrono.lastIndex - i
-    }
+    fun feedIndexOf(match: (ChatMessage) -> Boolean): Int =
+        feedGroups().indexOfFirst { group -> group.any(match) }
 
     Scaffold(
         containerColor = PismoColors.BgMain,
@@ -1214,9 +1220,7 @@ fun ChatScreen(
                         //
                         // asReversed — это ВИД на список, а не копия: разворот
                         // ничего не перекладывает в памяти.
-                        val visible = com.pismo.messenger.core.Albums.group(
-                            messages.filter { !readOnly || it.isMine },
-                        ) { reactions[it.id]?.isNotEmpty() == true }.asReversed()
+                        val visible = feedGroups()
                         itemsIndexedGroups(visible) { index, group ->
                             val msg = group.first()
                             // Сосед по номеру СТАРШЕ: список перевёрнут. Черта
@@ -1286,8 +1290,8 @@ fun ChatScreen(
                                         }
                                         val idx = indexOf()
                                         if (idx >= 0) {
-                                            listState.animateScrollToItem(idx)
                                             flashId = id
+                                            listState.jumpToCenter(idx)
                                             delay(1200)
                                             if (flashId == id) flashId = 0
                                         } else {
@@ -1737,7 +1741,12 @@ fun ChatScreen(
                 // иначе просто закрываем — подгрузка вглубь истории пока
                 // не реализована.
                 val idx = feedIndexOf { it.id == found.id }
-                if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
+                if (idx >= 0) scope.launch {
+                    flashId = found.id
+                    listState.jumpToCenter(idx)
+                    delay(1200)
+                    if (flashId == found.id) flashId = 0
+                }
             },
         )
     }
@@ -1763,7 +1772,7 @@ fun ChatScreen(
                     }
                     val idx = feedIndexOf { it.createdAtMs >= dayStartMs }
                     if (idx >= 0) {
-                        listState.animateScrollToItem(idx)
+                        listState.jumpToCenter(idx)
                         jumpNote = ""
                     } else {
                         jumpNote = "Не удалось найти сообщения за эту дату."
@@ -1839,12 +1848,27 @@ fun ChatScreen(
                 target = targetId,
                 onShowInChat = { id ->
                     scope.launch {
-                        val idx = feedIndexOf { it.id == id }
+                        // Просмотр листает ВСЮ переписку, а лента держит
+                        // только загруженную страницу: сообщения на ней может
+                        // не быть — дотягиваем страницу до него, как при
+                        // переходе по цитате.
+                        fun indexOf() = feedIndexOf { it.id == id }
+                        if (indexOf() < 0) {
+                            val need = ChatRepository.countSinceId(scopeKind, targetId, id)
+                            if (need > 0 && need + 5 > messages.size) {
+                                pageLimit = need + 5
+                                loading = true
+                                reload()
+                            }
+                        }
+                        val idx = indexOf()
                         if (idx >= 0) {
-                            listState.animateScrollToItem(idx)
                             flashId = id
+                            listState.jumpToCenter(idx)
                             delay(1200)
                             if (flashId == id) flashId = 0
+                        } else {
+                            jumpNote = "Сообщение не найдено — возможно, удалено."
                         }
                     }
                 },

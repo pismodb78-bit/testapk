@@ -177,13 +177,19 @@ private fun AlbumGrid(
     onLongPress: () -> Unit,
     onSelect: () -> Unit,
 ) {
-    val cols = if (msgs.size <= 4) 2 else 3
-    val side = (304.dp - 2.dp * (cols - 1)) / cols
-    val rows = msgs.chunked(cols)
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        rows.forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                row.forEach { m ->
+    // Ряды РАЗНОЙ длины — чтобы не оставалось пустых клеток (см. albumRows).
+    // Ячейки ряда делят ширину поровну, поэтому ряд из двух выше ряда из трёх:
+    // мозаика получается плотной, без синих проплешин.
+    val width = 304.dp
+    val gap = 2.dp
+    var taken = 0
+    Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+        albumRows(msgs.size).forEach { count ->
+            val side = (width - gap * (count - 1)) / count
+            Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+                repeat(count) {
+                    val m = msgs[taken]
+                    taken++
                     Box(Modifier.width(side).height(side)) {
                         AlbumCell(
                             msg = m,
@@ -201,6 +207,21 @@ private fun AlbumGrid(
             }
         }
     }
+}
+
+/**
+ * Длины рядов плитки — как в телеграме: лишних клеток не остаётся.
+ *
+ * Раньше пачка резалась на ряды одинаковой длины, и остаток последнего ряда
+ * оставался пустым — пузырь зиял синим. Теперь ряды разной длины: в каждом
+ * два, три или четыре снимка, а в сумме ровно столько, сколько прислали.
+ */
+private fun albumRows(n: Int): List<Int> {
+    if (n <= 3) return listOf(n)
+    val rows = (n + 2) / 3
+    val base = n / rows
+    val rem = n % rows
+    return List(rows) { if (it < rem) base + 1 else base }
 }
 
 /** Одна ячейка плитки: снимок или ролик. */

@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import com.pismo.messenger.ui.chat.jumpToCenter
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -502,6 +503,24 @@ fun ChannelChatScreen(
         pending = pending + PendingFile(bytes = bytes, fileName = name, isImage = true)
     }
 
+    /**
+     * Лента ровно в том виде, в каком её рисует LazyColumn: пачка вложений —
+     * ОДИН элемент, порядок перевёрнут (нулевой элемент — самое свежее).
+     */
+    fun feedGroups(): List<List<ChatMessage>> =
+        com.pismo.messenger.core.Albums.group(messages) {
+            reactions[it.id]?.isNotEmpty() == true
+        }.asReversed()
+
+    /**
+     * Номер ЭЛЕМЕНТА ЛЕНТЫ для сообщения, подходящего под условие. Считать по
+     * хронологическому списку нельзя: альбом занимает один элемент на десяток
+     * сообщений, и прыжок промахивался тем сильнее, чем больше пачек выше.
+     */
+    fun feedIndexOf(match: (ChatMessage) -> Boolean): Int =
+        feedGroups().indexOfFirst { group -> group.any(match) }
+
+
     Scaffold(
         containerColor = PismoColors.BgMain,
         topBar = {
@@ -626,9 +645,7 @@ fun ChannelChatScreen(
                         // ничего не перекладывает в памяти.
                         // Пачка вложений, отправленная разом, показывается
                         // одной плиткой — как в личной переписке.
-                        val feed = com.pismo.messenger.core.Albums.group(messages) {
-                            reactions[it.id]?.isNotEmpty() == true
-                        }.asReversed()
+                        val feed = feedGroups()
                         items(feed.size, key = { feed[it].first().id }) { index ->
                             val group = feed[index]
                             val msg = group.first()
@@ -682,7 +699,7 @@ fun ChannelChatScreen(
                                         // страницу ровно настолько, чтобы оно
                                         // в неё вошло, тем же приёмом, что и
                                         // переход по дате.
-                                        if (messages.indexOfFirst { it.id == id } < 0) {
+                                        if (feedIndexOf { it.id == id } < 0) {
                                             val need = ChatRepository.countSinceId(
                                                 Scope.SERVER, channelId, id
                                             )
@@ -692,14 +709,10 @@ fun ChannelChatScreen(
                                                 reload()
                                             }
                                         }
-                                        // Номер элемента ПЕРЕВЁРНУТОЙ ленты:
-                                        // нулевой — самое свежее сообщение.
-                                        val chrono = messages.indexOfFirst { it.id == id }
-                                        val idx =
-                                            if (chrono < 0) -1 else messages.lastIndex - chrono
+                                        val idx = feedIndexOf { it.id == id }
                                         if (idx >= 0) {
-                                            listState.animateScrollToItem(idx)
                                             flashId = id
+                                            listState.jumpToCenter(idx)
                                             delay(1200)
                                             if (flashId == id) flashId = 0
                                         } else {
@@ -1071,9 +1084,13 @@ fun ChannelChatScreen(
                 showSearch = false
                 // Прыгаем к сообщению, если оно есть на загруженной странице.
                 // Номер переводим в номер элемента перевёрнутой ленты.
-                val chrono = messages.indexOfFirst { it.id == found.id }
-                val idx = if (chrono < 0) -1 else messages.lastIndex - chrono
-                if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
+                val idx = feedIndexOf { it.id == found.id }
+                if (idx >= 0) scope.launch {
+                    flashId = found.id
+                    listState.jumpToCenter(idx)
+                    delay(1200)
+                    if (flashId == found.id) flashId = 0
+                }
             },
         )
     }
@@ -1103,6 +1120,31 @@ fun ChannelChatScreen(
                 transferKey = Transfers.channelKey(channelId),
                 onClose = { mediaViewerAt = null },
                 target = channelId,
+                onShowInChat = { id ->
+                    scope.launch {
+                        // Просмотр листает весь канал, а лента держит только
+                        // загруженную страницу — дотягиваем её до сообщения.
+                        if (feedIndexOf { it.id == id } < 0) {
+                            val need = ChatRepository.countSinceId(
+                                Scope.SERVER, channelId, id
+                            )
+                            if (need > 0 && need + 5 > messages.size) {
+                                pageLimit = need + 5
+                                loading = true
+                                reload()
+                            }
+                        }
+                        val idx = feedIndexOf { it.id == id }
+                        if (idx >= 0) {
+                            flashId = id
+                            listState.jumpToCenter(idx)
+                            delay(1200)
+                            if (flashId == id) flashId = 0
+                        } else {
+                            jumpNote = "Сообщение не найдено — возможно, удалено."
+                        }
+                    }
+                },
                 onReply = { id -> replyTo = messages.firstOrNull { it.id == id } },
             )
         } else {
@@ -1170,10 +1212,9 @@ fun ChannelChatScreen(
                         loading = true
                         reload()
                     }
-                    val chrono = messages.indexOfFirst { it.createdAtMs >= dayStartMs }
-                    val idx = if (chrono < 0) -1 else messages.lastIndex - chrono
+                    val idx = feedIndexOf { it.createdAtMs >= dayStartMs }
                     if (idx >= 0) {
-                        listState.animateScrollToItem(idx)
+                        listState.jumpToCenter(idx)
                         jumpNote = ""
                     } else {
                         jumpNote = "Не удалось найти сообщения за эту дату."
