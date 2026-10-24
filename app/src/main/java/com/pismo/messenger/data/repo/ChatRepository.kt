@@ -109,7 +109,8 @@ object ChatRepository {
                 userId = rs.getInt("id"),
                 name = buildName(rs.str("Name"), rs.str("Surname"), rs.str("login")),
                 login = rs.str("login"),
-                lastMessage = if (lastRaw == null) "" else Crypto.dec(lastRaw),
+                lastMessage = if (lastRaw == null) ""
+                              else com.pismo.messenger.core.Albums.strip(Crypto.dec(lastRaw)),
                 lastTimeMs = rs.getLong("last_time").takeIf { it > 0 }?.times(1000),
                 unread = rs.getInt("unread"),
             )
@@ -185,7 +186,9 @@ object ChatRepository {
         val out = HashMap<Int, String>()
         Db.query(sql, me, me) { rs ->
             val pid = rs.getInt("partner_id")
-            val txt = runCatching { Crypto.dec(rs.str("text")) }.getOrDefault("")
+            val txt = com.pismo.messenger.core.Albums.strip(
+                runCatching { Crypto.dec(rs.str("text")) }.getOrDefault("")
+            )
             out[pid] = when {
                 txt.isNotBlank() -> txt
                 rs.bool("has_img") -> "📷 Фото"
@@ -265,7 +268,8 @@ object ChatRepository {
             GroupSummary(
                 id = rs.getInt("id"),
                 name = rs.str("name"),
-                lastMessage = if (lastRaw == null) "" else Crypto.dec(lastRaw),
+                lastMessage = if (lastRaw == null) ""
+                              else com.pismo.messenger.core.Albums.strip(Crypto.dec(lastRaw)),
                 memberCount = rs.getInt("member_count"),
                 avatarColorHex = rs.getString("avatar_color") ?: "#5865F2",
                 lastTimeMs = rs.getLong("last_time").takeIf { it > 0 }?.times(1000),
@@ -496,7 +500,8 @@ object ChatRepository {
             id = o.optInt("id"),
             senderId = o.optInt("sender_id"),
             senderName = senderName,
-            text = Crypto.dec(o.optString("text")),
+            text = com.pismo.messenger.core.Albums.strip(Crypto.dec(o.optString("text"))),
+            albumPart = com.pismo.messenger.core.Albums.isPart(Crypto.dec(o.optString("text"))),
             createdAtMs = o.optLong("created_ts") * 1000L,
             replyToId = o.optInt("reply_to_id"),
             isDeleted = bool("is_deleted"),
@@ -518,7 +523,8 @@ object ChatRepository {
             id = rs.getInt("id"),
             senderId = rs.getInt("sender_id"),
             senderName = senderName,
-            text = Crypto.dec(rs.getString("text")),
+            text = com.pismo.messenger.core.Albums.strip(Crypto.dec(rs.getString("text"))),
+            albumPart = com.pismo.messenger.core.Albums.isPart(Crypto.dec(rs.getString("text"))),
             createdAtMs = rs.epochMillis("created_ts"),
             replyToId = rs.getInt("reply_to_id"),
             isDeleted = rs.bool("is_deleted"),
@@ -550,7 +556,9 @@ object ChatRepository {
             WHERE m.id = ?
         """.trimIndent()
         return Db.queryFirst(sql, replyToId) { rs ->
-            val txt = runCatching { Crypto.dec(rs.getString("text")) }.getOrDefault("")
+            val txt = com.pismo.messenger.core.Albums.strip(
+                runCatching { Crypto.dec(rs.getString("text")) }.getOrDefault("")
+            )
             ReplyQuote(
                 messageId = replyToId,
                 sender = rs.str("sname").trim().ifBlank { rs.str("login") },
@@ -698,7 +706,9 @@ object ChatRepository {
         return runCatching {
             Db.queryFirst(sql, me, senderId) { rs ->
                 MessagePreview.describe(
-                    text = Crypto.dec(rs.getString("text").orEmpty()),
+                    text = com.pismo.messenger.core.Albums.strip(
+                        Crypto.dec(rs.getString("text").orEmpty())
+                    ),
                     hasImage = rs.bool("has_img"),
                     hasAudio = rs.bool("has_aud"),
                     hasVideo = rs.bool("has_vid"),
@@ -729,7 +739,9 @@ object ChatRepository {
                 MessagePreview.withSender(
                     rs.str("sender_name").trim().ifBlank { rs.str("login") },
                     MessagePreview.describe(
-                        text = Crypto.dec(rs.getString("text").orEmpty()),
+                        text = com.pismo.messenger.core.Albums.strip(
+                        Crypto.dec(rs.getString("text").orEmpty())
+                    ),
                         hasImage = rs.bool("has_img"),
                         hasAudio = rs.bool("has_aud"),
                         hasVideo = rs.bool("has_vid"),

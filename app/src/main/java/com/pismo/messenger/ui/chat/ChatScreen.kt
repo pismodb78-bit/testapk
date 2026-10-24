@@ -924,7 +924,13 @@ fun ChatScreen(
                     scopeKind = scopeKind,
                     target = targetId,
                     isGroup = isGroup,
-                    text = if (i == 0) text else "",
+                    // Второе и далее вложение помечаем знаком пачки: по нему
+                    // лента соберёт плитку. Без знака каждое сообщение
+                    // остаётся самостоятельным — ровно как при отправке по
+                    // одному (см. core/Albums).
+                    text = if (i == 0) text
+                           else if (attach.size > 1) com.pismo.messenger.core.Albums.MARK
+                           else "",
                     // У ролика в картинку кладётся ОБЛОЖКА: место под неё в
                     // строке свободно, а собеседник видит кадр сразу.
                     image = if (att.isImage) att.bytes else att.cover,

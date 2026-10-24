@@ -425,7 +425,10 @@ fun ChannelChatScreen(
             attach.forEachIndexed { i, att ->
                 Transfers.sendChannel(
                     channelId = channelId,
-                    text = if (i == 0) text else "",
+                    // Знак пачки — всем, кроме первого (см. core/Albums).
+                    text = if (i == 0) text
+                           else if (attach.size > 1) com.pismo.messenger.core.Albums.MARK
+                           else "",
                     replyToId = if (i == 0) replyTo?.id ?: 0 else 0,
                     // У ролика картинка — это его обложка (см. VideoCover).
                     image = if (att.isImage) att.bytes else att.cover,

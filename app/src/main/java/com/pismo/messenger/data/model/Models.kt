@@ -77,6 +77,12 @@ data class ChatMessage(
     val isRead: Boolean = true,
     val reactions: List<ReactionSummary> = emptyList(),
     val isPinned: Boolean = false,
+    /**
+     * Продолжение ПАЧКИ вложений: отправитель пометил сообщение невидимым
+     * знаком (см. core/Albums). По нему плитка собирается точно, а не на
+     * глазок по времени — отправленные по одному снимки больше не слипаются.
+     */
+    val albumPart: Boolean = false,
 ) {
     val isMine: Boolean
         get() = senderId == com.pismo.messenger.core.UserSession.effectiveId
