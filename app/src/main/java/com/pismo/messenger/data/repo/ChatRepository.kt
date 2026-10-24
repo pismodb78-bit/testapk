@@ -1641,6 +1641,74 @@ object ChatRepository {
     //  МЕДИА
     // ════════════════════════════════════════════════════════════════
 
+    /** Один снимок или ролик переписки — строка ленты просмотра. */
+    data class MediaEntry(
+        val id: Int,
+        val isVideo: Boolean,
+        val fileName: String?,
+        val sender: String,
+        val createdAtMs: Long,
+    )
+
+    /**
+     * ВСЕ снимки и ролики переписки — лента для полноэкранного просмотра.
+     *
+     * Просмотр собирал ленту из того, что уже загружено на экран, и в ней
+     * оказывалось полтора десятка кадров вместо всей переписки. Этот запрос
+     * берёт только то, что нужно ленте: номер, имя файла, автора и время —
+     * вложения он не трогает, поэтому стоит копейки даже на тысячах
+     * сообщений.
+     */
+    suspend fun mediaIndex(scope: Scope, target: Int, limit: Int = 600): List<MediaEntry> {
+        val me = UserSession.effectiveId
+        val vid = "('mp4','webm','m4v','mov','mkv','3gp','ogv')"
+        val isMedia = "(m.image_data IS NOT NULL OR (m.file_name IS NOT NULL " +
+                "AND LOWER(SUBSTRING_INDEX(m.file_name, '.', -1)) IN $vid))"
+
+        val where: String
+        val args: Array<Any>
+        when (scope) {
+            Scope.DM -> {
+                where = "((m.sender_id=? AND m.receiver_id=?) OR (m.sender_id=? AND m.receiver_id=?))"
+                args = arrayOf(me, target, target, me)
+            }
+            Scope.GROUP -> {
+                where = "m.group_id=?"
+                args = arrayOf(target)
+            }
+            Scope.SERVER -> {
+                where = "m.channel_id=?"
+                args = arrayOf(target)
+            }
+        }
+
+        val sql = """
+            SELECT * FROM (
+                SELECT m.id, m.file_name,
+                       UNIX_TIMESTAMP(m.created_at) AS created_ts,
+                       (m.image_data IS NOT NULL) AS has_img,
+                       TRIM(CONCAT(u.Name,' ',u.Surname)) AS sender_name, u.login
+                FROM ${scope.table} m
+                JOIN users u ON u.id = m.sender_id
+                WHERE $where AND m.is_deleted = 0 AND $isMedia
+                ORDER BY m.id DESC LIMIT $limit
+            ) sub ORDER BY id ASC
+        """.trimIndent()
+
+        return runCatching {
+            Db.query(sql, *args) { rs ->
+                val name = rs.str("sender_name").ifBlank { rs.str("login") }
+                MediaEntry(
+                    id = rs.getInt("id"),
+                    isVideo = !rs.bool("has_img"),
+                    fileName = rs.getString("file_name"),
+                    sender = name,
+                    createdAtMs = rs.getLong("created_ts") * 1000L,
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
     /**
      * Пакетная предзагрузка картинок и голосовых для целой страницы —
      * один IN-запрос вместо запроса на каждое сообщение (порт

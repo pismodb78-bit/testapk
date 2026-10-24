@@ -8,6 +8,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
@@ -87,12 +89,41 @@ fun MediaViewerHost(
     scopeKind: Scope,
     transferKey: String,
     onClose: () -> Unit,
+    /** Чат, по которому строится ПОЛНАЯ лента просмотра. */
+    target: Int = 0,
+    onShowInChat: ((Int) -> Unit)? = null,
+    onReply: ((Int) -> Unit)? = null,
+    onDelete: ((Int) -> Unit)? = null,
 ) {
     if (items.isEmpty()) return
+
+    // ЛЕНТА — ПО ВСЕЙ ПЕРЕПИСКЕ, А НЕ ПО ЗАГРУЖЕННОМУ ЭКРАНУ.
+    //
+    // Сначала показываем то, что уже на руках (открытие мгновенное), а следом
+    // подменяем полным списком из базы: иначе в просмотре оказывался десяток
+    // кадров вместо всей переписки.
+    var feed by remember(items.firstOrNull()?.msgId) { mutableStateOf(items) }
+    val openedAt = remember(startIndex) { items.getOrNull(startIndex)?.msgId ?: 0 }
+    LaunchedEffect(target, scopeKind) {
+        if (target <= 0) return@LaunchedEffect
+        val full = ChatRepository.mediaIndex(scopeKind, target)
+        if (full.size > feed.size) {
+            feed = full.map {
+                MediaItem(it.id, it.isVideo, it.fileName, it.sender, it.createdAtMs)
+            }
+        }
+    }
+
     val pager = rememberPagerState(
         initialPage = startIndex.coerceIn(0, items.lastIndex),
-        pageCount = { items.size },
+        pageCount = { feed.size },
     )
+
+    // Полный список приехал — встаём на то же сообщение, что открывали.
+    LaunchedEffect(feed) {
+        val at = feed.indexOfFirst { it.msgId == openedAt }
+        if (at >= 0 && at != pager.currentPage) runCatching { pager.scrollToPage(at) }
+    }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var chrome by remember { mutableStateOf(true) }
@@ -101,7 +132,7 @@ fun MediaViewerHost(
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
-                val item = items[page]
+                val item = feed[page]
                 if (item.isVideo) {
                     VideoPage(item, scopeKind, transferKey, onToggleChrome = { chrome = !chrome })
                 } else {
@@ -109,7 +140,8 @@ fun MediaViewerHost(
                 }
             }
 
-            val cur = items[pager.currentPage]
+            val cur = feed.getOrNull(pager.currentPage) ?: return@Box
+            var menu by remember { mutableStateOf(false) }
 
             if (chrome) {
                 // Стрелки — как в настольном Telegram: листать можно и свайпом,
@@ -120,20 +152,64 @@ fun MediaViewerHost(
                         modifier = Modifier.align(Alignment.CenterStart).padding(start = 8.dp),
                     ) { scope.launch { pager.animateScrollToPage(pager.currentPage - 1) } }
                 }
-                if (pager.currentPage < items.lastIndex) {
+                if (pager.currentPage < feed.lastIndex) {
                     RoundArrow(
                         left = false,
                         modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp),
                     ) { scope.launch { pager.animateScrollToPage(pager.currentPage + 1) } }
                 }
 
-                // Шапка: закрыть.
+                // Шапка: меню и закрыть.
                 Row(
                     Modifier
                         .align(Alignment.TopEnd)
                         .statusBarsPadding()
                         .padding(8.dp),
                 ) {
+                    Box {
+                        RoundButton(Icons.Default.MoreVert, "Ещё") { menu = true }
+                        androidx.compose.material3.DropdownMenu(
+                            expanded = menu,
+                            onDismissRequest = { menu = false },
+                        ) {
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("Сохранить в галерею") },
+                                onClick = {
+                                    menu = false
+                                    scope.launch {
+                                        note = "Сохранение…"
+                                        note = if (saveItem(context, cur, scopeKind)) "Сохранено"
+                                        else "Не удалось сохранить"
+                                    }
+                                },
+                            )
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("Поделиться") },
+                                onClick = {
+                                    menu = false
+                                    scope.launch { shareItem(context, cur, scopeKind) }
+                                },
+                            )
+                            if (onShowInChat != null) {
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("Показать в чате") },
+                                    onClick = { menu = false; onClose(); onShowInChat(cur.msgId) },
+                                )
+                            }
+                            if (onReply != null) {
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("Ответить") },
+                                    onClick = { menu = false; onClose(); onReply(cur.msgId) },
+                                )
+                            }
+                            if (onDelete != null) {
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("Удалить") },
+                                    onClick = { menu = false; onClose(); onDelete(cur.msgId) },
+                                )
+                            }
+                        }
+                    }
                     RoundButton(Icons.Default.Close, "Закрыть", onClose)
                 }
 
@@ -148,7 +224,7 @@ fun MediaViewerHost(
                 ) {
                     Text(
                         (if (cur.isVideo) "Видео " else "Фото ") +
-                                "${pager.currentPage + 1} из ${items.size}",
+                                "${pager.currentPage + 1} из ${feed.size}",
                         color = Color.White,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -306,16 +382,27 @@ private fun VideoPage(
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         val f = file
         if (play && f != null) {
-            VideoSurface(
-                file = f,
-                startAtMs = 0,
-                autoPlay = true,
-                onPositionChange = {},
-                onFullscreen = {},
-                onSave = {},
-                insetBottom = true,
-                onControlsChange = { visible -> if (!visible) onToggleChrome() },
-            )
+            // ФОРМА КАДРА. Вертикальный ролик и альбомный — разные вещи, и
+            // растягивать один под другой нельзя: от этого вертикальное видео
+            // выглядело полоской в чёрном поле.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(VideoShapes.ratio(item.msgId)),
+            ) {
+                VideoSurface(
+                    file = f,
+                    startAtMs = 0,
+                    autoPlay = true,
+                    onPositionChange = {},
+                    onFullscreen = {},
+                    onSave = {},
+                    insetBottom = true,
+                    // Стрелки и подписи просмотра НЕ прячем вместе с кнопками
+                    // плеера: иначе у открытого ролика не было видно, чем
+                    // перейти к соседнему.
+                )
+            }
         } else {
             Box(
                 Modifier

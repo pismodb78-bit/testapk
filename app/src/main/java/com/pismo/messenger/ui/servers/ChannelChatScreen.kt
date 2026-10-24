@@ -1089,6 +1089,8 @@ fun ChannelChatScreen(
                 scopeKind = Scope.SERVER,
                 transferKey = Transfers.channelKey(channelId),
                 onClose = { mediaViewerAt = null },
+                target = channelId,
+                onReply = { id -> replyTo = messages.firstOrNull { it.id == id } },
             )
         } else {
             mediaViewerAt = null

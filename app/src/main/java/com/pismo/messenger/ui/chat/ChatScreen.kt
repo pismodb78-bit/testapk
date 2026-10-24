@@ -1820,6 +1820,30 @@ fun ChatScreen(
                 scopeKind = scopeKind,
                 transferKey = Transfers.chatKey(isGroup, targetId),
                 onClose = { mediaViewerAt = null },
+                // Лента просмотра строится по ВСЕЙ переписке, а не по
+                // загруженному экрану.
+                target = targetId,
+                onShowInChat = { id ->
+                    scope.launch {
+                        val idx = feedIndexOf { it.id == id }
+                        if (idx >= 0) {
+                            listState.animateScrollToItem(idx)
+                            flashId = id
+                            delay(1200)
+                            if (flashId == id) flashId = 0
+                        }
+                    }
+                },
+                onReply = { id -> replyTo = messages.firstOrNull { it.id == id } },
+                onDelete = { id ->
+                    scope.launch {
+                        val m = messages.firstOrNull { it.id == id } ?: return@launch
+                        runCatching {
+                            ChatRepository.deleteMessage(scopeKind, m.id, m.fileName)
+                        }
+                        reload()
+                    }
+                },
             )
         } else {
             mediaViewerAt = null
