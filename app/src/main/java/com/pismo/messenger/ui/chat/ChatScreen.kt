@@ -1353,7 +1353,21 @@ fun ChatScreen(
             // и после возвращения в чат, и отменить её можно оттуда же.
             val uploads by Transfers.active.collectAsState()
             uploads.filter { it.where == Transfers.chatKey(isGroup, targetId) }
-                .forEach { UploadBar(it) }
+                .let { tasks ->
+                    if (tasks.isEmpty()) return@let
+                    // Плитки идут рядом: три передачи помещаются в одну полосу
+                    // вместо трёх экранов, занятых строками.
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(PismoColors.BgElevated)
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        tasks.forEach { TransferTile(it) }
+                    }
+                }
 
             if (sendError.isNotEmpty()) {
                 Row(
@@ -2067,77 +2081,101 @@ internal fun formatBytesShort(bytes: Long): String = when {
 }
 
 /**
- * Полоса идущей отправки файла — имя, доля и крестик отмены.
+ * Идущая передача — ПЛИТКОЙ, а не строкой во всю ширину.
  *
- * На ПК такой показ был с самого начала (круговой индикатор с кнопкой),
- * на телефоне отправка шла вслепую: большой файл уходил минутами, и понять,
- * идёт он или уже сорвался, было нельзя.
+ * Строки занимали по две трети экрана каждая, и две передачи закрывали
+ * переписку целиком. Плитка показывает то же самое: тип вложения, долю
+ * кольцом вокруг и крестик в середине — нажал и отменил. Имя и проценты
+ * подписью под кольцом, чтобы не гадать, какой именно файл едет.
  */
 @Composable
-internal fun UploadBar(task: com.pismo.messenger.data.Transfers.Task?) {
+internal fun TransferTile(task: com.pismo.messenger.data.Transfers.Task?) {
     if (task == null) return
-    Row(
+    val failed = task.error != null
+    Column(
         Modifier
-            .fillMaxWidth()
-            .background(PismoColors.BgElevated)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(end = 10.dp)
+            .width(104.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
-            Modifier
-                .width(3.dp)
-                .height(32.dp)
-                .background(if (task.error != null) PismoColors.Red else PismoColors.Blurple)
-        )
-        Spacer(Modifier.width(8.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                when {
-                    task.error != null -> if (task.download) "Не скачано" else "Не отправлено"
-                    task.waiting -> "В очереди"
-                    task.download -> "Скачивание · ${(task.progress * 100).toInt()}%"
-                    else -> "Отправка · ${(task.progress * 100).toInt()}%"
-                },
-                color = if (task.error != null) PismoColors.Red else PismoColors.Blurple,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                // Сколько уже ушло — рядом с размером. Одной доли мало: на
-                // слабой связи она подолгу стоит на месте, и понять, идёт
-                // отправка или встала, было нечем.
-                task.error ?: when {
-                    task.totalBytes <= 0 -> task.fileName
-                    task.progress > 0f && task.progress < 1f ->
-                        task.fileName + " · " +
-                                formatBytesShort((task.totalBytes * task.progress).toLong()) +
-                                " из " + formatBytesShort(task.totalBytes)
-                    else -> task.fileName + " · " + formatBytesShort(task.totalBytes)
-                },
-                color = PismoColors.TextMuted,
-                fontSize = 12.sp,
-                maxLines = 2,
-            )
-            Spacer(Modifier.height(4.dp))
-            if (task.error == null) LinearProgressIndicator(
-                progress = { task.progress },
-                modifier = Modifier.fillMaxWidth().height(3.dp),
-                color = PismoColors.Blurple,
-                trackColor = PismoColors.BgMain,
-            )
-        }
-        // Сорвалось — предлагаем повторить теми же байтами: искать файл
-        // заново из-за моргнувшей связи незачем.
-        if (task.error != null && com.pismo.messenger.data.Transfers.canRetry(task.id)) {
-            TextButton(onClick = { com.pismo.messenger.data.Transfers.retry(task.id) }) {
-                Text("Повторить", color = PismoColors.Cyan, fontSize = 13.sp)
+            Modifier.size(56.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            when {
+                failed -> CircularProgressIndicator(
+                    progress = { 1f },
+                    modifier = Modifier.size(56.dp),
+                    color = PismoColors.Red,
+                    trackColor = PismoColors.BgMain,
+                    strokeWidth = 3.dp,
+                )
+                // Пока стоит в очереди, доли ещё нет — кольцо просто крутится.
+                task.waiting -> CircularProgressIndicator(
+                    modifier = Modifier.size(56.dp),
+                    color = PismoColors.Blurple,
+                    trackColor = PismoColors.BgMain,
+                    strokeWidth = 3.dp,
+                )
+                else -> CircularProgressIndicator(
+                    progress = { task.progress },
+                    modifier = Modifier.size(56.dp),
+                    color = PismoColors.Blurple,
+                    trackColor = PismoColors.BgMain,
+                    strokeWidth = 3.dp,
+                )
+            }
+
+            // Крестик ВНУТРИ кольца: отмена там, где взгляд уже стоит.
+            Box(
+                Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(Color(0x33000000))
+                    .clickable { com.pismo.messenger.data.Transfers.cancel(task.id) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.Close,
+                    if (failed) "Убрать" else "Отменить",
+                    tint = if (failed) PismoColors.Red else PismoColors.TextPrimary,
+                    modifier = Modifier.size(18.dp),
+                )
             }
         }
-        IconButton(onClick = { com.pismo.messenger.data.Transfers.cancel(task.id) }) {
-            Icon(
-                Icons.Default.Close,
-                if (task.error != null) "Убрать" else "Отменить отправку",
-                tint = PismoColors.TextMuted,
+
+        Text(
+            when {
+                failed -> if (task.download) "Не скачано" else "Не отправлено"
+                task.waiting -> "В очереди"
+                task.download -> "Скачивание · ${(task.progress * 100).toInt()} %"
+                else -> "Отправка · ${(task.progress * 100).toInt()} %"
+            },
+            color = if (failed) PismoColors.Red else PismoColors.Blurple,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        Text(
+            task.error ?: task.fileName,
+            color = PismoColors.TextMuted,
+            fontSize = 10.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+
+        // Сорвалось — предлагаем повторить теми же байтами: искать файл
+        // заново из-за моргнувшей связи незачем.
+        if (failed && com.pismo.messenger.data.Transfers.canRetry(task.id)) {
+            Text(
+                "Повторить",
+                color = PismoColors.Cyan,
+                fontSize = 11.sp,
+                modifier = Modifier
+                    .padding(top = 2.dp)
+                    .clickable { com.pismo.messenger.data.Transfers.retry(task.id) },
             )
         }
     }

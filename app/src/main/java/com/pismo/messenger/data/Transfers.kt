@@ -56,6 +56,12 @@ object Transfers {
         val waiting: Boolean = true,
         /** Заполнено — сорвалось, и полоса показывает причину. */
         val error: String? = null,
+        /**
+         * Сообщение, чьё вложение едет. Нужно, чтобы НЕ ЗАВОДИТЬ ВТОРУЮ
+         * загрузку того же файла: один и тот же ролик просили и лента, и
+         * просмотр, и в списке появлялись две строки на один файл.
+         */
+        val msgId: Int = 0,
     )
 
     fun chatKey(isGroup: Boolean, target: Int): String =
@@ -169,6 +175,22 @@ object Transfers {
         scopeKind: Scope,
         fileName: String?,
         onReady: suspend (ByteArray) -> Unit,
+    ): Long {
+        // Это вложение уже едет — второй раз не просим. Иначе лента и
+        // просмотр заводили по строке каждая, и один файл качался дважды.
+        val running = _active.value.firstOrNull {
+            it.download && it.msgId == msgId && it.error == null
+        }
+        if (running != null) return running.id
+        return downloadNow(where, msgId, scopeKind, fileName, onReady)
+    }
+
+    private fun downloadNow(
+        where: String,
+        msgId: Int,
+        scopeKind: Scope,
+        fileName: String?,
+        onReady: suspend (ByteArray) -> Unit,
     ): Long = launch(
         where = where,
         fileName = fileName ?: "Файл",
@@ -176,6 +198,7 @@ object Transfers {
         download = true,
         gate = downloadGate,
         table = scopeKind.table,
+        msgId = msgId,
     ) { _, onBytes ->
         val data = ChatRepository.loadFileTracked(msgId, scopeKind, fileName, onBytes)
         if (data == null || data.isEmpty()) error("файл не найден на сервере")
@@ -198,11 +221,12 @@ object Transfers {
         download: Boolean,
         gate: Mutex,
         table: String,
+        msgId: Int = 0,
         body: suspend (onRow: (Int) -> Unit, onBytes: (Float) -> Unit) -> Unit,
     ): Long {
         if (!download && total <= 0L) return -1L    // следить не за чем
         val id = synchronized(this) { nextId++ }
-        _active.update { it + Task(id, where, fileName, total, download = download) }
+        _active.update { it + Task(id, where, fileName, total, download = download, msgId = msgId) }
 
         // СЛУЖБА НА ВРЕМЯ ПЕРЕДАЧИ.
         //
@@ -221,7 +245,7 @@ object Transfers {
             )
         }
         synchronized(this) {
-            retries[id] = { launch(where, fileName, total, download, gate, table, body) }
+            retries[id] = { launch(where, fileName, total, download, gate, table, msgId, body) }
         }
 
         // Ленивый запуск: сначала кладём задачу в список, потом стартуем.

@@ -475,6 +475,8 @@ private fun VideoPage(
     var busy by remember(item.msgId) { mutableStateOf(false) }
     var play by remember(item.msgId) { mutableStateOf(file != null) }
     var failed by remember(item.msgId) { mutableStateOf("") }
+    /** Номер задачи загрузки — по нему её и отменяем крестиком. */
+    var taskId by remember(item.msgId) { androidx.compose.runtime.mutableLongStateOf(-1L) }
 
     // ЕСЛИ РОЛИКА ЕЩЁ НЕТ — ВЕЗЁМ ЕГО САМИ.
     //
@@ -486,7 +488,7 @@ private fun VideoPage(
         if (file != null || busy) return@LaunchedEffect
         busy = true
         failed = ""
-        Transfers.download(
+        taskId = Transfers.download(
             where = transferKey,
             msgId = item.msgId,
             scopeKind = scopeKind,
@@ -534,7 +536,7 @@ private fun VideoPage(
                         if (have != null) { play = true; return@clickable }
                         busy = true
                         failed = ""
-                        Transfers.download(
+                        taskId = Transfers.download(
                             where = transferKey,
                             msgId = item.msgId,
                             scopeKind = scopeKind,
@@ -548,7 +550,32 @@ private fun VideoPage(
                 contentAlignment = Alignment.Center,
             ) {
                 when {
-                    busy -> CircularProgressIndicator(color = Color.White)
+                    // Кружок с крестиком ВНУТРИ: отмена там, где взгляд и так
+                    // стоит, и отдельной кнопки искать не нужно.
+                    busy -> Box(contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            modifier = Modifier.size(64.dp),
+                            strokeWidth = 3.dp,
+                        )
+                        Box(
+                            Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(Color(0x55000000))
+                                .clickable {
+                                    if (taskId > 0) Transfers.cancel(taskId)
+                                    busy = false
+                                    failed = "Загрузка отменена"
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Default.Close, "Отменить загрузку",
+                                tint = Color.White, modifier = Modifier.size(22.dp),
+                            )
+                        }
+                    }
                     failed.isNotBlank() -> Text(failed + " · нажмите, чтобы повторить", color = Color.White)
                     else -> Icon(
                         Icons.Default.PlayArrow, "Смотреть",

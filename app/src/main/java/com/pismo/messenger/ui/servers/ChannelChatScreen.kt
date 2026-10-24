@@ -81,7 +81,7 @@ import com.pismo.messenger.media.WavPlayer
 import com.pismo.messenger.media.WavRecorder
 import com.pismo.messenger.data.model.ServerPermissions
 import com.pismo.messenger.data.repo.ChatRepository
-import com.pismo.messenger.ui.chat.UploadBar
+import com.pismo.messenger.ui.chat.TransferTile
 import com.pismo.messenger.data.repo.ReactionsRepository
 import com.pismo.messenger.data.repo.ServerRepository
 import com.pismo.messenger.media.Sounds
@@ -829,7 +829,20 @@ fun ChannelChatScreen(
             // Полоса идущих передач — та же, что в личных чатах.
             val chanTransfers by Transfers.active.collectAsState()
             chanTransfers.filter { it.where == Transfers.channelKey(channelId) }
-                .forEach { UploadBar(it) }
+                .let { tasks ->
+                    if (tasks.isEmpty()) return@let
+                    // Плитками, как в личной переписке.
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(PismoColors.BgElevated)
+                            .horizontalScroll(androidx.compose.foundation.rememberScrollState())
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        tasks.forEach { TransferTile(it) }
+                    }
+                }
 
             // Ряд миниатюр с номерами — как в личной переписке и на ПК:
             // видно, что именно выбрано и в каком порядке уйдёт, а крестик
