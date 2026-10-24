@@ -19,10 +19,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -161,7 +160,18 @@ fun PhotoEditor(
         // обычном окне, и на часть телефонов панель просто не помещалась.
         // Колонка этого не умеет в принципе: сверху кнопки, снизу
         // инструменты, снимку — всё, что осталось между ними.
-        Column(Modifier.fillMaxSize().background(Color.Black)) {
+        // И ВЕСЬ РЕДАКТОР — ВНУТРИ БЕЗОПАСНОЙ ОБЛАСТИ.
+        //
+        // Отступы под строку состояния и навигацию берём ОДИН раз, на всю
+        // колонку: диалог занимает экран целиком, включая зоны системных
+        // панелей, и без этого нижняя полоса оказывалась ровно под жестовой
+        // чертой — то есть за краем видимого.
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .safeDrawingPadding(),
+        ) {
             EditorTopBar(
                 busy = busy,
                 canUndo = marks.isNotEmpty(),
@@ -315,8 +325,7 @@ fun PhotoEditor(
                 Modifier
                     .fillMaxWidth()
                     .background(Color(0xAA000000))
-                    .navigationBarsPadding()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -473,8 +482,7 @@ private fun EditorTopBar(
         Modifier
             .fillMaxWidth()
             .background(Color(0xAA000000))
-            .statusBarsPadding()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         EditorButton(Icons.Default.Close, "Отмена") { onCancel() }
