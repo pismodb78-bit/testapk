@@ -1761,6 +1761,29 @@ object ChatRepository {
     }
 
     /** Картинка сообщения — из кеша либо из БД. */
+    /**
+     * Дописать ролику ОБЛОЖКУ, если её у него нет.
+     *
+     * Новые ролики уходят с кадром сразу (см. VideoCover), а у старых его
+     * взять неоткуда: вытащить кадр можно только из самого файла, а он лежит
+     * на сервере целиком. Зато как только файл у кого-то оказался на руках —
+     * его посмотрели или сохранили, — кадр уже есть, и мы кладём его в ту же
+     * строку. Дальше обложку видят ВСЕ, не скачивая ролик.
+     *
+     * Пишем только в пустое место (`image_data` пуст) и молча: прав на чужую
+     * строку может и не быть, и это не повод чем-то беспокоить человека.
+     */
+    suspend fun backfillCover(msgId: Int, scope: Scope, jpeg: ByteArray?) {
+        if (msgId <= 0 || jpeg == null || jpeg.isEmpty()) return
+        runCatching {
+            Db.exec(
+                "UPDATE ${scope.table} SET image_data=? " +
+                    "WHERE id=? AND (image_data IS NULL OR OCTET_LENGTH(image_data)=0)",
+                jpeg, msgId,
+            )
+        }
+    }
+
     suspend fun loadImage(msgId: Int, scope: Scope, fileName: String?): ByteArray? =
         loadBlob(msgId, scope, "image_data", "img", fileName)
 

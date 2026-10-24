@@ -201,11 +201,14 @@ fun InlineVideoBubble(
             msgId = msgId,
             scopeKind = scopeKind,
             fileName = fileName,
-        ) {
+        ) { bytes ->
             // Сюда попадаем только при успехе, и байты уже в кеше.
             file = MediaCache.fileFor(msgId, "file", fileName)
             if (file != null) playing = true
             else status = "Не удалось сохранить во временную папку"
+            // Раз уж файл на руках — дописываем ролику обложку, если её у
+            // него не было: дальше её увидят все, не скачивая ролик.
+            shareCover(msgId, scopeKind, bytes)
         }
     }
 
@@ -238,6 +241,7 @@ fun InlineVideoBubble(
             file = MediaCache.fileFor(msgId, "file", fileName)
             status = if (MediaSaver.saveVideo(context, fileName, bytes))
                 "Сохранено в галерею" else "Не удалось сохранить"
+            shareCover(msgId, scopeKind, bytes)
         }
     }
 
@@ -952,6 +956,23 @@ fun InlineAudioBubble(
 /** Размер уже скачанного вложения; до загрузки он нам неоткуда взяться. */
 private fun sizeLabel(file: File?): String? =
     file?.takeIf { it.exists() }?.let { formatBytesShort(it.length()) }
+
+/**
+ * Дописать ролику обложку, раз его байты уже на руках.
+ *
+ * Старые ролики уходили без кадра: взять его можно только из самого файла.
+ * Как только файл скачан, кадр есть — и мы кладём его в ту же строку, чтобы
+ * дальше обложку видели ВСЕ, не скачивая ролик (см. ChatRepository).
+ */
+internal fun shareCover(msgId: Int, scope: Scope, bytes: ByteArray?) {
+    if (msgId <= 0 || bytes == null || bytes.isEmpty()) return
+    kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+        runCatching {
+            val jpeg = videoCoverJpeg(bytes) ?: return@launch
+            ChatRepository.backfillCover(msgId, scope, jpeg)
+        }
+    }
+}
 
 /** Первый кадр видео — обложка до запуска плеера. */
 internal fun firstFrame(file: File): Bitmap? = runCatching {

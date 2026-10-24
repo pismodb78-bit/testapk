@@ -165,11 +165,23 @@ fun MediaViewerHost(
                         onToggleChrome = { chrome = !chrome },
                         speed = speed,
                         looping = looping,
+                        // Сама везёт ролик ТОЛЬКО открытая страница: соседние
+                        // Compose держит собранными, и они тянули бы с сервера
+                        // то, на что человек даже не посмотрел.
+                        isCurrent = pager.currentPage == page,
                     )
                 } else {
                     PhotoPage(item, scopeKind, onToggleChrome = { chrome = !chrome })
                 }
             }
+
+            // ПЕРЕЛИСТНУЛИ — ИНТЕРФЕЙС СНОВА ВИДЕН.
+            //
+            // Плеер прячет кнопки, пока ролик идёт, и вместе с ними уходили
+            // стрелки, счётчик и «⋮». Перейдя на снимок, человек оставался с
+            // пустым экраном: нажать было нечего, и казалось, что просмотр
+            // вообще не отвечает.
+            LaunchedEffect(pager.currentPage) { chrome = true }
 
             val cur = feed.getOrNull(pager.currentPage) ?: return@Box
             var menu by remember { mutableStateOf(false) }
@@ -472,6 +484,8 @@ private fun VideoPage(
     onToggleChrome: () -> Unit,
     speed: Float = 1f,
     looping: Boolean = false,
+    /** Эта страница сейчас на экране (а не соседняя, собранная про запас). */
+    isCurrent: Boolean = true,
 ) {
     val name = item.fileName ?: "video.mp4"
     var file by remember(item.msgId) { mutableStateOf(MediaCache.fileFor(item.msgId, "file", name)) }
@@ -487,8 +501,12 @@ private fun VideoPage(
     // Что уже лежит в кеше — играет сразу, остального просим у сервера, и на
     // это время по центру крутится кружок без процентов: доля загрузки тут
     // ничего не меняет, а мелькающие числа только мешают.
-    LaunchedEffect(item.msgId) {
+    LaunchedEffect(item.msgId, isCurrent) {
+        if (!isCurrent) return@LaunchedEffect
         if (file != null || busy) return@LaunchedEffect
+        // Отменённое не везём заново: крестик — это «не надо», а не пауза.
+        // Нажатие по кадру по-прежнему начинает загрузку руками.
+        if (item.msgId in cancelledDownloads) return@LaunchedEffect
         busy = true
         failed = ""
         taskId = Transfers.download(
@@ -496,24 +514,27 @@ private fun VideoPage(
             msgId = item.msgId,
             scopeKind = scopeKind,
             fileName = name,
-        ) {
+        ) { bytes ->
             busy = false
             file = MediaCache.fileFor(item.msgId, "file", name)
             if (file != null) play = true else failed = "Не удалось загрузить"
+            // Файл на руках — дописываем ролику обложку, если её не было.
+            shareCover(item.msgId, scopeKind, bytes)
         }
     }
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         val f = file
         if (play && f != null) {
-            // ФОРМА КАДРА. Вертикальный ролик и альбомный — разные вещи, и
-            // растягивать один под другой нельзя: от этого вертикальное видео
-            // выглядело полоской в чёрном поле.
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(VideoShapes.ratio(item.msgId)),
-            ) {
+            // ПЛЕЕР ЗАНИМАЕТ ВЕСЬ ЭКРАН, а кадр внутри него сам встаёт по
+            // своей форме — VideoView вписывает видео, не растягивая.
+            //
+            // Пока коробка была по форме ролика, полоса времени стояла у
+            // НИЖНЕГО КРАЯ КАДРА: у короткого горизонтального ролика это
+            // середина экрана, и она ложилась прямо на кнопки пуска и
+            // перемотки. Теперь низ коробки — это низ экрана, и полоса там,
+            // где ей место.
+            Box(Modifier.fillMaxSize()) {
                 VideoSurface(
                     file = f,
                     startAtMs = 0,
@@ -537,6 +558,8 @@ private fun VideoPage(
                         if (busy) return@clickable
                         val have = file
                         if (have != null) { play = true; return@clickable }
+                        // Нажали сами — значит ролик всё-таки нужен.
+                        cancelledDownloads -= item.msgId
                         busy = true
                         failed = ""
                         taskId = Transfers.download(
@@ -544,10 +567,11 @@ private fun VideoPage(
                             msgId = item.msgId,
                             scopeKind = scopeKind,
                             fileName = name,
-                        ) {
+                        ) { bytes ->
                             busy = false
                             file = MediaCache.fileFor(item.msgId, "file", name)
                             if (file != null) play = true else failed = "Не удалось загрузить"
+                            shareCover(item.msgId, scopeKind, bytes)
                         }
                     },
                 contentAlignment = Alignment.Center,
@@ -568,6 +592,8 @@ private fun VideoPage(
                                 .background(Color(0x55000000))
                                 .clickable {
                                     if (taskId > 0) Transfers.cancel(taskId)
+                                    taskId = -1L
+                                    cancelledDownloads += item.msgId
                                     busy = false
                                     failed = "Загрузка отменена"
                                 },
@@ -589,6 +615,15 @@ private fun VideoPage(
         }
     }
 }
+
+/**
+ * Ролики, загрузку которых отменили крестиком.
+ *
+ * Список живёт в процессе, а не в странице: страницу Compose пересобирает
+ * от любого движения ленты, и отмена без этой памяти тут же забывалась —
+ * загрузка начиналась заново, хотя её только что остановили.
+ */
+private val cancelledDownloads = mutableSetOf<Int>()
 
 private suspend fun saveItem(
     context: android.content.Context,
