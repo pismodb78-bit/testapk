@@ -222,6 +222,15 @@ fun ChannelChatScreen(
     }
 
     suspend fun reload(scrollToEnd: Boolean = false) {
+        // БЫЛ ЛИ ЧЕЛОВЕК У КОНЦА ЛЕНТЫ — СМОТРИМ ДО ОБНОВЛЕНИЯ СПИСКА.
+        //
+        // В перевёрнутой ленте пришедшее сообщение встаёт нулевым
+        // элементом, а то, за которое держался список, уезжает на
+        // первый — и условие «нулевой у нижнего края» после обновления
+        // не выполняется уже никогда. Поэтому чужое сообщение ленту
+        // вниз не доматывало.
+        val wasAtBottom = listState.firstVisibleItemIndex == 0 &&
+            listState.firstVisibleItemScrollOffset <= 8
         runCatching {
             val loaded = ServerRepository.channelMessages(channelId, limit = pageLimit)
 
@@ -272,14 +281,12 @@ fun ChannelChatScreen(
         // истории, которую он читает.
         // «У конца» в перевёрнутой ленте — это нулевой элемент у самого
         // нижнего края: см. пояснение в личной переписке.
-        val atBottom = listState.firstVisibleItemIndex == 0 &&
-            listState.firstVisibleItemScrollOffset <= 8
         // Пока ленту листает пользователь — не трогаем: scrollToItem
         // мгновенно обрывает инерцию, а опрос приходит раз в две с половиной
         // секунды и легко попадает в разгон пальца.
         // И пока смотрят видео: доматывание вниз выдёргивает кадр из-под
         // пальца ровно тогда, когда ролик перематывают.
-        if (scrollToEnd && messages.isNotEmpty() && atBottom &&
+        if (scrollToEnd && messages.isNotEmpty() && wasAtBottom &&
             !listState.isScrollInProgress &&
             !com.pismo.messenger.ui.chat.VideoPlayback.active
         ) {

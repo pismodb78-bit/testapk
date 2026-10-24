@@ -353,6 +353,15 @@ fun ChatScreen(
     // положение пользователя в истории (чтобы чужое сообщение не выдёргивало
     // из середины), но СВОЮ отправку показать нужно всегда.
     suspend fun reload(scrollToEnd: Boolean = false, force: Boolean = false) {
+        // БЫЛ ЛИ ЧЕЛОВЕК У КОНЦА ЛЕНТЫ — СМОТРИМ ДО ОБНОВЛЕНИЯ СПИСКА.
+        //
+        // В перевёрнутой ленте пришедшее сообщение встаёт нулевым элементом,
+        // а то, за которое держался список, уезжает на первый. После этого
+        // «нулевой у нижнего края» уже не выполняется НИКОГДА — и чужое
+        // сообщение ленту вниз не доматывало (своё доматывало только потому,
+        // что отправка просит перемотку силой).
+        val wasAtBottom = listState.firstVisibleItemIndex == 0 &&
+            listState.firstVisibleItemScrollOffset <= 8
         runCatching {
             val loaded = if (isGroup) {
                 if (pageLimit > 0) ChatRepository.loadGroupMessages(targetId, pageLimit)
@@ -443,8 +452,6 @@ fun ChatScreen(
         // элемент — самое свежее сообщение, и стоит он у нижнего края ровно
         // тогда, когда смещение прокрутки нулевое. Пара пикселей допуска — на
         // дрожь пальца.
-        val atBottom = listState.firstVisibleItemIndex == 0 &&
-            listState.firstVisibleItemScrollOffset <= 8
         // И НЕ ТРОГАЕМ ленту, пока её листает пользователь. scrollToItem
         // мгновенно обрывает инерцию, а опрос приходит раз в две с половиной
         // секунды — попасть им в разгон пальца проще простого. Отсюда и
@@ -456,7 +463,7 @@ fun ChatScreen(
         // как «ленту телепортирует».
         val watching = com.pismo.messenger.ui.chat.VideoPlayback.active
         if (messages.isNotEmpty() && !userScrolling && !watching &&
-            (force || (scrollToEnd && atBottom))
+            (force || (scrollToEnd && wasAtBottom))
         ) {
             // Конец перевёрнутой ленты — это её нулевой элемент.
             listState.scrollToItem(0)
