@@ -304,6 +304,19 @@ fun MediaViewerHost(
             }
         }
     }
+
+    // Рисование поверх снимка — кисть, надпись, стикер.
+    editing?.let { data ->
+        PhotoEditor(
+            bytes = data,
+            onCancel = { editing = null },
+            onDone = { out ->
+                editing = null
+                onSendEdited?.invoke(out)
+                onClose()
+            },
+        )
+    }
 }
 
 @Composable

@@ -1844,6 +1844,19 @@ fun ChatScreen(
                         reload()
                     }
                 },
+                // Нарисованное уходит новым снимком в эту же переписку.
+                onSendEdited = { out ->
+                    Transfers.sendChat(
+                        scopeKind = scopeKind,
+                        target = targetId,
+                        isGroup = isGroup,
+                        text = "",
+                        image = out,
+                        file = null,
+                        fileName = null,
+                        replyToId = 0,
+                    )
+                },
             )
         } else {
             mediaViewerAt = null
