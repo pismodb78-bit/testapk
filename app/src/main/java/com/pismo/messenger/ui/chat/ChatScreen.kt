@@ -285,6 +285,8 @@ fun ChatScreen(
     // Полноэкранное видео живёт на уровне экрана — переживает и прокрутку,
     // и поворот, при которых пузырь уничтожается.
     var fullscreenVideo by remember(targetId) { mutableStateOf<FullscreenVideo?>(null) }
+    /** Открытое на предпросмотр прикреплённое вложение (номер в списке). */
+    var previewAttach by remember(targetId) { mutableStateOf<Int?>(null) }
     var showPins by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
     var showCalendar by remember { mutableStateOf(false) }
@@ -1428,7 +1430,11 @@ fun ChatScreen(
                                     // именно приложено.
                                     .size(72.dp)
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(Color(0x22000000)),
+                                    .background(Color(0x22000000))
+                                    // Нажатие — предпросмотр: снимок
+                                    // открывается в редакторе, ролик — в
+                                    // плеере. Отправлять вслепую не нужно.
+                                    .clickable { previewAttach = i },
                                 contentAlignment = Alignment.Center,
                             ) {
                                 if (att.isImage) {
@@ -1437,6 +1443,21 @@ fun ChatScreen(
                                         contentDescription = null,
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier.fillMaxSize(),
+                                    )
+                                } else if (att.cover != null) {
+                                    // У ролика на плитке — его кадр, как в
+                                    // телеграме, а не значок файла.
+                                    AsyncImage(
+                                        model = att.cover,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                    Icon(
+                                        Icons.Default.PlayArrow,
+                                        null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(28.dp),
                                     )
                                 } else {
                                     FileBadge(
@@ -1811,6 +1832,38 @@ fun ChatScreen(
             targetId = targetId,
             onDismiss = { showPins = false },
         )
+    }
+
+    // Предпросмотр прикреплённого: снимок — сразу в редакторе (кисти,
+    // надписи, наклейки), ролик — в обычном полноэкранном плеере.
+    previewAttach?.let { idx ->
+        val att = pending.getOrNull(idx)
+        if (att == null) previewAttach = null
+        else if (att.isImage) {
+            PhotoEditor(
+                bytes = att.bytes,
+                onCancel = { previewAttach = null },
+                onDone = { out ->
+                    pending = pending.toMutableList().also {
+                        it[idx] = PendingFile(out, att.fileName, true)
+                    }
+                    previewAttach = null
+                },
+            )
+        } else {
+            LaunchedEffect(idx) {
+                val f = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching {
+                        val tmp = java.io.File(context.cacheDir, "attach-preview-" + idx)
+                        tmp.writeBytes(att.bytes)
+                        tmp
+                    }.getOrNull()
+                }
+                previewAttach = null
+                if (f != null) fullscreenVideo = FullscreenVideo(f, att.fileName, 0)
+                else jumpNote = "Не удалось открыть вложение."
+            }
+        }
     }
 
     FullscreenVideoHost(fullscreenVideo) { fullscreenVideo = null }

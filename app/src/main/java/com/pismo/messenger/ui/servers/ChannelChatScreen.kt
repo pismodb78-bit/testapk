@@ -101,6 +101,7 @@ import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Переписка в текстовом канале сервера — порт чата ServersForm.cs.
@@ -209,6 +210,8 @@ fun ChannelChatScreen(
     var recording by remember(channelId) { mutableStateOf(false) }
     var recordSeconds by remember(channelId) { mutableIntStateOf(0) }
     var pendingVoice by remember(channelId) { mutableStateOf<ByteArray?>(null) }
+    /** Открытое на предпросмотр прикреплённое вложение (номер в списке). */
+    var previewAttach by remember(channelId) { mutableStateOf<Int?>(null) }
 
     fun keepVoice(wav: ByteArray?) {
         recording = false
@@ -883,7 +886,10 @@ fun ChannelChatScreen(
                                     // именно приложено.
                                     .size(72.dp)
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(Color(0x22000000)),
+                                    .background(Color(0x22000000))
+                                    // Нажатие — предпросмотр: снимок в
+                                    // редакторе, ролик в плеере.
+                                    .clickable { previewAttach = i },
                                 contentAlignment = Alignment.Center,
                             ) {
                                 if (p.isImage) {
@@ -892,6 +898,20 @@ fun ChannelChatScreen(
                                         contentDescription = null,
                                         contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                                         modifier = Modifier.fillMaxSize(),
+                                    )
+                                } else if (p.cover != null) {
+                                    // У ролика на плитке его кадр, а не значок.
+                                    coil.compose.AsyncImage(
+                                        model = p.cover,
+                                        contentDescription = null,
+                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                    Icon(
+                                        androidx.compose.material.icons.Icons.Default.PlayArrow,
+                                        null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(28.dp),
                                     )
                                 } else {
                                     com.pismo.messenger.ui.components.FileBadge(
@@ -1063,6 +1083,39 @@ fun ChannelChatScreen(
                         tint = if (sending) PismoColors.TextMuted else PismoColors.Blurple,
                     )
                 }
+            }
+        }
+    }
+
+    // Предпросмотр прикреплённого: снимок — сразу в редакторе, ролик — в
+    // полноэкранном плеере.
+    previewAttach?.let { idx ->
+        val att = pending.getOrNull(idx)
+        if (att == null) previewAttach = null
+        else if (att.isImage) {
+            com.pismo.messenger.ui.chat.PhotoEditor(
+                bytes = att.bytes,
+                onCancel = { previewAttach = null },
+                onDone = { out ->
+                    pending = pending.toMutableList().also {
+                        it[idx] = PendingFile(out, att.fileName, true)
+                    }
+                    previewAttach = null
+                },
+            )
+        } else {
+            LaunchedEffect(idx) {
+                val f = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching {
+                        val tmp = java.io.File(context.cacheDir, "attach-preview-" + idx)
+                        tmp.writeBytes(att.bytes)
+                        tmp
+                    }.getOrNull()
+                }
+                previewAttach = null
+                if (f != null) fullscreenVideo =
+                    com.pismo.messenger.ui.chat.FullscreenVideo(f, att.fileName, 0)
+                else jumpNote = "Не удалось открыть вложение."
             }
         }
     }
