@@ -94,6 +94,8 @@ fun MediaViewerHost(
     onShowInChat: ((Int) -> Unit)? = null,
     onReply: ((Int) -> Unit)? = null,
     onDelete: ((Int) -> Unit)? = null,
+    /** Отправить нарисованное новым снимком в этот же чат. */
+    onSendEdited: ((ByteArray) -> Unit)? = null,
 ) {
     if (items.isEmpty()) return
 
@@ -133,6 +135,8 @@ fun MediaViewerHost(
     var speed by remember { mutableFloatStateOf(1f) }
     var looping by remember { mutableStateOf(false) }
     var speedMenu by remember { mutableStateOf(false) }
+    // Снимок, открытый в рисовании.
+    var editing by remember { mutableStateOf<ByteArray?>(null) }
 
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -200,6 +204,24 @@ fun MediaViewerHost(
                                     scope.launch { shareItem(context, cur, scopeKind) }
                                 },
                             )
+                            if (!cur.isVideo && onSendEdited != null) {
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("Рисовать") },
+                                    onClick = {
+                                        menu = false
+                                        scope.launch {
+                                            val data = withContext(Dispatchers.IO) {
+                                                MediaCache.get(cur.msgId, "img", cur.fileName)
+                                                    ?: ChatRepository.loadImage(
+                                                        cur.msgId, scopeKind, cur.fileName
+                                                    )
+                                            }
+                                            if (data != null) editing = data
+                                            else note = "Снимок ещё не загружен"
+                                        }
+                                    },
+                                )
+                            }
                             if (cur.isVideo) {
                                 androidx.compose.material3.DropdownMenuItem(
                                     text = { Text("Скорость · ${speedLabel(speed)}") },
@@ -302,20 +324,20 @@ fun MediaViewerHost(
                     }
                 }
             }
-        }
-    }
 
-    // Рисование поверх снимка — кисть, надпись, стикер.
-    editing?.let { data ->
-        PhotoEditor(
-            bytes = data,
-            onCancel = { editing = null },
-            onDone = { out ->
-                editing = null
-                onSendEdited?.invoke(out)
-                onClose()
-            },
-        )
+            // Рисование поверх снимка — кисть, надпись, стикер.
+            editing?.let { data ->
+                PhotoEditor(
+                    bytes = data,
+                    onCancel = { editing = null },
+                    onDone = { out ->
+                        editing = null
+                        onSendEdited?.invoke(out)
+                        onClose()
+                    },
+                )
+            }
+        }
     }
 }
 
@@ -438,6 +460,29 @@ private fun VideoPage(
     var file by remember(item.msgId) { mutableStateOf(MediaCache.fileFor(item.msgId, "file", name)) }
     var busy by remember(item.msgId) { mutableStateOf(false) }
     var play by remember(item.msgId) { mutableStateOf(file != null) }
+    var failed by remember(item.msgId) { mutableStateOf("") }
+
+    // ЕСЛИ РОЛИКА ЕЩЁ НЕТ — ВЕЗЁМ ЕГО САМИ.
+    //
+    // В просмотр заходят, чтобы посмотреть; ждать ещё одного нажатия незачем.
+    // Что уже лежит в кеше — играет сразу, остального просим у сервера, и на
+    // это время по центру крутится кружок без процентов: доля загрузки тут
+    // ничего не меняет, а мелькающие числа только мешают.
+    LaunchedEffect(item.msgId) {
+        if (file != null || busy) return@LaunchedEffect
+        busy = true
+        failed = ""
+        Transfers.download(
+            where = transferKey,
+            msgId = item.msgId,
+            scopeKind = scopeKind,
+            fileName = name,
+        ) {
+            busy = false
+            file = MediaCache.fileFor(item.msgId, "file", name)
+            if (file != null) play = true else failed = "Не удалось загрузить"
+        }
+    }
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         val f = file
@@ -474,6 +519,7 @@ private fun VideoPage(
                         val have = file
                         if (have != null) { play = true; return@clickable }
                         busy = true
+                        failed = ""
                         Transfers.download(
                             where = transferKey,
                             msgId = item.msgId,
@@ -482,16 +528,19 @@ private fun VideoPage(
                         ) {
                             busy = false
                             file = MediaCache.fileFor(item.msgId, "file", name)
-                            play = file != null
+                            if (file != null) play = true else failed = "Не удалось загрузить"
                         }
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                if (busy) CircularProgressIndicator(color = Color.White)
-                else Icon(
-                    Icons.Default.PlayArrow, "Смотреть",
-                    tint = Color.White, modifier = Modifier.size(64.dp),
-                )
+                when {
+                    busy -> CircularProgressIndicator(color = Color.White)
+                    failed.isNotBlank() -> Text(failed + " · нажмите, чтобы повторить", color = Color.White)
+                    else -> Icon(
+                        Icons.Default.PlayArrow, "Смотреть",
+                        tint = Color.White, modifier = Modifier.size(64.dp),
+                    )
+                }
             }
         }
     }

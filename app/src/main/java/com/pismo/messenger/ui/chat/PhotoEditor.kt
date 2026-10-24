@@ -233,7 +233,7 @@ fun PhotoEditor(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                EditorButton(Icons.Default.Close, "Отмена", onCancel)
+                EditorButton(Icons.Default.Close, "Отмена") { onCancel() }
                 Box(Modifier.weight(1f))
                 EditorButton(Icons.Default.Undo, "Отменить последнее") {
                     when (order.removeLastOrNull()) {
@@ -242,7 +242,7 @@ fun PhotoEditor(
                         "sticker" -> stickers.removeLastOrNull()
                     }
                 }
-                EditorButton(Icons.Default.Check, "Готово", enabled = !busy) {
+                EditorButton(Icons.Default.Check, "Готово", enabled = !busy, onClick = {
                     val src = source ?: return@EditorButton
                     busy = true
                     scope.launch {
@@ -252,7 +252,7 @@ fun PhotoEditor(
                         busy = false
                         if (out != null) onDone(out)
                     }
-                }
+                })
             }
 
             // Низ: инструменты, цвета и толщина.
