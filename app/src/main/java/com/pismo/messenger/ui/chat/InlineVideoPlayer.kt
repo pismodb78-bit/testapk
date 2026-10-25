@@ -113,6 +113,8 @@ fun InlineVideoBubble(
      * файла, и по ней же пузырь сразу встаёт правильной формы.
      */
     poster: ByteArray? = null,
+    /** Открыть общий просмотр фото и видео на этом сообщении. */
+    onOpenMedia: ((Int) -> Unit)? = null,
     onFullscreen: (java.io.File, String, Int) -> Unit = { _, _, _ -> },
 ) {
     val context = LocalContext.current
@@ -312,7 +314,10 @@ fun InlineVideoBubble(
                 // Ни обложка, ни элементы плеера не должны забирать фокус:
                 // из-за него лента чата подтягивала пузырь в видимую область.
                 .focusProperties { canFocus = false }
-                .then(if (playing) Modifier else Modifier.clickable { open() }),
+                .then(if (playing) Modifier else Modifier.clickable {
+                    if (busy) return@clickable
+                    if (onOpenMedia != null) onOpenMedia(msgId) else open()
+                }),
             contentAlignment = Alignment.Center,
         ) {
             val f = file

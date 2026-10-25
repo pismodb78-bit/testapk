@@ -130,10 +130,7 @@ fun MessageBubble(
      * вместе с ним закрывался бы просмотр.
      */
     onOpenVideo: (java.io.File, String, Int) -> Unit = { _, _, _ -> },
-    /**
-     * Открыть ленту просмотра на этом сообщении. Если не задан — показываем
-     * снимок в одиночку, как раньше.
-     */
+    /** Открыть общий просмотр фото и видео на этом сообщении. */
     onOpenMedia: ((Int) -> Unit)? = null,
     /**
      * Ключ переписки для полосы передач. Скачивание идёт вне экрана, и по
@@ -448,7 +445,11 @@ fun MessageBubble(
                                 // по ней же пузырь сразу встаёт правильной
                                 // формы (вертикальное видео — вертикальным).
                                 poster = image,
-                                onFullscreen = onOpenVideo,
+                                onOpenMedia = onOpenMedia,
+                                onFullscreen = { file, name, id ->
+                                    if (onOpenMedia != null) onOpenMedia(id)
+                                    else onOpenVideo(file, name, id)
+                                },
                             )
                             Spacer(Modifier.height(6.dp))
                         } else if (playableAudio) {

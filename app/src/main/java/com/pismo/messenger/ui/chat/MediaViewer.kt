@@ -627,7 +627,7 @@ private fun VideoPage(
             Box(Modifier.fillMaxSize()) {
                 VideoSurface(
                     file = f,
-                    startAtMs = 0,
+                    startAtMs = VideoPositions.get(item.msgId),
                     autoPlay = true,
                     onPositionChange = {},
                     onFullscreen = {},
