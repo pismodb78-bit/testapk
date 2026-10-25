@@ -35,7 +35,7 @@ internal fun videoCoverJpeg(bytes: ByteArray?, maxSide: Int = 640): ByteArray? {
                 override fun getSize(): Long = bytes.size.toLong()
                 override fun close() = Unit
             })
-            r.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            brightFrame(r)
         } finally {
             runCatching { r.release() }
         }
@@ -90,20 +90,24 @@ internal fun coverJpegOf(frame: Bitmap, maxSide: Int = 640): ByteArray? = runCat
  *
  * Готовый кадр кладётся в кеш картинок и дописывается в строку сообщения:
  * дальше его видят все — и телефон, и компьютер, — не повторяя работы.
- * Ролики разбираются по одному, и каждый пробуем один раз за запуск.
+ * Ролики разбираются по два разом, и каждый пробуем один раз за запуск.
  */
 internal object RemoteCovers {
     private val tried = java.util.Collections.synchronizedSet(HashSet<String>())
-    private val gate = kotlinx.coroutines.sync.Semaphore(1)
+    private val gate = kotlinx.coroutines.sync.Semaphore(2)
 
-    /** Кадр для ролика без обложки. null — не вышло (или уже пробовали). */
+    /**
+     * Кадр для ролика без обложки (или с чёрной — [replace]). null — не вышло
+     * (или уже пробовали).
+     */
     suspend fun grab(
         msgId: Int,
         scope: com.pismo.messenger.data.model.Scope,
         fileName: String?,
+        replace: Boolean = false,
     ): ByteArray? {
         if (msgId <= 0) return null
-        if (!tried.add("${scope.name}:$msgId")) return null
+        if (!tried.add("${scope.name}:$msgId" + if (replace) ":r" else "")) return null
         return gate.withPermitCompat {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 val url = runCatching {
@@ -117,7 +121,7 @@ internal object RemoteCovers {
                 val jpeg = coverJpegOf(frame)
                 runCatching { frame.recycle() }
                 if (jpeg == null || jpeg.isEmpty()) return@withContext null
-                share(msgId, scope, fileName, jpeg)
+                share(msgId, scope, fileName, jpeg, replace)
                 jpeg
             }
         }
@@ -129,13 +133,15 @@ internal object RemoteCovers {
         scope: com.pismo.messenger.data.model.Scope,
         fileName: String?,
         frame: Bitmap,
-    ) {
-        if (msgId <= 0) return
-        if (!tried.add("${scope.name}:$msgId:local")) return
-        val jpeg = coverJpegOf(frame) ?: return
+        replace: Boolean = false,
+    ): ByteArray? {
+        if (msgId <= 0) return null
+        if (!tried.add("${scope.name}:$msgId:local" + if (replace) ":r" else "")) return null
+        val jpeg = coverJpegOf(frame) ?: return null
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-            share(msgId, scope, fileName, jpeg)
+            share(msgId, scope, fileName, jpeg, replace)
         }
+        return jpeg
     }
 
     private suspend fun share(
@@ -143,18 +149,21 @@ internal object RemoteCovers {
         scope: com.pismo.messenger.data.model.Scope,
         fileName: String?,
         jpeg: ByteArray,
+        replace: Boolean = false,
     ) {
         runCatching { com.pismo.messenger.data.MediaCache.put(msgId, "img", jpeg, fileName) }
-        runCatching { com.pismo.messenger.data.repo.ChatRepository.backfillCover(msgId, scope, jpeg) }
+        runCatching {
+            if (replace) com.pismo.messenger.data.repo.ChatRepository.replaceCover(msgId, scope, jpeg)
+            else com.pismo.messenger.data.repo.ChatRepository.backfillCover(msgId, scope, jpeg)
+        }
     }
 
-    /** Кадр чуть дальше начала: первый у многих роликов чёрный. */
+    /** Не тёмный кадр ролика по ссылке (см. brightFrame); по сети — меньше попыток. */
     private fun frameAt(url: String): Bitmap? {
         val r = MediaMetadataRetriever()
         return try {
             r.setDataSource(url, HashMap())
-            r.getFrameAtTime(500_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                ?: r.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            brightFrame(r, maxTries = 4)
         } catch (_: Throwable) {
             null
         } finally {
@@ -162,6 +171,63 @@ internal object RemoteCovers {
         }
     }
 }
+
+/**
+ * КАДР ДЛЯ ОБЛОЖКИ — НЕ ЧЁРНЫЙ.
+ *
+ * Первый кадр у многих роликов чёрный: затемнение в начале, заставка, первая
+ * секунда с закрытым объективом. Обложка выходила чёрным квадратом. Пробуем
+ * несколько моментов по очереди и берём первый светлый; если светлых нет
+ * вовсе — самый светлый из увиденных.
+ */
+internal fun brightFrame(r: MediaMetadataRetriever, maxTries: Int = 6): Bitmap? {
+    val durMs = runCatching {
+        r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+    }.getOrNull() ?: 0L
+    val cand = mutableListOf(500L, 1_500L, 3_000L)
+    if (durMs > 0) cand += listOf(durMs / 10, durMs / 4, durMs / 2)
+    val times = ArrayList<Long>()
+    for (t0 in cand) {
+        val t = if (durMs > 0) t0.coerceAtMost((durMs - 100).coerceAtLeast(0)) else t0
+        if (times.none { kotlin.math.abs(it - t) < 300 }) times += t
+    }
+    times.sort()
+
+    var best: Bitmap? = null
+    var bestL = -1f
+    for (t in times.take(maxTries)) {
+        val f = runCatching {
+            r.getFrameAtTime(t * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        }.getOrNull() ?: continue
+        val l = frameLuma(f)
+        if (l >= 22f) {
+            val old = best
+            if (old != null && old !== f) runCatching { old.recycle() }
+            return f
+        }
+        if (l > bestL) {
+            val old = best
+            if (old != null && old !== f) runCatching { old.recycle() }
+            best = f
+            bestL = l
+        } else if (f !== best) runCatching { f.recycle() }
+    }
+    return best ?: runCatching {
+        r.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+    }.getOrNull()
+}
+
+/** Средняя яркость кадра (0..255) — по уменьшенной копии 16×16. */
+internal fun frameLuma(b: Bitmap): Float = runCatching {
+    val s = Bitmap.createScaledBitmap(b, 16, 16, true)
+    var sum = 0f
+    for (y in 0 until 16) for (x in 0 until 16) {
+        val p = s.getPixel(x, y)
+        sum += 0.299f * ((p shr 16) and 0xFF) + 0.587f * ((p shr 8) and 0xFF) + 0.114f * (p and 0xFF)
+    }
+    if (s !== b) s.recycle()
+    sum / 256f
+}.getOrDefault(255f)
 
 private suspend fun <T> kotlinx.coroutines.sync.Semaphore.withPermitCompat(block: suspend () -> T): T {
     acquire()

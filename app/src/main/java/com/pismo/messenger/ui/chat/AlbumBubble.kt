@@ -331,6 +331,22 @@ private fun AlbumCell(
             bytes = runCatching { ChatRepository.loadImage(msg.id, scopeKind, msg.fileName) }
                 .getOrNull()
         }
+        // Обложка ролика чёрная (снят был самый первый кадр) — переснимаем
+        // светлый кадр по ссылке и заменяем её в сообщении.
+        val b = bytes
+        if (isVideo && b != null && file == null) {
+            val dark = withContext(Dispatchers.IO) {
+                runCatching {
+                    val bmp = android.graphics.BitmapFactory.decodeByteArray(b, 0, b.size)
+                    val l = frameLuma(bmp)
+                    bmp.recycle()
+                    l < 14f
+                }.getOrDefault(false)
+            }
+            if (dark) {
+                RemoteCovers.grab(msg.id, scopeKind, msg.fileName, replace = true)?.let { bytes = it }
+            }
+        }
     }
     LaunchedEffect(file) {
         val f = file ?: return@LaunchedEffect
@@ -338,15 +354,26 @@ private fun AlbumCell(
         frame = withContext(Dispatchers.IO) {
             runCatching { firstFrame(f) }.getOrNull()?.also {
                 // Обложки у ролика не было — кадр с файла дописываем в
-                // сообщение, чтобы её видели все.
+                // сообщение, чтобы её видели все. Была, но чёрная — заменяем.
                 if (!msg.hasImage) RemoteCovers.shareFrame(msg.id, scopeKind, msg.fileName, it)
+                else {
+                    val old = bytes ?: MediaCache.get(msg.id, "img", msg.fileName)
+                    val oldDark = old != null && runCatching {
+                        val bmp = android.graphics.BitmapFactory.decodeByteArray(old, 0, old.size)
+                        val l = frameLuma(bmp)
+                        bmp.recycle()
+                        l < 14f
+                    }.getOrDefault(false)
+                    if (oldDark && frameLuma(it) >= 14f)
+                        RemoteCovers.shareFrame(msg.id, scopeKind, msg.fileName, it, replace = true)
+                }
             }
         }
     }
     // Ролик без обложки и не скачан — кадр по ссылке, не скачивая файл.
     LaunchedEffect(msg.id) {
         if (!isVideo || msg.hasImage || file != null) return@LaunchedEffect
-        kotlinx.coroutines.delay(800)
+        kotlinx.coroutines.delay(300)
         if (frame != null || bytes != null || file != null) return@LaunchedEffect
         val jpeg = MediaCache.get(msg.id, "img", msg.fileName)
             ?: RemoteCovers.grab(msg.id, scopeKind, msg.fileName)

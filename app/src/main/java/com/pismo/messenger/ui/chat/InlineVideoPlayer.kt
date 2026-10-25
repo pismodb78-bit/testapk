@@ -164,6 +164,30 @@ fun InlineVideoBubble(
         } ?: return@LaunchedEffect
         VideoShapes.remember(msgId, bmp.width, bmp.height)
         cover = bmp
+
+        // ОБЛОЖКА ЧЁРНАЯ — раньше бралась самая первая картинка ролика, а она
+        // часто чёрная. Переснимаем светлый кадр (с файла на руках или по
+        // ссылке, не скачивая) и заменяем обложку в сообщении — для всех.
+        val dark = withContext(Dispatchers.IO) { frameLuma(bmp) < 14f }
+        if (!dark) return@LaunchedEffect
+        val f = file
+        val better = withContext(Dispatchers.IO) {
+            if (f != null) {
+                firstFrame(f)?.let { fr ->
+                    val j = if (frameLuma(fr) >= 14f)
+                        RemoteCovers.shareFrame(msgId, scopeKind, fileName, fr, replace = true) else null
+                    runCatching { fr.recycle() }
+                    j
+                }
+            } else RemoteCovers.grab(msgId, scopeKind, fileName, replace = true)
+        } ?: return@LaunchedEffect
+        val b2 = withContext(Dispatchers.IO) {
+            runCatching {
+                android.graphics.BitmapFactory.decodeByteArray(better, 0, better.size)
+            }.getOrNull()
+        } ?: return@LaunchedEffect
+        if (frameLuma(b2) < 14f) return@LaunchedEffect
+        cover = b2
     }
 
     // Обложка = первый кадр. Достаём в фоне: MediaMetadataRetriever
@@ -190,7 +214,7 @@ fun InlineVideoBubble(
     // по ссылке файлового сервиса, не скачивая ролик (см. RemoteCovers).
     // Короткая пауза — даём доехать обложке из самого сообщения.
     LaunchedEffect(msgId) {
-        kotlinx.coroutines.delay(1200)
+        kotlinx.coroutines.delay(400)
         if (cover != null || file != null) return@LaunchedEffect
         val jpeg = MediaCache.get(msgId, "img", fileName)
             ?: RemoteCovers.grab(msgId, scopeKind, fileName)
@@ -1010,7 +1034,8 @@ internal fun firstFrame(file: File): Bitmap? = runCatching {
     val r = MediaMetadataRetriever()
     try {
         r.setDataSource(file.absolutePath)
-        r.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        // Не самый первый кадр, а первый НЕ ТЁМНЫЙ — см. brightFrame.
+        brightFrame(r)
     } finally {
         runCatching { r.release() }
     }

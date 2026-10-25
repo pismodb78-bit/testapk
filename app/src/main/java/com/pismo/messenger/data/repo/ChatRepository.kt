@@ -1796,6 +1796,18 @@ object ChatRepository {
         }
     }
 
+    /**
+     * Заменить обложку ролика, даже если она есть, — для ЧЁРНЫХ обложек
+     * (раньше бралась самая первая картинка ролика, а она часто чёрная).
+     * Звать только для сообщений-роликов: у снимка картинка — это сам снимок.
+     */
+    suspend fun replaceCover(msgId: Int, scope: Scope, jpeg: ByteArray?) {
+        if (msgId <= 0 || jpeg == null || jpeg.isEmpty()) return
+        runCatching {
+            Db.exec("UPDATE ${scope.table} SET image_data=? WHERE id=?", jpeg, msgId)
+        }
+    }
+
     suspend fun loadImage(msgId: Int, scope: Scope, fileName: String?): ByteArray? =
         loadBlob(msgId, scope, "image_data", "img", fileName)
 
