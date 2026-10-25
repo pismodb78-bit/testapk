@@ -171,12 +171,37 @@ fun InlineVideoBubble(
     LaunchedEffect(file) {
         val f = file ?: return@LaunchedEffect
         if (cover != null) return@LaunchedEffect
-        val frame = withContext(Dispatchers.IO) { firstFrame(f) }
+        val hadPoster = poster != null && poster.isNotEmpty()
+        val frame = withContext(Dispatchers.IO) {
+            firstFrame(f)?.also {
+                // Своей обложки у ролика не было — кадр с файла на руках
+                // дописываем в сообщение: дальше его видят все, не скачивая.
+                if (!hadPoster) RemoteCovers.shareFrame(msgId, scopeKind, fileName, it)
+            }
+        }
         // Форму ролика запоминаем по первому же кадру: со следующего показа
         // пузырь встанет сразу правильным, без рамки 4:3 вокруг вертикального
         // видео.
         frame?.let { VideoShapes.remember(msgId, it.width, it.height) }
         cover = frame
+    }
+
+    // ОБЛОЖКИ НЕТ НИ В СООБЩЕНИИ, НИ В КЕШЕ, А ФАЙЛ НЕ СКАЧАН — снимаем кадр
+    // по ссылке файлового сервиса, не скачивая ролик (см. RemoteCovers).
+    // Короткая пауза — даём доехать обложке из самого сообщения.
+    LaunchedEffect(msgId) {
+        kotlinx.coroutines.delay(1200)
+        if (cover != null || file != null) return@LaunchedEffect
+        val jpeg = MediaCache.get(msgId, "img", fileName)
+            ?: RemoteCovers.grab(msgId, scopeKind, fileName)
+            ?: return@LaunchedEffect
+        val bmp = withContext(Dispatchers.IO) {
+            runCatching { android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) }
+                .getOrNull()
+        } ?: return@LaunchedEffect
+        if (cover != null) { runCatching { bmp.recycle() }; return@LaunchedEffect }
+        VideoShapes.remember(msgId, bmp.width, bmp.height)
+        cover = bmp
     }
 
     DisposableEffect(msgId) {
@@ -689,7 +714,7 @@ internal fun VideoSurface(
                     // такой высоты нет и мешать нечему — поднятая, она
                     // закрывала середину кадра, поэтому в ленте она лежит
                     // почти по нижнему краю, оставляя только зазор под палец.
-                    bottom = barLift ?: if (insetBottom) 84.dp else 8.dp,
+                    bottom = barLift ?: if (insetBottom) 100.dp else 8.dp,
                 )
                 .clip(RoundedCornerShape(18.dp))
                 // Полупрозрачнее: сквозь полосу видно кадр, а читается она
@@ -1162,7 +1187,7 @@ fun FullscreenVideoHost(
                         .navigationBarsPadding()
                         // Над полосой времени, и с запасом: вплотную они
                         // читаются как одна куча, а полоса сама приподнята.
-                        .padding(start = 16.dp, end = 16.dp, bottom = 152.dp),
+                        .padding(start = 16.dp, end = 16.dp, bottom = 168.dp),
                 )
             }
 

@@ -50,7 +50,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -73,6 +77,8 @@ data class MediaItem(
     val fileName: String?,
     val sender: String,
     val timeMs: Long,
+    /** Текст сообщения; у альбома — подпись всей пачки. */
+    val caption: String = "",
 )
 
 /**
@@ -116,7 +122,7 @@ fun MediaViewerHost(
         val full = ChatRepository.mediaIndex(scopeKind, target)
         if (full.size > feed.size) {
             feed = full.map {
-                MediaItem(it.id, it.isVideo, it.fileName, it.sender, it.createdAtMs)
+                MediaItem(it.id, it.isVideo, it.fileName, it.sender, it.createdAtMs, it.caption)
             }
         }
     }
@@ -144,6 +150,10 @@ fun MediaViewerHost(
     var speedMenu by remember { mutableStateOf(false) }
     // Снимок, открытый в рисовании.
     var editing by remember { mutableStateOf<ByteArray?>(null) }
+    // Высота нижней панели просмотра — по ней полоса времени ролика встаёт
+    // ровно над ней, а не по числу, угаданному под один телефон.
+    var panelHeight by remember { mutableStateOf(0.dp) }
+    val density = LocalDensity.current
 
     Dialog(onDismissRequest = onClose, properties = DialogProperties(
             usePlatformDefaultWidth = false,
@@ -157,6 +167,17 @@ fun MediaViewerHost(
             decorFitsSystemWindows = false,
         )) {
         com.pismo.messenger.ui.components.FullScreenDialogWindow()
+        // Отступы считаем САМИ и с запасом: внутри диалога система на части
+        // телефонов отдаёт их нулевыми, и кнопки ложились под жестовую черту.
+        // Берём большее из системного значения и гарантированного минимума.
+        val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        val statusInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+        val bottomPad = maxOf(navInset, 48.dp) + 28.dp
+        // Полоса времени ролика — над панелью: плеер сам отступает от
+        // жестовой черты, поэтому её высоту из подъёма вычитаем.
+        val videoBarLift: Dp =
+            if (panelHeight > 0.dp) (bottomPad + panelHeight + 10.dp - navInset).coerceAtLeast(120.dp)
+            else 176.dp
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             // КЛЮЧ СТРАНИЦЫ — НОМЕР СООБЩЕНИЯ.
             //
@@ -182,6 +203,7 @@ fun MediaViewerHost(
                         // Compose держит собранными, и они тянули бы с сервера
                         // то, на что человек даже не посмотрел.
                         isCurrent = pager.currentPage == page,
+                        barLift = videoBarLift,
                     )
                 } else {
                     PhotoPage(item, scopeKind, onToggleChrome = { chrome = !chrome })
@@ -207,18 +229,13 @@ fun MediaViewerHost(
             // ЗА нижним краем и просто не нажимался. Отдельный слой с
             // отступами под системные панели держит их в поле зрения, какой бы
             // ни была навигация на телефоне.
-            // Отступы считаем САМИ и с запасом: внутри диалога система на
-            // части телефонов отдаёт их нулевыми, и кнопки ложились под
-            // жестовую черту. Берём большее из системного значения и
-            // гарантированного минимума — так панели всегда в поле зрения.
-            val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-            val statusInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+            // Отступы — посчитанные выше, с гарантированным минимумом.
             Box(
                 Modifier
                     .fillMaxSize()
                     .padding(
                         top = maxOf(statusInset, 28.dp),
-                        bottom = maxOf(navInset, 44.dp) + 12.dp,
+                        bottom = bottomPad,
                     ),
             ) {
             if (chrome) {
@@ -235,6 +252,33 @@ fun MediaViewerHost(
                         left = false,
                         modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp),
                     ) { scope.launch { pager.animateScrollToPage(pager.currentPage + 1) } }
+                }
+
+                // КТО ПРИСЛАЛ — СВЕРХУ, как у ролика во весь экран: в
+                // просмотре от переписки ничего не остаётся, и без этого
+                // непонятно, чей это снимок. Справа место под «⋮» и крестик.
+                Column(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 118.dp, top = 14.dp),
+                ) {
+                    if (cur.sender.isNotBlank()) {
+                        Text(
+                            cur.sender,
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Text(
+                        formatTime(cur.timeMs),
+                        color = Color(0xCCFFFFFF),
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                    )
                 }
 
                 // Шапка: меню и закрыть.
@@ -348,26 +392,33 @@ fun MediaViewerHost(
                     Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
+                        .onSizeChanged { panelHeight = with(density) { it.height.toDp() } }
                         .background(Color(0x99000000))
                         // Снизу запас: если отступ системной панели вдруг
                         // придёт нулевым, кнопки всё равно не лягут на самый
                         // край и останутся нажимаемыми.
                         .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
                 ) {
+                    // ЧТО НАПИСАЛ — СНИЗУ, над счётчиком: у снимка, у ролика и
+                    // у каждого кадра альбома (подпись у пачки одна на всех).
+                    // Длинная обрывается на третьей строке — целиком она в
+                    // переписке.
+                    if (cur.caption.isNotBlank()) {
+                        Text(
+                            cur.caption,
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(bottom = 6.dp),
+                        )
+                    }
                     Text(
                         (if (cur.isVideo) "Видео " else "Фото ") +
                                 "${pager.currentPage + 1} из ${feed.size}",
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        listOfNotNull(
-                            cur.sender.takeIf { it.isNotBlank() },
-                            formatTime(cur.timeMs),
-                        ).joinToString(" · "),
                         color = Color(0xCCFFFFFF),
                         fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
                     )
                     if (note.isNotBlank()) {
                         Text(note, color = Color(0xFF8BC34A), fontSize = 12.sp)
@@ -523,6 +574,8 @@ private fun VideoPage(
     looping: Boolean = false,
     /** Эта страница сейчас на экране (а не соседняя, собранная про запас). */
     isCurrent: Boolean = true,
+    /** На сколько поднять полосу времени — над панелью просмотра. */
+    barLift: Dp = 176.dp,
 ) {
     val name = item.fileName ?: "video.mp4"
     var file by remember(item.msgId) { mutableStateOf(MediaCache.fileFor(item.msgId, "file", name)) }
@@ -582,7 +635,7 @@ private fun VideoPage(
                     insetBottom = true,
                     // Под полосой времени в просмотре лежат подпись и ряд
                     // кнопок — поднимаем её над ними, иначе они бы спорили.
-                    barLift = 150.dp,
+                    barLift = barLift,
                     speed = speed,
                     looping = looping,
                     // Стрелки и подписи просмотра НЕ прячем вместе с кнопками

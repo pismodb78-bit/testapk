@@ -273,7 +273,23 @@ private fun AlbumCell(
     LaunchedEffect(file) {
         val f = file ?: return@LaunchedEffect
         if (frame != null) return@LaunchedEffect
-        frame = withContext(Dispatchers.IO) { runCatching { firstFrame(f) }.getOrNull() }
+        frame = withContext(Dispatchers.IO) {
+            runCatching { firstFrame(f) }.getOrNull()?.also {
+                // Обложки у ролика не было — кадр с файла дописываем в
+                // сообщение, чтобы её видели все.
+                if (!msg.hasImage) RemoteCovers.shareFrame(msg.id, scopeKind, msg.fileName, it)
+            }
+        }
+    }
+    // Ролик без обложки и не скачан — кадр по ссылке, не скачивая файл.
+    LaunchedEffect(msg.id) {
+        if (!isVideo || msg.hasImage || file != null) return@LaunchedEffect
+        kotlinx.coroutines.delay(800)
+        if (frame != null || bytes != null || file != null) return@LaunchedEffect
+        val jpeg = MediaCache.get(msg.id, "img", msg.fileName)
+            ?: RemoteCovers.grab(msg.id, scopeKind, msg.fileName)
+            ?: return@LaunchedEffect
+        if (frame == null && bytes == null) bytes = jpeg
     }
 
     Box(

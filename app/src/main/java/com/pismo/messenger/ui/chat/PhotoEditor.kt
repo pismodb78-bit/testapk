@@ -190,7 +190,9 @@ fun PhotoEditor(
                 .background(Color.Black)
                 .padding(
                     top = maxOf(statusInset, 28.dp),
-                    bottom = maxOf(navInset, 44.dp) + 8.dp,
+                    // Повыше над жестовой чертой: вплотную к ней нижний ряд
+                    // нажимался через раз.
+                    bottom = maxOf(navInset, 48.dp) + 24.dp,
                 ),
         ) {
             EditorTopBar(
@@ -223,8 +225,9 @@ fun PhotoEditor(
                     Modifier
                         .fillMaxSize()
                         .pointerInput(tool, color, width) {
-                            // Наклейку двигают, крутят и растягивают ДВУМЯ
-                            // пальцами — обычным щипком, как в телеграме.
+                            // Наклейку и надпись двигают одним пальцем, а
+                            // крутят и растягивают ДВУМЯ — обычным щипком, как
+                            // в телеграме.
                             if (tool == Tool.Sticker) {
                                 detectTransformGestures { _, pan, zoom, rot ->
                                     val st = marks.lastOrNull { it is StickerMark } as? StickerMark
@@ -237,6 +240,23 @@ fun PhotoEditor(
                                     }
                                     st.scale = (st.scale * zoom).coerceIn(0.05f, 1.6f)
                                     st.angle += rot
+                                }
+                                return@pointerInput
+                            }
+                            if (tool == Tool.Text) {
+                                detectTransformGestures { _, pan, zoom, rot ->
+                                    val tm = marks.lastOrNull { it is TextMark } as? TextMark
+                                        ?: return@detectTransformGestures
+                                    if (frame.width > 0f && frame.height > 0f) {
+                                        tm.pos = Offset(
+                                            (tm.pos.x + pan.x / frame.width).coerceIn(0f, 1f),
+                                            (tm.pos.y + pan.y / frame.height).coerceIn(0f, 1f),
+                                        )
+                                    }
+                                    // Кегль — доля ширины снимка, как и при
+                                    // создании: от мелкой подписи до заголовка.
+                                    tm.size = (tm.size * zoom).coerceIn(0.015f, 0.4f)
+                                    tm.angle += rot
                                 }
                                 return@pointerInput
                             }
@@ -324,13 +344,15 @@ fun PhotoEditor(
                                         fontWeight = FontWeight.Bold,
                                     ),
                                 )
-                                drawText(
-                                    layout,
-                                    topLeft = Offset(
-                                        c.x - layout.size.width / 2f,
-                                        c.y - layout.size.height / 2f,
-                                    ),
-                                )
+                                rotate(m.angle, pivot = c) {
+                                    drawText(
+                                        layout,
+                                        topLeft = Offset(
+                                            c.x - layout.size.width / 2f,
+                                            c.y - layout.size.height / 2f,
+                                        ),
+                                    )
+                                }
                             }
 
                             else -> Unit
@@ -530,8 +552,12 @@ private class PenStroke(
     val kind: Tool,
 ) : Mark
 
-private class TextMark(val text: String, pos: Offset, val color: Color, val size: Float) : Mark {
+private class TextMark(val text: String, pos: Offset, val color: Color, size: Float) : Mark {
     var pos by mutableStateOf(pos)
+    /** Кегль — доля ширины снимка. Щипком — крупнее или мельче. */
+    var size by mutableFloatStateOf(size)
+    /** Поворот в градусах — тем же щипком, двумя пальцами. */
+    var angle by mutableFloatStateOf(0f)
 }
 
 private class StickerMark(val bitmap: Bitmap, pos: Offset, scale: Float) : Mark {
@@ -755,7 +781,13 @@ private fun render(src: Bitmap, marks: List<Mark>): ByteArray? = runCatching {
                 // По середине строки: на экране надпись тоже стоит серединой
                 // в своей точке.
                 val mid = (paint.descent() + paint.ascent()) / 2f
-                canvas.drawText(m.text, m.pos.x * w, m.pos.y * h - mid, paint)
+                val cx = m.pos.x * w
+                val cy = m.pos.y * h
+                // Повёрнутая надпись — вокруг своей середины, как на экране.
+                val save = canvas.save()
+                canvas.rotate(m.angle, cx, cy)
+                canvas.drawText(m.text, cx, cy - mid, paint)
+                canvas.restoreToCount(save)
             }
 
             else -> Unit

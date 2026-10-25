@@ -1660,6 +1660,8 @@ object ChatRepository {
         val fileName: String?,
         val sender: String,
         val createdAtMs: Long,
+        /** Текст сообщения; у пачки — подпись её первого вложения. */
+        val caption: String = "",
     )
 
     /**
@@ -1696,7 +1698,7 @@ object ChatRepository {
 
         val sql = """
             SELECT * FROM (
-                SELECT m.id, m.file_name,
+                SELECT m.id, m.file_name, m.sender_id, m.text,
                        UNIX_TIMESTAMP(m.created_at) AS created_ts,
                        (m.image_data IS NOT NULL) AS has_img,
                        TRIM(CONCAT(u.Name,' ',u.Surname)) AS sender_name, u.login
@@ -1708,16 +1710,26 @@ object ChatRepository {
         """.trimIndent()
 
         return runCatching {
-            Db.query(sql, *args) { rs ->
+            val raw = Db.query(sql, *args) { rs ->
                 val name = rs.str("sender_name").ifBlank { rs.str("login") }
-                MediaEntry(
+                val fileName = rs.getString("file_name")
+                val entry = MediaEntry(
                     id = rs.getInt("id"),
-                    isVideo = !rs.bool("has_img"),
-                    fileName = rs.getString("file_name"),
+                    // Ролик узнаём по ФАЙЛУ, а не по отсутствию картинки: у
+                    // ролика с обложкой картинка есть, и такой ролик в ленте
+                    // просмотра превращался в «фото» — открывалась обложка.
+                    isVideo = com.pismo.messenger.core.MediaKinds.isVideo(fileName),
+                    fileName = fileName,
                     sender = name,
                     createdAtMs = rs.getLong("created_ts") * 1000L,
                 )
+                val text = runCatching { Crypto.dec(rs.getString("text")) }.getOrDefault("")
+                entry to com.pismo.messenger.core.Albums.CaptionRow(
+                    entry.id, rs.getInt("sender_id"), entry.createdAtMs, text,
+                )
             }
+            val caps = com.pismo.messenger.core.Albums.captionsOf(raw.map { it.second })
+            raw.map { (e, _) -> e.copy(caption = caps[e.id].orEmpty()) }
         }.getOrDefault(emptyList())
     }
 

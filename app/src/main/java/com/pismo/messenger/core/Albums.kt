@@ -101,4 +101,48 @@ object Albums {
         flush()
         return out
     }
+
+    /**
+     * Подпись каждого снимка и ролика для ПРОСМОТРА: у пачки она одна на
+     * всех — та, что ушла с первым вложением. Листая альбом, человек видит
+     * её на каждом кадре, а не только на первом.
+     */
+    fun captions(list: List<ChatMessage>): Map<Int, String> {
+        val out = HashMap<Int, String>(list.size)
+        for (g in group(list)) {
+            val cap = g.firstOrNull()?.text.orEmpty().trim()
+            for (m in g) out[m.id] = cap
+        }
+        return out
+    }
+
+    /**
+     * То же для готового списка вложений (лента просмотра по всей
+     * переписке): строки без текста пачки берут подпись у её первого.
+     *
+     * [rows] — по порядку: номер, отправитель, время, расшифрованный текст.
+     */
+    fun captionsOf(rows: List<CaptionRow>): Map<Int, String> {
+        val out = HashMap<Int, String>(rows.size)
+        var head: CaptionRow? = null
+        var prev: CaptionRow? = null
+        var headCap = ""
+        for (r in rows) {
+            val h = head
+            val p = prev
+            val legacy = h != null && p != null &&
+                    r.createdAtMs < MARK_SINCE_MS && h.createdAtMs < MARK_SINCE_MS &&
+                    r.text.isBlank() && r.createdAtMs - p.createdAtMs <= GAP_MS
+            val part = h != null && r.senderId == h.senderId && (isPart(r.text) || legacy)
+            if (!part) {
+                head = r
+                headCap = strip(r.text).trim()
+            }
+            out[r.id] = headCap
+            prev = r
+        }
+        return out
+    }
+
+    data class CaptionRow(val id: Int, val senderId: Int, val createdAtMs: Long, val text: String)
 }

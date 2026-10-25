@@ -1168,6 +1168,8 @@ fun ChannelChatScreen(
     }
 
     mediaViewerAt?.let { openAt ->
+        // Подпись у пачки одна на всех — та, что ушла с первым вложением.
+        val captions = remember(messages) { com.pismo.messenger.core.Albums.captions(messages) }
         val media = messages
             .filter {
                 !it.isDeleted && (it.hasImage ||
@@ -1181,6 +1183,7 @@ fun ChannelChatScreen(
                     fileName = it.fileName,
                     sender = it.senderName,
                     timeMs = it.createdAtMs,
+                    caption = captions[it.id].orEmpty(),
                 )
             }
         val at = media.indexOfFirst { it.msgId == openAt }
