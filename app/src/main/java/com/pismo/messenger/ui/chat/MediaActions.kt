@@ -192,7 +192,13 @@ fun ForwardDialog(
 )
 
 /** Одно пересылаемое сообщение: что переслать и от кого оно. */
-data class ForwardItem(val messageId: Int, val text: String, val sender: String)
+data class ForwardItem(
+    val messageId: Int,
+    val text: String,
+    val sender: String,
+    /** Продолжение альбома: уходит со знаком пачки, без своей пометки. */
+    val albumPart: Boolean = false,
+)
 
 /**
  * Пересылка пачки сообщений — порт BeginForwardExternalBatch с ПК.
@@ -229,14 +235,18 @@ fun ForwardDialog(
     fun forward(target: Int, dstScope: Scope) {
         busy = true
         scope.launch {
-            items.sortedBy { it.messageId }.forEach { item ->
+            items.sortedBy { it.messageId }.forEachIndexed { i, item ->
                 // Текст с указанием исходного отправителя — формат ПК-версии.
                 //
                 // Уже пересланное второй пометкой не обклеиваем: иначе они копятся
                 // цепочкой («↪ Переслано от Пети: ↪ Переслано от Васи: …»), и в
                 // превью списка это выглядит как два значка подряд. Оставляем
                 // первую — она называет настоящего автора.
+                // Продолжение альбома (не первое в пересылке) уходит со знаком
+                // пачки: у получателя альбом соберётся той же плиткой, а
+                // пометка «Переслано от…» будет одна — у первого вложения.
                 val caption = when {
+                    item.albumPart && i > 0 -> com.pismo.messenger.core.Albums.MARK
                     item.text.startsWith("↪ Переслано") -> item.text
                     item.sender.isBlank() -> "↪ Переслано:\n${item.text}"
                     else -> "↪ Переслано от ${item.sender}:\n${item.text}"

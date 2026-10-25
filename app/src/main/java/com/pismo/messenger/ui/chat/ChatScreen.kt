@@ -1147,9 +1147,10 @@ fun ChatScreen(
                         messages.filter { it.id in selectedIds }.all { it.isMine },
                     onCancel = { selectMode = false; selectedIds = emptySet() },
                     onForward = {
+                        val parts = com.pismo.messenger.core.Albums.partIds(messages)
                         forwardBatch = messages
                             .filter { it.id in selectedIds }
-                            .map { ForwardItem(it.id, it.text, it.senderName) }
+                            .map { ForwardItem(it.id, it.text, it.senderName, it.id in parts) }
                     },
                     onDelete = {
                         val ids = selectedIds.toList()
@@ -1291,6 +1292,28 @@ fun ChatScreen(
                                             else selectedIds + ids
                                         if (selectedIds.isEmpty()) selectMode = false
                                     },
+                                    // Альбом — одно сообщение: отвечаем на него
+                                    // и пересылаем его целиком.
+                                    onReply = { replyTo = group.first() },
+                                    onForward = {
+                                        forwardBatch = group.mapIndexed { i, m ->
+                                            ForwardItem(m.id, m.text, m.senderName, albumPart = i > 0)
+                                        }
+                                    },
+                                    onDelete = if (com.pismo.messenger.core.UserSession.isAdmin ||
+                                        group.all { it.isMine }) {
+                                        {
+                                            scope.launch {
+                                                group.forEach { m ->
+                                                    runCatching {
+                                                        ChatRepository.deleteMessage(scopeKind, m.id, m.fileName)
+                                                    }
+                                                }
+                                                reload()
+                                            }
+                                            Unit
+                                        }
+                                    } else null,
                                 )
                                 return@itemsIndexedGroups
                             }

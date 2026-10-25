@@ -144,5 +144,17 @@ object Albums {
         return out
     }
 
+    /**
+     * Номера «продолжений» пачек — всех вложений альбома, кроме первого.
+     * По ним пересылка помечает продолжения знаком пачки, и у получателя
+     * альбом приходит альбомом, а не россыпью отдельных снимков с десятком
+     * одинаковых «Переслано от…».
+     */
+    fun partIds(list: List<ChatMessage>): Set<Int> {
+        val out = HashSet<Int>()
+        for (g in group(list)) if (g.size > 1) for (i in 1 until g.size) out += g[i].id
+        return out
+    }
+
     data class CaptionRow(val id: Int, val senderId: Int, val createdAtMs: Long, val text: String)
 }

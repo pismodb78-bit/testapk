@@ -603,11 +603,12 @@ fun ChannelChatScreen(
                             .all { it.senderId == UserSession.effectiveId },
                     onCancel = { selectMode = false; selectedIds = emptySet() },
                     onForward = {
+                        val parts = com.pismo.messenger.core.Albums.partIds(messages)
                         forwardBatch = messages
                             .filter { it.id in selectedIds }
                             .map {
                                 com.pismo.messenger.ui.chat.ForwardItem(
-                                    it.id, it.text, it.senderName
+                                    it.id, it.text, it.senderName, it.id in parts
                                 )
                             }
                     },
@@ -705,6 +706,34 @@ fun ChannelChatScreen(
                                             if (ids.all { it in selectedIds }) selectedIds - ids
                                             else selectedIds + ids
                                         if (selectedIds.isEmpty()) selectMode = false
+                                    },
+                                    // Альбом — одно сообщение: отвечаем на него
+                                    // и пересылаем его целиком.
+                                    onReply = { replyTo = group.first() },
+                                    onForward = {
+                                        forwardBatch = group.mapIndexed { i, m ->
+                                            com.pismo.messenger.ui.chat.ForwardItem(
+                                                m.id, m.text, m.senderName, albumPart = i > 0
+                                            )
+                                        }
+                                    },
+                                    onDelete = run {
+                                        val mine = group.all { it.senderId == UserSession.effectiveId }
+                                        if (mine || perms.isAdminLike) {
+                                            {
+                                                scope.launch {
+                                                    group.forEach { m ->
+                                                        runCatching {
+                                                            ServerRepository.deleteChannelMessage(
+                                                                m.id, asModerator = !mine && perms.isAdminLike,
+                                                            )
+                                                        }
+                                                    }
+                                                    reload()
+                                                }
+                                                Unit
+                                            }
+                                        } else null
                                     },
                                 )
                                 return@items

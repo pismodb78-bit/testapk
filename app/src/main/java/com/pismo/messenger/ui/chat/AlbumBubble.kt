@@ -78,6 +78,12 @@ fun AlbumBubble(
     selected: Boolean = false,
     onEnterSelect: () -> Unit = {},
     onToggleSelect: () -> Unit = {},
+    /** Ответить на альбом целиком — цитатой первого вложения. */
+    onReply: () -> Unit = {},
+    /** Переслать альбом целиком — у получателя он придёт тоже альбомом. */
+    onForward: () -> Unit = {},
+    /** Удалить весь альбом; null — нельзя (чужой и не модератор). */
+    onDelete: (() -> Unit)? = null,
 ) {
     if (msgs.isEmpty()) return
     val head = msgs.first()
@@ -85,11 +91,17 @@ fun AlbumBubble(
     val isMine = head.isMine
     val caption = head.text
     var viewerBytes by remember(head.id) { mutableStateOf<ByteArray?>(null) }
+    // Меню альбома — то же, что у обычного сообщения: долгое нажатие по
+    // плитке раньше сразу включало выделение, и ни ответить на альбом, ни
+    // переслать его одним действием было нельзя.
+    var menuOpen by remember(head.id) { mutableStateOf(false) }
+    var askDelete by remember(head.id) { mutableStateOf(false) }
 
     Row(
         Modifier.fillMaxWidth().padding(vertical = 3.dp),
         horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start,
     ) {
+        Box {
         Column(
             Modifier
                 .widthIn(max = 312.dp)
@@ -118,7 +130,7 @@ fun AlbumBubble(
                 onOpenMedia = onOpenMedia,
                 onPhoto = { bytes -> viewerBytes = bytes },
                 onVideo = { f, name, id -> onOpenVideo(f, name, id, head.senderName, caption) },
-                onLongPress = onEnterSelect,
+                onLongPress = { if (selectMode) onToggleSelect() else menuOpen = true },
                 onSelect = onToggleSelect,
             )
 
@@ -151,10 +163,60 @@ fun AlbumBubble(
                 )
             }
         }
+
+        androidx.compose.material3.DropdownMenu(
+            expanded = menuOpen,
+            onDismissRequest = { menuOpen = false },
+        ) {
+            androidx.compose.material3.DropdownMenuItem(
+                text = { Text("↩  Ответить") },
+                onClick = { menuOpen = false; onReply() },
+            )
+            androidx.compose.material3.DropdownMenuItem(
+                text = { Text("↪  Переслать альбом") },
+                onClick = { menuOpen = false; onForward() },
+            )
+            androidx.compose.material3.DropdownMenuItem(
+                text = { Text("☑  Выбрать") },
+                onClick = { menuOpen = false; onEnterSelect() },
+            )
+            if (onDelete != null) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("🗑  Удалить альбом", color = Color(0xFFE06C6C)) },
+                    onClick = { menuOpen = false; askDelete = true },
+                )
+            }
+        }
+        }
     }
 
     viewerBytes?.let { b ->
         FullscreenImageViewer(bytes = b, onDismiss = { viewerBytes = null })
+    }
+
+    // Целый альбом — это десяток сообщений разом: без вопроса не удаляем.
+    if (askDelete && onDelete != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { askDelete = false },
+            containerColor = PismoColors.BgElevated,
+            title = { Text("Удалить альбом?", color = PismoColors.TextPrimary) },
+            text = {
+                Text(
+                    "Удалятся все вложения альбома (${msgs.size}).",
+                    color = PismoColors.TextSecondary,
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { askDelete = false; onDelete() }) {
+                    Text("Удалить", color = Color(0xFFE06C6C))
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { askDelete = false }) {
+                    Text("Отмена", color = PismoColors.Blurple)
+                }
+            },
+        )
     }
 }
 
