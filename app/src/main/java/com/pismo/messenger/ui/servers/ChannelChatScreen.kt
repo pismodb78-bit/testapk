@@ -93,7 +93,6 @@ import com.pismo.messenger.net.SignalingClient
 import com.pismo.messenger.ui.chat.DateJumpDialog
 import com.pismo.messenger.ui.chat.MAX_ATTACH_BYTES
 import com.pismo.messenger.ui.chat.MessageBubble
-import com.pismo.messenger.ui.chat.PendingFile
 import com.pismo.messenger.ui.chat.PinnedMessagesDialog
 import com.pismo.messenger.ui.chat.VOICE_MAX_SECONDS
 import com.pismo.messenger.ui.chat.fileSizeOf
