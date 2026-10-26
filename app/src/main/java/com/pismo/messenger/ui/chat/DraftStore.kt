@@ -10,6 +10,7 @@ internal data class SavedDraft(val text: String, val files: List<PendingFile>)
 /** Локальные черновики; вложения лежат в приватной папке приложения, не в Preferences. */
 internal object DraftStore {
     private const val PREFS = "chat_drafts_v1"
+    private val fileSignatures = mutableMapOf<String, String>()
     private fun id(key: String) = key.replace(Regex("[^A-Za-z0-9_.-]"), "_")
     fun has(context: Context, key: String): Boolean = context.getSharedPreferences(PREFS, 0).contains(id(key))
     fun load(context: Context, key: String): SavedDraft {
@@ -36,20 +37,24 @@ internal object DraftStore {
         if (text.isBlank() && files.isEmpty()) {
             prefs.edit().remove(k).apply()
             File(context.filesDir, "chat-drafts/$k").deleteRecursively()
+            synchronized(fileSignatures) { fileSignatures.remove(k) }
             return
         }
         runCatching {
             val dir = File(context.filesDir, "chat-drafts/$k").apply { mkdirs() }
+            val signature = files.joinToString("|") { "${System.identityHashCode(it.bytes)}:${it.bytes.size}:${it.fileName}:${System.identityHashCode(it.cover)}" }
+            val writeFiles = synchronized(fileSignatures) { fileSignatures[k] != signature }
             val arr = JSONArray()
             files.forEachIndexed { i, f ->
                 val dataName = "file_$i.bin"
-                File(dir, dataName).writeBytes(f.bytes)
+                if (writeFiles || !File(dir, dataName).isFile) File(dir, dataName).writeBytes(f.bytes)
                 val coverName = if (f.cover != null) "cover_$i.bin" else ""
-                if (f.cover != null) File(dir, coverName).writeBytes(f.cover)
+                if (f.cover != null && (writeFiles || !File(dir, coverName).isFile)) File(dir, coverName).writeBytes(f.cover)
                 arr.put(JSONObject().put("name", f.fileName).put("image", f.isImage)
                     .put("data", dataName).put("cover", coverName))
             }
             prefs.edit().putString(k, JSONObject().put("text", text).put("files", arr).toString()).apply()
+            synchronized(fileSignatures) { fileSignatures[k] = signature }
         }
     }
 }
