@@ -695,6 +695,7 @@ private fun ChannelRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (com.pismo.messenger.ui.chat.DraftStore.has(LocalContext.current, "chan:${channel.id}")) Text("Черновик", color = Color.Red, fontSize = 12.sp, maxLines = 1)
             if (channel.lastMessage.isNotBlank()) {
                 Text(
                     channel.lastMessage,

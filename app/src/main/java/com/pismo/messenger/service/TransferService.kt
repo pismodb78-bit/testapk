@@ -19,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import java.util.HashSet
 
 /**
  * Служба на время передачи файлов.
@@ -55,6 +56,8 @@ class TransferService : Service() {
      * старом срыве сообщалось бы заново при каждом следующем файле.
      */
     private val seenLive = HashSet<Long>()
+    private val reportedCancellationIds = HashSet<Long>()
+    private val reportedFailureIds = HashSet<Long>()
     private var lastShownMs = 0L
     private var watcher: kotlinx.coroutines.Job? = null
 
@@ -120,9 +123,9 @@ class TransferService : Service() {
             Transfers.active.collect { list ->
                 val live = list.filter { it.error == null }
                 live.forEach { seenLive.add(it.id) }
+                reportFailures(list)
 
                 if (live.isEmpty()) {
-                    reportFailures(list)
                     finish()
                     return@collect
                 }
@@ -146,7 +149,24 @@ class TransferService : Service() {
 
     /** Сорвавшееся — отдельным сообщением: о нём надо знать, а полосы уже нет. */
     private fun reportFailures(list: List<Transfers.Task>) {
-        val failed = list.filter { it.error != null && it.id in seenLive }
+        val failed = list.filter { it.error != null && !it.cancelled && it.id in seenLive && reportedFailureIds.add(it.id) }
+        val cancelled = list.filter { it.cancelled && reportedCancellationIds.add(it.id) }
+        if (cancelled.isNotEmpty() && Notifications.allowed(this)) {
+            val text = cancelled.joinToString(", ") { it.fileName }
+            runCatching {
+                NotificationManagerCompat.from(this).notify(
+                    Notifications.ID_TRANSFER_DONE,
+                    NotificationCompat.Builder(this, Notifications.CHANNEL_TRANSFERS)
+                        .setSmallIcon(R.mipmap.ic_launcher)
+                        .setContentTitle("Передача отменена")
+                        .setContentText(text)
+                        .setAutoCancel(true)
+                        .setTimeoutAfter(10_000L)
+                        .setContentIntent(openApp())
+                        .build()
+                )
+            }
+        }
         if (failed.isEmpty() || !Notifications.allowed(this)) return
         val title = if (failed.size == 1) {
             (if (failed[0].download) "Не удалось загрузить" else "Не удалось отправить")

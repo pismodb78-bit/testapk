@@ -47,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -64,6 +65,7 @@ import com.pismo.messenger.data.repo.GroupRepository
 import com.pismo.messenger.data.repo.PresenceRepository
 import com.pismo.messenger.data.repo.ProfileRepository
 import com.pismo.messenger.net.SignalingClient
+import com.pismo.messenger.ui.chat.DraftStore
 import com.pismo.messenger.ui.components.GroupAvatar
 import com.pismo.messenger.ui.components.LetterAvatar
 import com.pismo.messenger.ui.components.UnreadBadge
@@ -525,6 +527,7 @@ private fun ConversationRow(
                     )
                 }
             }
+            if (DraftStore.has(LocalContext.current, "dm:${c.userId}")) Text("Черновик", color = Color.Red, fontSize = 12.sp, maxLines = 1)
             if (c.lastMessage.isNotBlank()) {
                 Text(
                     c.lastMessage,
@@ -581,6 +584,7 @@ private fun GroupRow(
                     modifier = Modifier.weight(1f, fill = false),
                 )
             }
+            if (DraftStore.has(LocalContext.current, "group:${g.id}")) Text("Черновик", color = Color.Red, fontSize = 12.sp, maxLines = 1)
             Text(
                 g.lastMessage.ifBlank { "${g.memberCount} участник(ов)" },
                 color = PismoColors.TextMuted,

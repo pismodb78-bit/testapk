@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import com.pismo.messenger.ui.chat.jumpToCenter
+import com.pismo.messenger.ui.chat.DraftStore
+import com.pismo.messenger.ui.chat.PendingFile
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -135,7 +137,9 @@ fun ChannelChatScreen(
     var perms by remember { mutableStateOf(ServerPermissions()) }
     // TextFieldValue, а не String: подсказка @упоминаний обязана знать, где
     // стоит курсор, иначе непонятно, какое из «@» в строке дополняется.
-    var input by remember { mutableStateOf(TextFieldValue("")) }
+    val draftKey = "chan:$channelId"
+    val initialDraft = remember(channelId) { DraftStore.load(context, draftKey) }
+    var input by remember(channelId) { mutableStateOf(TextFieldValue(initialDraft.text)) }
     var replyTo by remember { mutableStateOf<ChatMessage?>(null) }
     var editing by remember { mutableStateOf<ChatMessage?>(null) }
     var loading by remember(channelId) { mutableStateOf(remembered == null) }
@@ -192,7 +196,14 @@ fun ChannelChatScreen(
     // умел их с самого начала — не хватало ровно кнопок.
     // Вложений может быть несколько: выбираются пачкой и уходят отдельными
     // сообщениями — в строке базы ровно одно место под файл.
-    var pending by remember(channelId) { mutableStateOf<List<PendingFile>>(emptyList()) }
+    var pending by remember(channelId) { mutableStateOf<List<PendingFile>>(initialDraft.files) }
+    LaunchedEffect(channelId, input.text, pending) {
+        val textSnapshot = input.text
+        val filesSnapshot = pending
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            DraftStore.save(context, draftKey, textSnapshot, filesSnapshot)
+        }
+    }
     /** Сообщение, к которому только что прыгнули по цитате: мигает и гаснет. */
     var flashId by remember(channelId) { mutableIntStateOf(0) }
     var showGifPicker by remember { mutableStateOf(false) }
