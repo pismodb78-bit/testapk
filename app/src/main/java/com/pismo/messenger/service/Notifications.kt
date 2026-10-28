@@ -194,6 +194,8 @@ object Notifications {
         mentions: Int,
         replies: Int = 0,
         preview: String = "Новое сообщение в канале",
+        /** Сообщение, к которому перейти по нажатию; 0 — просто в канал. */
+        messageId: Int = 0,
     ) {
         if (!Prefs.notificationsEnabled) return
         if (!hasPermission(context)) return
@@ -201,6 +203,7 @@ object Notifications {
         val extras = Bundle().apply {
             putInt("open_channel", channelId)
             putString("open_name", channelName)
+            if (messageId > 0) putInt("open_msg", messageId)
         }
         val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
             .setSmallIcon(R.mipmap.ic_launcher)

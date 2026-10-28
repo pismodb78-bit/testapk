@@ -1055,6 +1055,14 @@ object ServerRepository {
         ) { rs -> rs.getInt("id") to rs.getInt("max_id") }.toMap()
     }.getOrDefault(emptyMap())
 
+    /** Самое новое чужое сообщение канала — к нему ведёт уведомление. */
+    suspend fun latestIncomingId(channelId: Int): Int = runCatching {
+        Db.scalarInt(
+            "SELECT COALESCE(MAX(id),0) FROM server_messages WHERE channel_id=? AND sender_id<>?",
+            channelId, UserSession.effectiveId,
+        )
+    }.getOrDefault(0)
+
     /** Заглушённые мной серверы — их каналы не должны звенеть. */
     suspend fun mutedChannelIds(): Set<Int> = runCatching {
         Db.query(

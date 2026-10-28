@@ -258,7 +258,7 @@ class PollingService : LifecycleService() {
         val badges = runCatching { ServerRepository.badges() }
             .getOrDefault(emptyList())
 
-        for ((channelId, _) in fresh) {
+        for ((channelId, maxId) in fresh) {
             if (channelId in muted) continue
 
             val badge = badges.firstOrNull { it.channelId == channelId }
@@ -281,6 +281,8 @@ class PollingService : LifecycleService() {
                 mentions = mentions,
                 replies = replies,
                 preview = preview,
+                // Нажатие ведёт к самому новому сообщению — оно и звенело.
+                messageId = maxId,
             )
         }
     }

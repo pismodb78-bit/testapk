@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity() {
      */
     private val openTarget = mutableStateOf<OpenTarget?>(null)
 
-    private data class OpenTarget(val kind: Int, val id: Int, val name: String)
+    private data class OpenTarget(val kind: Int, val id: Int, val name: String, val msg: Int = 0)
 
     private fun targetFrom(i: android.content.Intent?): OpenTarget? {
         val e = i?.extras ?: return null
@@ -56,10 +56,11 @@ class MainActivity : ComponentActivity() {
         val dm = e.getInt("open_chat_with", 0)
         val group = e.getInt("open_group", 0)
         val channel = e.getInt("open_channel", 0)
+        val msg = e.getInt("open_msg", 0)
         return when {
             dm > 0 -> OpenTarget(0, dm, name)
             group > 0 -> OpenTarget(1, group, name)
-            channel > 0 -> OpenTarget(2, channel, name)
+            channel > 0 -> OpenTarget(2, channel, name, msg)
             else -> null
         }
     }
@@ -212,7 +213,16 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    composable(Routes.CHANNEL_PATTERN) { entry ->
+                    composable(
+                        Routes.CHANNEL_PATTERN,
+                        arguments = listOf(
+                            androidx.navigation.navArgument("msg") {
+                                type = androidx.navigation.NavType.StringType
+                                nullable = true
+                                defaultValue = null
+                            }
+                        ),
+                    ) { entry ->
                         val serverId = entry.arguments?.getString("server")?.toIntOrNull()
                             ?: return@composable
                         val channelId = entry.arguments?.getString("channel")?.toIntOrNull()
@@ -222,6 +232,7 @@ class MainActivity : ComponentActivity() {
                             serverId = serverId,
                             channelId = channelId,
                             channelName = name,
+                            focusMessageId = entry.arguments?.getString("msg")?.toIntOrNull() ?: 0,
                             onBack = { navController.popBackStack() },
                         )
                     }
@@ -258,7 +269,13 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(target, start) {
                     val t = target ?: return@LaunchedEffect
                     if (start != Routes.CHATS || UserSession.effectiveId <= 0) return@LaunchedEffect
-                    openTarget.value = null
+                    // Цель сбрасываем ТОЛЬКО ПОСЛЕ перехода. Раньше она
+                    // обнулялась первой строкой — а цель и есть ключ этого
+                    // эффекта: смена ключа отменяла его на ближайшей паузе.
+                    // У личных чатов пауз нет, и они открывались; у канала
+                    // пауза — запрос «какого он сервера», и до перехода дело
+                    // не доходило вовсе: нажатие на уведомление сервера
+                    // просто открывало приложение.
                     val route = when (t.kind) {
                         0 -> Routes.chat(t.id, t.name, false)
                         1 -> Routes.chat(t.id, t.name, true)
@@ -270,8 +287,12 @@ class MainActivity : ComponentActivity() {
                                 com.pismo.messenger.data.db.Db.queryFirst(
                                     "SELECT server_id, name FROM server_channels WHERE id=?", t.id,
                                 ) { rs -> rs.getInt(1) to (rs.getString(2) ?: "") }
-                            }.getOrNull() ?: return@LaunchedEffect
-                            Routes.channel(found.first, t.id, t.name.ifBlank { found.second })
+                            }.getOrNull()
+                            if (found == null) {
+                                openTarget.value = null
+                                return@LaunchedEffect
+                            }
+                            Routes.channel(found.first, t.id, t.name.ifBlank { found.second }, t.msg)
                         }
                     }
                     runCatching {
@@ -280,6 +301,7 @@ class MainActivity : ComponentActivity() {
                             launchSingleTop = true
                         }
                     }
+                    openTarget.value = null
                 }
 
                 // Заставки «нет связи» здесь больше нет. Обрыв на телефоне
@@ -326,7 +348,8 @@ object Routes {
     const val CHATS = "chats"
     const val SETTINGS = "settings"
     const val CHAT_PATTERN = "chat/{id}/{group}/{name}"
-    const val CHANNEL_PATTERN = "channel/{server}/{channel}/{name}"
+    /** msg — к какому сообщению перейти (по уведомлению); необязателен. */
+    const val CHANNEL_PATTERN = "channel/{server}/{channel}/{name}?msg={msg}"
     const val MEMBERS_PATTERN = "members/{server}"
 
     fun chat(id: Int, name: String, isGroup: Boolean): String {
@@ -334,9 +357,9 @@ object Routes {
         return "chat/$id/${if (isGroup) 1 else 0}/$safe"
     }
 
-    fun channel(serverId: Int, channelId: Int, name: String): String {
+    fun channel(serverId: Int, channelId: Int, name: String, msgId: Int = 0): String {
         val safe = android.net.Uri.encode(name.ifBlank { "канал" })
-        return "channel/$serverId/$channelId/$safe"
+        return "channel/$serverId/$channelId/$safe" + if (msgId > 0) "?msg=$msgId" else ""
     }
 
     fun members(serverId: Int): String = "members/$serverId"

@@ -158,9 +158,15 @@ class PushService : FirebaseMessagingService() {
                     PushLog.add("  пропущено: в push нет номера канала")
                     return
                 }
+                // Номера сообщения в push нет — берём последнее чужое в канале:
+                // по нажатию канал откроется на нём и подсветит его.
+                val latest = runCatching {
+                    kotlinx.coroutines.runBlocking { ServerRepository.latestIncomingId(cid) }
+                }.getOrDefault(0)
                 Notifications.showChannelMessage(
                     this, cid, name, mentions = 0,
                     preview = preview { ServerRepository.previewOfLatestInChannel(cid) },
+                    messageId = latest,
                 )
                 PushLog.add("  показано: канал $cid")
             }

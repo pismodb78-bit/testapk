@@ -119,6 +119,8 @@ fun ChannelChatScreen(
     channelId: Int,
     channelName: String,
     onBack: () -> Unit,
+    /** Пришли по уведомлению — к этому сообщению, со вспышкой; 0 — к концу. */
+    focusMessageId: Int = 0,
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -205,6 +207,9 @@ fun ChannelChatScreen(
     }
     /** Сообщение, к которому только что прыгнули по цитате: мигает и гаснет. */
     var flashId by remember(channelId) { mutableIntStateOf(0) }
+    /** К какому сообщению перейти, когда лента загрузится (по уведомлению). */
+    var pendingFocus by remember(channelId) { mutableIntStateOf(focusMessageId) }
+    var firstLoadDone by remember(channelId) { mutableStateOf(false) }
     var showGifPicker by remember { mutableStateOf(false) }
     // Свой лист вложений — тот же, что в личной переписке.
     var showAttach by remember { mutableStateOf(false) }
@@ -340,7 +345,10 @@ fun ChannelChatScreen(
         // Кружок ставим, только если показать нечего: с запомненной лентой
         // он перекрыл бы уже нарисованные сообщения ради того же результата.
         if (remembered == null) loading = true
-        reload(scrollToEnd = true)
+        // По уведомлению листаем к сообщению сами (ниже) — к концу не тянем,
+        // иначе одна прокрутка перебивала бы другую.
+        reload(scrollToEnd = pendingFocus <= 0)
+        firstLoadDone = true
     }
 
     LaunchedEffect(channelId) {
@@ -578,6 +586,15 @@ fun ChannelChatScreen(
                 jumpNote = "Сообщение не найдено — возможно, удалено."
             }
         }
+    }
+
+    // Пришли по уведомлению: свежая лента загружена — к тому самому
+    // сообщению, с подсветкой, как переход по цитате.
+    LaunchedEffect(channelId, firstLoadDone) {
+        if (!firstLoadDone || pendingFocus <= 0) return@LaunchedEffect
+        val id = pendingFocus
+        pendingFocus = 0
+        jumpToQuoted(id)
     }
 
 
