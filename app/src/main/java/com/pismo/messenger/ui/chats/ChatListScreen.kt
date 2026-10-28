@@ -527,6 +527,8 @@ private fun ConversationRow(
                     )
                 }
             }
+            // Читаем счётчик — метка обновится, как только черновик появится или уйдёт.
+            DraftStore.changes.intValue
             if (DraftStore.has(LocalContext.current, "dm:${c.userId}")) Text("Черновик", color = Color.Red, fontSize = 12.sp, maxLines = 1)
             if (c.lastMessage.isNotBlank()) {
                 Text(
@@ -584,6 +586,7 @@ private fun GroupRow(
                     modifier = Modifier.weight(1f, fill = false),
                 )
             }
+            DraftStore.changes.intValue
             if (DraftStore.has(LocalContext.current, "group:${g.id}")) Text("Черновик", color = Color.Red, fontSize = 12.sp, maxLines = 1)
             Text(
                 g.lastMessage.ifBlank { "${g.memberCount} участник(ов)" },

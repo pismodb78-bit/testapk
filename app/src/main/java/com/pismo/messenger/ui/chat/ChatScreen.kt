@@ -1026,6 +1026,9 @@ fun ChatScreen(
     fun feedIndexOf(match: (ChatMessage) -> Boolean): Int =
         feedGroups().indexOfFirst { group -> group.any(match) }
 
+    // «Сегодня» для плашек дат — состоянием, которое само сменяется в полночь.
+    val todayMs = com.pismo.messenger.ui.components.rememberToday()
+
     Scaffold(
         containerColor = PismoColors.BgMain,
         topBar = {
@@ -1272,10 +1275,11 @@ fun ChatScreen(
                             // дня (внутри пузыря порядок обычный, сверху вниз,
                             // переворот касается только самих элементов).
                             val older = visible.getOrNull(index + 1)?.last()
+                            // Сравниваем КАЛЕНДАРНЫЕ ДНИ, а не подписи: подпись
+                            // зависит от «сегодня», а день сообщения — нет.
                             val showDate = older == null ||
-                                    formatDateSeparator(older.createdAtMs) !=
-                                    formatDateSeparator(msg.createdAtMs)
-                            if (showDate) DateSeparator(formatDateSeparator(msg.createdAtMs))
+                                    !com.pismo.messenger.core.sameDay(older.createdAtMs, msg.createdAtMs)
+                            if (showDate) DateSeparator(formatDateSeparator(msg.createdAtMs, todayMs))
 
                             // Пачка из нескольких вложений — одна плитка.
                             if (group.size > 1) {

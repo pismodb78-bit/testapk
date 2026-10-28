@@ -41,9 +41,40 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
 
+    /**
+     * Куда перейти по нажатию на уведомление. Уведомление клало в намерение,
+     * какой чат открыть, но приложение эти данные нигде не читало — нажатие
+     * открывало просто список чатов.
+     */
+    private val openTarget = mutableStateOf<OpenTarget?>(null)
+
+    private data class OpenTarget(val kind: Int, val id: Int, val name: String)
+
+    private fun targetFrom(i: android.content.Intent?): OpenTarget? {
+        val e = i?.extras ?: return null
+        val name = e.getString("open_name").orEmpty()
+        val dm = e.getInt("open_chat_with", 0)
+        val group = e.getInt("open_group", 0)
+        val channel = e.getInt("open_channel", 0)
+        return when {
+            dm > 0 -> OpenTarget(0, dm, name)
+            group > 0 -> OpenTarget(1, group, name)
+            channel > 0 -> OpenTarget(2, channel, name)
+            else -> null
+        }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        targetFrom(intent)?.let { openTarget.value = it }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestStartupPermissions()
+        // Запуск нажатием на уведомление (приложение было закрыто).
+        if (savedInstanceState == null) openTarget.value = targetFrom(intent)
 
         setContent {
             PismoTheme {
@@ -218,6 +249,36 @@ class MainActivity : ComponentActivity() {
 
                     composable(Routes.SETTINGS) {
                         SettingsScreen(onBack = { navController.popBackStack() })
+                    }
+                }
+
+                // ПЕРЕХОД ПО УВЕДОМЛЕНИЮ — когда вход уже выполнен и список
+                // чатов поднят. Назад из открытого чата — в список.
+                val target = openTarget.value
+                LaunchedEffect(target, start) {
+                    val t = target ?: return@LaunchedEffect
+                    if (start != Routes.CHATS || UserSession.effectiveId <= 0) return@LaunchedEffect
+                    openTarget.value = null
+                    val route = when (t.kind) {
+                        0 -> Routes.chat(t.id, t.name, false)
+                        1 -> Routes.chat(t.id, t.name, true)
+                        else -> {
+                            // У канала сервер неизвестен уведомлению — узнаём
+                            // по номеру канала. Голосовой канал открывается своим
+                            // чатом, без входа в звонок.
+                            val found = runCatching {
+                                com.pismo.messenger.data.db.Db.queryFirst(
+                                    "SELECT server_id, name FROM server_channels WHERE id=?", t.id,
+                                ) { rs -> rs.getInt(1) to (rs.getString(2) ?: "") }
+                            }.getOrNull() ?: return@LaunchedEffect
+                            Routes.channel(found.first, t.id, t.name.ifBlank { found.second })
+                        }
+                    }
+                    runCatching {
+                        navController.navigate(route) {
+                            popUpTo(Routes.CHATS) { inclusive = false }
+                            launchSingleTop = true
+                        }
                     }
                 }
 

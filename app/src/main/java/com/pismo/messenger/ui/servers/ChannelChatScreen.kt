@@ -551,6 +551,9 @@ fun ChannelChatScreen(
         feedGroups().indexOfFirst { group -> group.any(match) }
 
 
+    // «Сегодня» для плашек дат — состоянием, которое само сменяется в полночь.
+    val todayMs = com.pismo.messenger.ui.components.rememberToday()
+
     Scaffold(
         containerColor = PismoColors.BgMain,
         topBar = {
@@ -686,10 +689,11 @@ fun ChannelChatScreen(
                             // с датой стоит над самым ранним сообщением дня —
                             // у того, чей сосед сверху уже из другого дня.
                             val older = feed.getOrNull(index + 1)?.last()
+                            // Сравниваем КАЛЕНДАРНЫЕ ДНИ, а не подписи: подпись
+                            // зависит от «сегодня», а день сообщения — нет.
                             val showDate = older == null ||
-                                    formatDateSeparator(older.createdAtMs) !=
-                                    formatDateSeparator(msg.createdAtMs)
-                            if (showDate) DateSeparator(formatDateSeparator(msg.createdAtMs))
+                                    !com.pismo.messenger.core.sameDay(older.createdAtMs, msg.createdAtMs)
+                            if (showDate) DateSeparator(formatDateSeparator(msg.createdAtMs, todayMs))
 
                             if (group.size > 1) {
                                 com.pismo.messenger.ui.chat.AlbumBubble(

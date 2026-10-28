@@ -47,11 +47,30 @@ private val shortDateFmt = SimpleDateFormat("dd.MM.yy", RU)
 
 fun formatTime(millis: Long): String = timeFmt.format(Date(millis))
 
-/** «12 марта 2025» — тот же формат разделителя дат, что в ПК-версии. */
-fun formatDateSeparator(millis: Long): String {
+/** Начало дня (полночь по часам телефона), в который попадает момент. */
+fun dayStart(millis: Long): Long = Calendar.getInstance().apply {
+    timeInMillis = millis
+    set(Calendar.HOUR_OF_DAY, 0)
+    set(Calendar.MINUTE, 0)
+    set(Calendar.SECOND, 0)
+    set(Calendar.MILLISECOND, 0)
+}.timeInMillis
+
+/** Один ли календарный день у двух моментов. */
+fun sameDay(a: Long, b: Long): Boolean = dayStart(a) == dayStart(b)
+
+/**
+ * «12 марта 2025» — тот же формат разделителя дат, что в ПК-версии.
+ *
+ * [now] — «сегодня» для подписей «Сегодня» / «Вчера». Экран переписки держит
+ * его состоянием и обновляет в полночь: раньше «сегодня» бралось в момент
+ * отрисовки, и если переписка висела открытой с вечера, вчерашние сообщения
+ * так и оставались под плашкой «Сегодня».
+ */
+fun formatDateSeparator(millis: Long, now: Long = System.currentTimeMillis()): String {
     val cal = Calendar.getInstance().apply { timeInMillis = millis }
-    val today = Calendar.getInstance()
-    val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+    val today = Calendar.getInstance().apply { timeInMillis = now }
+    val yesterday = Calendar.getInstance().apply { timeInMillis = now; add(Calendar.DAY_OF_YEAR, -1) }
 
     fun sameDay(a: Calendar, b: Calendar) =
         a.get(Calendar.YEAR) == b.get(Calendar.YEAR) &&

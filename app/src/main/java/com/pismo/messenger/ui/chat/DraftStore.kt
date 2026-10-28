@@ -12,6 +12,14 @@ internal object DraftStore {
     private const val PREFS = "chat_drafts_v1"
     private val fileSignatures = mutableMapOf<String, String>()
     private fun id(key: String) = key.replace(Regex("[^A-Za-z0-9_.-]"), "_")
+
+    /**
+     * Счётчик изменений: списки чатов читают его, чтобы метка «Черновик»
+     * появлялась и пропадала сразу после выхода из чата, а не при следующей
+     * случайной перерисовке.
+     */
+    val changes = androidx.compose.runtime.mutableIntStateOf(0)
+
     fun has(context: Context, key: String): Boolean = context.getSharedPreferences(PREFS, 0).contains(id(key))
     fun load(context: Context, key: String): SavedDraft {
         val raw = context.getSharedPreferences(PREFS, 0).getString(id(key), null) ?: return SavedDraft("", emptyList())
@@ -35,9 +43,11 @@ internal object DraftStore {
         val prefs = context.getSharedPreferences(PREFS, 0)
         val k = id(key)
         if (text.isBlank() && files.isEmpty()) {
+            val had = prefs.contains(k)
             prefs.edit().remove(k).apply()
             File(context.filesDir, "chat-drafts/$k").deleteRecursively()
             synchronized(fileSignatures) { fileSignatures.remove(k) }
+            if (had) changes.intValue++
             return
         }
         runCatching {
@@ -53,8 +63,10 @@ internal object DraftStore {
                 arr.put(JSONObject().put("name", f.fileName).put("image", f.isImage)
                     .put("data", dataName).put("cover", coverName))
             }
+            val had = prefs.contains(k)
             prefs.edit().putString(k, JSONObject().put("text", text).put("files", arr).toString()).apply()
             synchronized(fileSignatures) { fileSignatures[k] = signature }
+            if (!had) changes.intValue++
         }
     }
 }

@@ -11,6 +11,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -117,6 +119,31 @@ fun FileBadge(badge: String, color: Color, size: Dp = 40.dp) {
             fontSize = if (badge.length > 3) 9.sp else 12.sp,
         )
     }
+}
+
+/**
+ * Начало сегодняшнего дня — состоянием. Меняется в полночь (и при возврате
+ * в приложение на следующий день), и все плашки «Сегодня» / «Вчера» в ленте
+ * пересчитываются разом.
+ */
+@Composable
+fun rememberToday(): Long {
+    var today by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableLongStateOf(com.pismo.messenger.core.dayStart(System.currentTimeMillis()))
+    }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) {
+            val next = java.util.Calendar.getInstance().apply {
+                timeInMillis = today
+                add(java.util.Calendar.DAY_OF_YEAR, 1)
+            }.timeInMillis
+            val wait = (next - System.currentTimeMillis()).coerceIn(1_000L, 60_000L)
+            kotlinx.coroutines.delay(wait)
+            val now = com.pismo.messenger.core.dayStart(System.currentTimeMillis())
+            if (now != today) today = now
+        }
+    }
+    return today
 }
 
 /** Разделитель дат в ленте сообщений. */

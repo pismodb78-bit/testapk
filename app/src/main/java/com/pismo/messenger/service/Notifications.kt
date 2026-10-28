@@ -116,13 +116,24 @@ object Notifications {
                 .setData(android.net.Uri.parse("package:" + context.packageName))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
-    private fun openAppIntent(context: Context, extras: Bundle? = null): PendingIntent {
+    /**
+     * Нажатие на уведомление — в приложение, к тому, о чём оно.
+     *
+     * [requestCode] у каждого уведомления СВОЙ: при общем нуле система считала
+     * все намерения одним и тем же, и новое уведомление переписывало адрес
+     * старому — нажатие на сообщение Пети открывало переписку с Васей.
+     */
+    private fun openAppIntent(
+        context: Context,
+        extras: Bundle? = null,
+        requestCode: Int = 0,
+    ): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             extras?.let { putExtras(it) }
         }
         return PendingIntent.getActivity(
-            context, 0, intent,
+            context, requestCode, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
     }
@@ -133,6 +144,7 @@ object Notifications {
 
         val extras = Bundle().apply {
             putInt("open_chat_with", senderId)
+            putString("open_name", senderName)
         }
         val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
             .setSmallIcon(R.mipmap.ic_launcher)
@@ -142,7 +154,7 @@ object Notifications {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setAutoCancel(true)
-            .setContentIntent(openAppIntent(context, extras))
+            .setContentIntent(openAppIntent(context, extras, ID_MESSAGE_BASE + senderId))
             .build()
 
         runCatching {
@@ -155,14 +167,17 @@ object Notifications {
         if (!Prefs.notificationsEnabled) return
         if (!hasPermission(context)) return
 
-        val extras = Bundle().apply { putInt("open_group", groupId) }
+        val extras = Bundle().apply {
+            putInt("open_group", groupId)
+            putString("open_name", groupName)
+        }
         val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("👥 $groupName")
             .setContentText(preview)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
-            .setContentIntent(openAppIntent(context, extras))
+            .setContentIntent(openAppIntent(context, extras, ID_MESSAGE_BASE + 100_000 + groupId))
             .build()
 
         runCatching {
@@ -183,7 +198,10 @@ object Notifications {
         if (!Prefs.notificationsEnabled) return
         if (!hasPermission(context)) return
 
-        val extras = Bundle().apply { putInt("open_channel", channelId) }
+        val extras = Bundle().apply {
+            putInt("open_channel", channelId)
+            putString("open_name", channelName)
+        }
         val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
             .setSmallIcon(R.mipmap.ic_launcher)
             // Разделяем поводы: упоминание, ответ на моё сообщение и просто
@@ -208,7 +226,7 @@ object Notifications {
                 else NotificationCompat.PRIORITY_DEFAULT
             )
             .setAutoCancel(true)
-            .setContentIntent(openAppIntent(context, extras))
+            .setContentIntent(openAppIntent(context, extras, ID_MESSAGE_BASE + 200_000 + channelId))
             .build()
 
         runCatching {
