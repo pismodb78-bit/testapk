@@ -729,7 +729,7 @@ fun ChannelChatScreen(
                         // Пачка вложений, отправленная разом, показывается
                         // одной плиткой — как в личной переписке.
                         val feed = feedGroups()
-                        items(feed.size, key = { feed[it].first().id }) { index ->
+                        feedItems(feed) { index ->
                             val group = feed[index]
                             val msg = group.first()
                             // Сосед по номеру СТАРШЕ: список перевёрнут. Черта
@@ -799,7 +799,7 @@ fun ChannelChatScreen(
                                         } else null
                                     },
                                 )
-                                return@items
+                                return@feedItems
                             }
 
                             MessageBubble(
@@ -1379,5 +1379,19 @@ fun ChannelChatScreen(
                 }
             },
         )
+    }
+}
+
+/**
+ * Элементы ленты канала. Содержимое элемента — В ОДНОЙ КОЛОНКЕ: перевёрнутая
+ * лента раскладывает снизу вверх и то, что лежит внутри элемента россыпью, и
+ * черта с датой оказывалась ПОД первым сообщением дня (см. ChatScreen).
+ */
+private fun androidx.compose.foundation.lazy.LazyListScope.feedItems(
+    groups: List<List<ChatMessage>>,
+    content: @Composable (Int) -> Unit,
+) {
+    items(groups.size, key = { index -> groups[index].first().id }) { index ->
+        Column(Modifier.fillMaxWidth()) { content(index) }
     }
 }

@@ -1306,8 +1306,9 @@ fun ChatScreen(
                             // Сосед по номеру СТАРШЕ: список перевёрнут. Черта
                             // с датой стоит над самым ранним сообщением дня, а
                             // это тот, у кого сосед сверху — уже из другого
-                            // дня (внутри пузыря порядок обычный, сверху вниз,
-                            // переворот касается только самих элементов).
+                            // дня. Черта и пузырь лежат в одной колонке (см.
+                            // itemsIndexedGroups), иначе переворот ставил черту
+                            // ПОД пузырь.
                             val older = visible.getOrNull(index + 1)?.last()
                             // Сравниваем КАЛЕНДАРНЫЕ ДНИ, а не подписи: подпись
                             // зависит от «сегодня», а день сообщения — нет.
@@ -2147,13 +2148,18 @@ internal fun queryFileName(context: android.content.Context, uri: android.net.Ur
  * itemsIndexed для ГРУПП сообщений: одиночное сообщение — группа из одного,
  * альбом — из нескольких. Ключ берём у первого в группе: он не меняется ни
  * от подгрузки истории, ни от прихода новых сообщений.
+ *
+ * Содержимое элемента — В ОДНОЙ КОЛОНКЕ. Перевёрнутая лента раскладывает
+ * снизу вверх не только элементы, но и всё, что лежит внутри элемента
+ * россыпью: черта с датой, стоявшая в коде над пузырём, оказывалась ПОД ним.
+ * Первое сообщение дня выглядело вчерашним, а «Сегодня» висело внизу ленты.
  */
 private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedGroups(
     groups: List<List<ChatMessage>>,
     content: @androidx.compose.runtime.Composable (Int, List<ChatMessage>) -> Unit,
 ) {
     items(groups.size, key = { index -> groups[index].first().id }) { index ->
-        content(index, groups[index])
+        Column(Modifier.fillMaxWidth()) { content(index, groups[index]) }
     }
 }
 
