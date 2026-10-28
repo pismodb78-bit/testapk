@@ -550,6 +550,36 @@ fun ChannelChatScreen(
     fun feedIndexOf(match: (ChatMessage) -> Boolean): Int =
         feedGroups().indexOfFirst { group -> group.any(match) }
 
+    /**
+     * Нажали цитату — к исходному сообщению, со вспышкой. Одна на обычные
+     * пузыри и на альбомы: у плитки альбома своего перехода и вспышки не
+     * было, и нажатие на источник-альбом ничего не подсвечивало.
+     */
+    fun jumpToQuoted(id: Int) {
+        scope.launch {
+            // Сообщения может не быть на загруженной странице — тогда прыжок
+            // просто ничего не делал. Расширяем страницу ровно настолько,
+            // чтобы оно в неё вошло, тем же приёмом, что и переход по дате.
+            if (feedIndexOf { it.id == id } < 0) {
+                val need = ChatRepository.countSinceId(Scope.SERVER, channelId, id)
+                if (need > 0 && need + 5 > messages.size) {
+                    pageLimit = need + 5
+                    loading = true
+                    reload()
+                }
+            }
+            val idx = feedIndexOf { it.id == id }
+            if (idx >= 0) {
+                flashId = id
+                listState.jumpToCenter(idx)
+                delay(1200)
+                if (flashId == id) flashId = 0
+            } else {
+                jumpNote = "Сообщение не найдено — возможно, удалено."
+            }
+        }
+    }
+
 
     // «Сегодня» для плашек дат — состоянием, которое само сменяется в полночь.
     val todayMs = com.pismo.messenger.ui.components.rememberToday()
@@ -697,6 +727,8 @@ fun ChannelChatScreen(
 
                             if (group.size > 1) {
                                 com.pismo.messenger.ui.chat.AlbumBubble(
+                                    highlighted = group.any { it.id == flashId },
+                                    onQuoteClick = { id -> jumpToQuoted(id) },
                                     msgs = group,
                                     scopeKind = Scope.SERVER,
                                     isGroup = true,
@@ -756,35 +788,7 @@ fun ChannelChatScreen(
                             MessageBubble(
                                 transferKey = Transfers.channelKey(channelId),
                                 onOpenMedia = { id -> mediaViewerAt = id },
-                                onQuoteClick = { id ->
-                                    scope.launch {
-                                        // Сообщения может не быть на
-                                        // загруженной странице — тогда прыжок
-                                        // просто ничего не делал. Расширяем
-                                        // страницу ровно настолько, чтобы оно
-                                        // в неё вошло, тем же приёмом, что и
-                                        // переход по дате.
-                                        if (feedIndexOf { it.id == id } < 0) {
-                                            val need = ChatRepository.countSinceId(
-                                                Scope.SERVER, channelId, id
-                                            )
-                                            if (need > 0 && need + 5 > messages.size) {
-                                                pageLimit = need + 5
-                                                loading = true
-                                                reload()
-                                            }
-                                        }
-                                        val idx = feedIndexOf { it.id == id }
-                                        if (idx >= 0) {
-                                            flashId = id
-                                            listState.jumpToCenter(idx)
-                                            delay(1200)
-                                            if (flashId == id) flashId = 0
-                                        } else {
-                                            jumpNote = "Сообщение не найдено — возможно, удалено."
-                                        }
-                                    }
-                                },
+                                onQuoteClick = { id -> jumpToQuoted(id) },
                                 highlighted = msg.id == flashId,
                                 msg = msg,
                                 isGroup = true,          // в канале всегда показываем автора
@@ -795,7 +799,7 @@ fun ChannelChatScreen(
                                             // В канале автор подписан всегда —
                                             // там пишут многие.
                                             sender = msg.senderName,
-                                            caption = msg.text,
+                                            caption = com.pismo.messenger.core.QuoteText.bodyOf(msg.text),
                                         )
                                 },
                                 mentioned = msg.senderId != UserSession.effectiveId &&

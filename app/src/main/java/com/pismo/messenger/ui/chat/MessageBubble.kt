@@ -81,10 +81,61 @@ import com.pismo.messenger.ui.theme.PismoColors
 import kotlinx.coroutines.launch
 
 /**
- * Высота полоски с цитатой: полоса слева 30 dp плюс поля по 6 dp. Держим
- * константой, потому что под неё заранее резервируется место (см. пузырь).
+ * Цитата ответа: автор и одна-две строки — текст или чем было сообщение.
+ * Высота постоянная (полоса слева 30 dp плюс поля), поэтому заглушка
+ * «загрузка…» занимает ровно то же место и лента не дёргается, когда
+ * цитата приезжает.
  */
-private val QUOTE_HEIGHT = 42.dp
+@Composable
+internal fun QuoteRow(sender: String, text: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(0x22000000))
+            // Нажатие ведёт к исходному сообщению: раньше цитата была просто
+            // картинкой, и найти, на что отвечают, приходилось прокруткой.
+            .clickable { onClick() }
+            .padding(6.dp)
+    ) {
+        Box(
+            Modifier
+                .width(3.dp)
+                .height(30.dp)
+                .background(PismoColors.Cyan)
+        )
+        Spacer(Modifier.width(6.dp))
+        Column {
+            Text(
+                sender.ifBlank { " " },
+                color = PismoColors.Cyan,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+            Text(
+                text.ellipsize(50),
+                color = PismoColors.TextSecondary,
+                fontSize = 11.sp,
+                maxLines = 2,
+            )
+        }
+    }
+}
+
+/** «↪ Переслано от…» — строкой над содержимым пузыря. */
+@Composable
+internal fun ForwardHeader(header: String, isMine: Boolean) {
+    Text(
+        header,
+        color = if (isMine) Color(0xFFE1E6FF) else Color(0xFF8C96F8),
+        fontSize = 12.sp,
+        fontStyle = FontStyle.Italic,
+        maxLines = 1,
+        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+    )
+    Spacer(Modifier.height(4.dp))
+}
 
 /**
  * До скольких точек раскодируем картинку в пузыре.
@@ -160,6 +211,11 @@ fun MessageBubble(
     videoLink?.let { LinkVideoDialog(it) { videoLink = null } }
 
     var quote by remember(msg.id) { mutableStateOf(QuoteMemory.get(msg.replyToId, scopeKind)) }
+    /** Цитату так и не достали — место под неё не держим. */
+    var quoteFailed by remember(msg.id) { mutableStateOf(false) }
+    // Пометка пересылки — своей строкой над содержимым (см. QuoteText).
+    val forward = remember(msg.text) { com.pismo.messenger.core.QuoteText.splitForward(msg.text) }
+    val bodyText = forward?.body ?: msg.text
     var image by remember(msg.id) { mutableStateOf(MediaCache.peek(msg.id, "img")) }
     var audio by remember(msg.id) { mutableStateOf(MediaCache.peek(msg.id, "audio")) }
     var viewerBytes by remember(msg.id) { mutableStateOf<ByteArray?>(null) }
@@ -176,9 +232,16 @@ fun MessageBubble(
         image?.let { ImageShapes.remember(msg.id, it) }
 
         if (quote == null && msg.replyToId > 0 && !msg.isDeleted) {
-            quote = runCatching { ChatRepository.loadReplyQuote(msg.replyToId, scopeKind) }
-                .getOrNull()
-                ?.also { QuoteMemory.put(msg.replyToId, scopeKind, it) }
+            // Со второй попытки: связь на телефоне рвётся часто, и одна
+            // сорвавшаяся выборка оставляла вместо цитаты пустое место.
+            for (attempt in 0 until 3) {
+                quote = runCatching { ChatRepository.loadReplyQuote(msg.replyToId, scopeKind) }
+                    .getOrNull()
+                    ?.also { QuoteMemory.put(msg.replyToId, scopeKind, it) }
+                if (quote != null) break
+                kotlinx.coroutines.delay(1500L * (attempt + 1))
+            }
+            if (quote == null) quoteFailed = true
         }
         if (image == null && msg.hasImage) {
             val bytes = runCatching {
@@ -281,6 +344,13 @@ fun MessageBubble(
                         Spacer(Modifier.height(3.dp))
                     }
 
+                    // «↪ Переслано от…» — над вложением, а не хвостом текста:
+                    // у пересланного снимка без подписи пометка оставляла под
+                    // собой пустую строку.
+                    if (forward != null && !msg.isDeleted) {
+                        ForwardHeader(forward.header, isMine)
+                    }
+
                     if (msg.isDeleted) {
                         Text(
                             "🚫 Сообщение удалено",
@@ -297,45 +367,15 @@ fun MessageBubble(
                         // всё, что под ней. Высота у цитаты постоянная —
                         // полоска в две строки, — так что держать её место
                         // ничего не стоит.
-                        if (quote == null && msg.replyToId > 0) {
-                            Spacer(Modifier.height(QUOTE_HEIGHT + 6.dp))
-                        }
-
-                        quote?.let { q ->
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(Color(0x22000000))
-                                    // Нажатие ведёт к исходному сообщению:
-                                    // раньше цитата была просто картинкой, и
-                                    // найти, на что отвечают, приходилось
-                                    // прокруткой вручную.
-                                    .clickable { onQuoteClick(q.messageId) }
-                                    .padding(6.dp)
-                            ) {
-                                Box(
-                                    Modifier
-                                        .width(3.dp)
-                                        .height(30.dp)
-                                        .background(PismoColors.Cyan)
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Column {
-                                    Text(
-                                        q.sender,
-                                        color = PismoColors.Cyan,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                    )
-                                    Text(
-                                        q.text.ellipsize(50),
-                                        color = PismoColors.TextSecondary,
-                                        fontSize = 11.sp,
-                                        maxLines = 2,
-                                    )
-                                }
-                            }
+                        // Пока цитата едет — та же полоска с «загрузка…», а не
+                        // пустое место: пустота выглядела поломкой, а если
+                        // выборка срывалась, так и оставалась навсегда.
+                        val q = quote
+                        if (q != null) {
+                            QuoteRow(q.sender, q.text) { onQuoteClick(q.messageId) }
+                            Spacer(Modifier.height(6.dp))
+                        } else if (msg.replyToId > 0 && !quoteFailed) {
+                            QuoteRow("…", "загрузка…") { onQuoteClick(msg.replyToId) }
                             Spacer(Modifier.height(6.dp))
                         }
 
@@ -557,22 +597,22 @@ fun MessageBubble(
                             Spacer(Modifier.height(6.dp))
                         }
 
-                        if (msg.text.isNotBlank()) {
-                            val textLinks = remember(msg.text) {
-                                com.pismo.messenger.core.Links.find(msg.text)
+                        if (bodyText.isNotBlank()) {
+                            val textLinks = remember(bodyText) {
+                                com.pismo.messenger.core.Links.find(bodyText)
                             }
-                            var layout by remember(msg.text) {
+                            var layout by remember(bodyText) {
                                 mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null)
                             }
                             var linkMenu by remember(msg.id) { mutableStateOf<String?>(null) }
                             /** Ссылка под пальцем — её подсвечиваем. */
-                            var pressedLink by remember(msg.text) {
+                            var pressedLink by remember(bodyText) {
                                 mutableStateOf<IntRange?>(null)
                             }
 
                             Box {
                                 Text(
-                                    highlightMentions(msg.text, isMine, pressedLink),
+                                    highlightMentions(bodyText, isMine, pressedLink),
                                     color = PismoColors.onBubble(isMine),
                                     fontSize = 15.sp,
                                     onTextLayout = { layout = it },
@@ -591,7 +631,7 @@ fun MessageBubble(
                                     // нажатие и долгое нажатие по остальному
                                     // тексту перестали бы доходить до пузыря.
                                     modifier = if (textLinks.isEmpty()) Modifier
-                                    else Modifier.pointerInput(msg.text) {
+                                    else Modifier.pointerInput(bodyText) {
                                         awaitEachGesture {
                                             val down = awaitFirstDown(requireUnconsumed = false)
                                             val off = layout?.getOffsetForPosition(down.position)
@@ -696,7 +736,7 @@ fun MessageBubble(
                             // в самом сообщении не всегда понятно, куда он
                             // ведёт, — длинные ссылки обрезаются, а короткие
                             // вроде t.me/xxx ничего не говорят.
-                            LinkSourceRows(msg.text)
+                            LinkSourceRows(bodyText)
                         }
                     }
 

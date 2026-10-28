@@ -546,28 +546,69 @@ object ChatRepository {
         // фото, кружок или файл выглядел пустой полоской с одним именем: по
         // ней нельзя понять, на что вообще отвечают. Вложения не тянем — только
         // отметку об их наличии, иначе цитата поднимала бы с диска сам файл.
+        //
+        // И следующее сообщение того же автора в том же чате: если оно идёт
+        // со знаком пачки, источник — альбом. Отдельного столбца у альбома нет,
+        // а знак зашифрован, так что сравнить его можно только здесь.
+        val sameChat = when (scope) {
+            Scope.DM -> "x.receiver_id = m.receiver_id"
+            Scope.GROUP -> "x.group_id = m.group_id"
+            Scope.SERVER -> "x.channel_id = m.channel_id"
+        }
+        // У сообщений каналов отметки «удалено» нет — их удаляют строкой.
+        val del = if (scope == Scope.SERVER) "0" else "m.is_deleted"
         val sql = """
             SELECT m.text, m.file_name,
                    (m.image_data IS NOT NULL) AS has_img,
                    (m.audio_data IS NOT NULL) AS has_audio,
                    (m.video_data IS NOT NULL) AS has_video,
-                   TRIM(CONCAT(u.Name,' ',u.Surname)) AS sname, u.login
+                   $del AS del,
+                   TRIM(CONCAT(u.Name,' ',u.Surname)) AS sname, u.login,
+                   (SELECT x.text FROM ${scope.table} x
+                     WHERE x.sender_id = m.sender_id AND $sameChat AND x.id > m.id
+                     ORDER BY x.id LIMIT 1) AS next_text
             FROM ${scope.table} m JOIN users u ON u.id = m.sender_id
             WHERE m.id = ?
         """.trimIndent()
-        return Db.queryFirst(sql, replyToId) { rs ->
-            val txt = com.pismo.messenger.core.Albums.strip(
-                runCatching { Crypto.dec(rs.getString("text")) }.getOrDefault("")
-            )
+        val full = runCatching {
+            Db.queryFirst(sql, replyToId) { rs ->
+                val raw = runCatching { Crypto.dec(rs.getString("text")) }.getOrDefault("")
+                val next = runCatching { Crypto.dec(rs.getString("next_text")) }.getOrDefault("")
+                val img = rs.bool("has_img")
+                val fn = rs.getString("file_name")
+                val tile = img || com.pismo.messenger.core.MediaKinds.isVideo(fn)
+                val album = tile && (com.pismo.messenger.core.Albums.isPart(raw) ||
+                        com.pismo.messenger.core.Albums.isPart(next))
+                ReplyQuote(
+                    messageId = replyToId,
+                    sender = rs.str("sname").trim().ifBlank { rs.str("login") },
+                    text = com.pismo.messenger.core.QuoteText.describe(
+                        raw, img, rs.bool("has_audio"), rs.bool("has_video"), fn,
+                        album = album, deleted = rs.bool("del"),
+                    ),
+                )
+            }
+        }
+        if (full.isSuccess) {
+            // Строки нет — сообщение стёрто совсем. Так и пишем: пустая
+            // цитата (или пустое место под неё) выглядит поломкой.
+            return full.getOrNull() ?: ReplyQuote(replyToId, "", "🚫 Сообщение удалено")
+        }
+        // Старая база без столбцов вложений — хотя бы автор и текст.
+        return Db.queryFirst(
+            """
+            SELECT m.text, TRIM(CONCAT(u.Name,' ',u.Surname)) AS sname, u.login
+            FROM ${scope.table} m JOIN users u ON u.id = m.sender_id
+            WHERE m.id = ?
+            """.trimIndent(), replyToId,
+        ) { rs ->
+            val raw = runCatching { Crypto.dec(rs.getString("text")) }.getOrDefault("")
             ReplyQuote(
                 messageId = replyToId,
                 sender = rs.str("sname").trim().ifBlank { rs.str("login") },
-                text = quotePreview(
-                    txt, rs.bool("has_img"), rs.bool("has_audio"),
-                    rs.bool("has_video"), rs.str("file_name"),
-                ),
+                text = com.pismo.messenger.core.QuoteText.describe(raw, false, false, false, null),
             )
-        }
+        } ?: ReplyQuote(replyToId, "", "🚫 Сообщение удалено")
     }
 
     /**
@@ -577,14 +618,7 @@ object ChatRepository {
     internal fun quotePreview(
         text: String, hasImage: Boolean, hasAudio: Boolean,
         hasVideo: Boolean, fileName: String?,
-    ): String = when {
-        text.isNotBlank() -> text
-        hasImage -> "\uD83D\uDCF7 Фото"
-        hasVideo -> "\uD83C\uDFA5 Видео"
-        hasAudio -> "\uD83C\uDFA4 Голосовое сообщение"
-        !fileName.isNullOrBlank() -> "\uD83D\uDCCE " + fileName
-        else -> ""
-    }
+    ): String = com.pismo.messenger.core.QuoteText.describe(text, hasImage, hasAudio, hasVideo, fileName)
 
     // ── Счётчики для polling ──────────────────────────────────────────
     /**

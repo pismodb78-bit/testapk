@@ -1026,6 +1026,40 @@ fun ChatScreen(
     fun feedIndexOf(match: (ChatMessage) -> Boolean): Int =
         feedGroups().indexOfFirst { group -> group.any(match) }
 
+    /**
+     * Нажали цитату — к исходному сообщению, со вспышкой. Одна на обычные
+     * пузыри и на альбомы: у плитки альбома своего перехода и вспышки не
+     * было, и нажатие на источник-альбом ничего не подсвечивало.
+     */
+    fun jumpToQuoted(id: Int) {
+        scope.launch {
+            // Номер элемента ленты — через feedIndexOf: лента перевёрнута, и
+            // хронологический номер ей не подходит.
+            fun indexOf() = feedIndexOf { it.id == id }
+
+            // Сообщения может не быть на загруженной странице — тогда прыжок
+            // просто ничего не делал. Расширяем страницу ровно настолько,
+            // чтобы оно в неё вошло, тем же приёмом, что и переход по дате.
+            if (indexOf() < 0) {
+                val need = ChatRepository.countSinceId(scopeKind, targetId, id)
+                if (need > 0 && need + 5 > messages.size) {
+                    pageLimit = need + 5
+                    loading = true
+                    reload()
+                }
+            }
+            val idx = indexOf()
+            if (idx >= 0) {
+                flashId = id
+                listState.jumpToCenter(idx)
+                delay(1200)
+                if (flashId == id) flashId = 0
+            } else {
+                jumpNote = "Сообщение не найдено — возможно, удалено."
+            }
+        }
+    }
+
     // «Сегодня» для плашек дат — состоянием, которое само сменяется в полночь.
     val todayMs = com.pismo.messenger.ui.components.rememberToday()
 
@@ -1284,6 +1318,8 @@ fun ChatScreen(
                             // Пачка из нескольких вложений — одна плитка.
                             if (group.size > 1) {
                                 AlbumBubble(
+                                    highlighted = group.any { it.id == flashId },
+                                    onQuoteClick = { id -> jumpToQuoted(id) },
                                     msgs = group,
                                     scopeKind = scopeKind,
                                     isGroup = isGroup,
@@ -1334,40 +1370,7 @@ fun ChatScreen(
 
                             MessageBubble(
                                 transferKey = Transfers.chatKey(isGroup, targetId),
-                                onQuoteClick = { id ->
-                                    scope.launch {
-                                        // Номер элемента ленты — через
-                                        // feedIndexOf: лента перевёрнута, и
-                                        // хронологический номер ей не подходит.
-                                        fun indexOf() = feedIndexOf { it.id == id }
-
-                                        // Сообщения может не быть на
-                                        // загруженной странице — тогда прыжок
-                                        // просто ничего не делал. Расширяем
-                                        // страницу ровно настолько, чтобы оно
-                                        // в неё вошло, тем же приёмом, что и
-                                        // переход по дате.
-                                        if (indexOf() < 0) {
-                                            val need = ChatRepository.countSinceId(
-                                                scopeKind, targetId, id
-                                            )
-                                            if (need > 0 && need + 5 > messages.size) {
-                                                pageLimit = need + 5
-                                                loading = true
-                                                reload()
-                                            }
-                                        }
-                                        val idx = indexOf()
-                                        if (idx >= 0) {
-                                            flashId = id
-                                            listState.jumpToCenter(idx)
-                                            delay(1200)
-                                            if (flashId == id) flashId = 0
-                                        } else {
-                                            jumpNote = "Сообщение не найдено — возможно, удалено."
-                                        }
-                                    }
-                                },
+                                onQuoteClick = { id -> jumpToQuoted(id) },
                                 highlighted = msg.id == flashId,
                                 msg = msg,
                                 isGroup = isGroup,
@@ -1399,7 +1402,7 @@ fun ChatScreen(
                                         // ничего, и без него ролик висит сам
                                         // по себе — даже в личной переписке.
                                         sender = msg.senderName,
-                                        caption = msg.text,
+                                        caption = com.pismo.messenger.core.QuoteText.bodyOf(msg.text),
                                     )
                                 },
                                 selectMode = selectMode,

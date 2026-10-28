@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -84,12 +85,47 @@ fun AlbumBubble(
     onForward: () -> Unit = {},
     /** Удалить весь альбом; null — нельзя (чужой и не модератор). */
     onDelete: (() -> Unit)? = null,
+    /**
+     * Вспышка «вот оно» — после перехода по цитате или «показать в чате».
+     * Раньше у плитки её не было вовсе: переход к альбому прокручивал ленту,
+     * но какое из сообщений искомое, оставалось угадывать.
+     */
+    highlighted: Boolean = false,
+    /** Нажали цитату (альбом отправлен ответом) — к исходному сообщению. */
+    onQuoteClick: (Int) -> Unit = {},
 ) {
     if (msgs.isEmpty()) return
     val head = msgs.first()
     val last = msgs.last()
     val isMine = head.isMine
-    val caption = head.text
+    // Пересланный альбом несёт пометку в подписи первого вложения — с
+    // переводом строки на конце, и под мозаикой выходила пустая строка.
+    // Пометку — наверх, подпись — без неё.
+    val forward = remember(head.text) { com.pismo.messenger.core.QuoteText.splitForward(head.text) }
+    val caption = forward?.body ?: head.text
+    var quote by remember(head.id) {
+        mutableStateOf(QuoteMemory.get(head.replyToId, scopeKind))
+    }
+    var quoteFailed by remember(head.id) { mutableStateOf(false) }
+    LaunchedEffect(head.id) {
+        if (quote == null && head.replyToId > 0) {
+            for (attempt in 0 until 3) {
+                quote = runCatching { ChatRepository.loadReplyQuote(head.replyToId, scopeKind) }
+                    .getOrNull()
+                    ?.also { QuoteMemory.put(head.replyToId, scopeKind, it) }
+                if (quote != null) break
+                kotlinx.coroutines.delay(1500L * (attempt + 1))
+            }
+            if (quote == null) quoteFailed = true
+        }
+    }
+    val flash by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (highlighted) 1f else 0f,
+        animationSpec = androidx.compose.animation.core.tween(
+            durationMillis = if (highlighted) 150 else 900
+        ),
+        label = "albumFlash",
+    )
     var viewerBytes by remember(head.id) { mutableStateOf<ByteArray?>(null) }
     // Меню альбома — то же, что у обычного сообщения: долгое нажатие по
     // плитке раньше сразу включало выделение, и ни ответить на альбом, ни
@@ -106,6 +142,10 @@ fun AlbumBubble(
             Modifier
                 .widthIn(max = 312.dp)
                 .clip(RoundedCornerShape(10.dp))
+                .drawWithContent {
+                    drawContent()
+                    if (flash > 0f) drawRect(PismoColors.Cyan.copy(alpha = 0.30f * flash))
+                }
                 .background(if (isMine) PismoColors.Blurple else PismoColors.BgElevated)
                 .padding(3.dp)
                 // Фокус пузырю не нужен: из-за него лента подтягивала его к
@@ -120,6 +160,16 @@ fun AlbumBubble(
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 3.dp),
                 )
+            }
+
+            if (forward != null || head.replyToId > 0) {
+                Column(Modifier.padding(start = 4.dp, end = 4.dp, top = 3.dp, bottom = 3.dp)) {
+                    if (forward != null) ForwardHeader(forward.header, isMine)
+                    val q = quote
+                    if (q != null) QuoteRow(q.sender, q.text) { onQuoteClick(q.messageId) }
+                    else if (head.replyToId > 0 && !quoteFailed)
+                        QuoteRow("…", "загрузка…") { onQuoteClick(head.replyToId) }
+                }
             }
 
             AlbumGrid(
