@@ -13,6 +13,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.pismo.messenger.core.Prefs
 import com.pismo.messenger.core.UserSession
@@ -140,6 +141,35 @@ class MainActivity : ComponentActivity() {
                     }
                 )
 
+                // «НАЗАД» — ТОЛЬКО С ТОГО ЭКРАНА, ЧТО СЕЙЧАС НАВЕРХУ.
+                //
+                // Голый popBackStack(), позванный дважды, снимает и главный
+                // экран — и NavHost остаётся пустым: серое поле без единой
+                // кнопки, выйти из которого можно только перезапуском. Дважды
+                // он зовётся легко: уходящий экран ещё ~0,7 с уплывает и всё
+                // это время принимает нажатия. Стрелка «назад» канала стоит
+                // ровно там, где на экране серверов первая плитка, — вышел из
+                // канала, нажал на сервер, и нажатие уходило в стрелку
+                // уплывающего канала. То же при бане: окно в корне уводит из
+                // канала, а канал сам зовёт «назад» ещё раз.
+                fun backFrom(entry: androidx.navigation.NavBackStackEntry) {
+                    if (navController.currentBackStackEntry === entry) navController.popBackStack()
+                }
+
+                // Страховка: если стек всё же опустел, возвращаемся на главный
+                // экран, а не показываем пустоту.
+                val topEntry by navController.currentBackStackEntryAsState()
+                var hadEntry by remember { mutableStateOf(false) }
+                LaunchedEffect(topEntry) {
+                    if (topEntry != null) { hadEntry = true; return@LaunchedEffect }
+                    if (!hadEntry) return@LaunchedEffect
+                    runCatching {
+                        navController.navigate(
+                            if (UserSession.effectiveId > 0) Routes.CHATS else Routes.LOGIN
+                        )
+                    }
+                }
+
                 NavHost(navController = navController, startDestination = start) {
                     composable(Routes.LOGIN) {
                         LoginScreen(
@@ -156,8 +186,8 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    composable(Routes.REGISTER) {
-                        RegisterScreen(onDone = { navController.popBackStack() })
+                    composable(Routes.REGISTER) { entry ->
+                        RegisterScreen(onDone = { backFrom(entry) })
                     }
 
                     composable(Routes.CHATS) {
@@ -233,7 +263,7 @@ class MainActivity : ComponentActivity() {
                             channelId = channelId,
                             channelName = name,
                             focusMessageId = entry.arguments?.getString("msg")?.toIntOrNull() ?: 0,
-                            onBack = { navController.popBackStack() },
+                            onBack = { backFrom(entry) },
                         )
                     }
 
@@ -242,7 +272,7 @@ class MainActivity : ComponentActivity() {
                             ?: return@composable
                         ServerMembersScreen(
                             serverId = serverId,
-                            onBack = { navController.popBackStack() },
+                            onBack = { backFrom(entry) },
                         )
                     }
 
@@ -254,12 +284,12 @@ class MainActivity : ComponentActivity() {
                             targetId = id,
                             title = name,
                             isGroup = isGroup,
-                            onBack = { navController.popBackStack() },
+                            onBack = { backFrom(entry) },
                         )
                     }
 
-                    composable(Routes.SETTINGS) {
-                        SettingsScreen(onBack = { navController.popBackStack() })
+                    composable(Routes.SETTINGS) { entry ->
+                        SettingsScreen(onBack = { backFrom(entry) })
                     }
                 }
 
