@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
@@ -1126,6 +1127,8 @@ fun FullscreenVideoHost(
     var livePos by remember(video.msgId) { mutableIntStateOf(VideoPositions.get(video.msgId)) }
     /** Видно ли управление — его показывает и прячет сам плеер. */
     var chrome by remember(video.msgId) { mutableStateOf(true) }
+    // Альбомный режим «для кино»; закрыли — ориентация вернулась прежней.
+    val rotate = com.pismo.messenger.ui.components.rememberLandscapeToggle()
 
     fun close() {
         VideoPositions.put(video.msgId, livePos)
@@ -1147,6 +1150,8 @@ fun FullscreenVideoHost(
         ),
     ) {
         com.pismo.messenger.ui.components.FullScreenDialogWindow()
+        // Кнопки ушли — уходят и строка состояния с жестовой чертой.
+        com.pismo.messenger.ui.components.DialogSystemBars(hidden = !chrome)
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             VideoSurface(
                 file = video.file,
@@ -1232,13 +1237,22 @@ fun FullscreenVideoHost(
                 enter = fadeIn(),
                 exit = fadeOut(),
             ) {
-                IconButton(
-                    onClick = { close() },
-                    modifier = Modifier
+                Row(
+                    Modifier
                         .statusBarsPadding()
                         .padding(12.dp),
                 ) {
-                    Icon(Icons.Default.Close, "Закрыть", tint = Color.White)
+                    // Поворот — смотреть горизонтальное во весь экран.
+                    IconButton(onClick = { rotate.toggle() }) {
+                        Icon(
+                            Icons.Default.ScreenRotation,
+                            if (rotate.landscape) "Обычный режим" else "Альбомный режим",
+                            tint = Color.White,
+                        )
+                    }
+                    IconButton(onClick = { close() }) {
+                        Icon(Icons.Default.Close, "Закрыть", tint = Color.White)
+                    }
                 }
             }
         }

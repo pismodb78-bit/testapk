@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -143,6 +144,10 @@ fun MediaViewerHost(
     val context = LocalContext.current
     var chrome by remember { mutableStateOf(true) }
     var note by remember { mutableStateOf("") }
+    var menu by remember { mutableStateOf(false) }
+    // Альбомный режим «для кино» — кнопкой в шапке; закрыли просмотр —
+    // ориентация вернулась прежней.
+    val rotate = com.pismo.messenger.ui.components.rememberLandscapeToggle()
     // Скорость и «по кругу» — как в меню плеера Telegram. Живут на уровне
     // просмотра: переключил и листаешь дальше с тем же выбором.
     var speed by remember { mutableFloatStateOf(1f) }
@@ -167,6 +172,8 @@ fun MediaViewerHost(
             decorFitsSystemWindows = false,
         )) {
         com.pismo.messenger.ui.components.FullScreenDialogWindow()
+        // Интерфейс ушёл — уходят и строка состояния с жестовой чертой.
+        com.pismo.messenger.ui.components.DialogSystemBars(hidden = !chrome)
         // Отступы считаем САМИ и с запасом: внутри диалога система на части
         // телефонов отдаёт их нулевыми, и кнопки ложились под жестовую черту.
         // Берём большее из системного значения и гарантированного минимума.
@@ -197,6 +204,12 @@ fun MediaViewerHost(
                     VideoPage(
                         item, scopeKind, transferKey,
                         onToggleChrome = { chrome = !chrome },
+                        // Весь интерфейс просмотра — вместе с кнопками плеера:
+                        // ушли они — уходят и шапка, стрелки и подпись, кадр
+                        // остаётся один, как в кино. Касание возвращает всё.
+                        // Пока открыто меню «⋮», не прячем ничего — оно бы
+                        // закрылось у человека под пальцем.
+                        onControlsChange = { v -> if (v || (!menu && !speedMenu)) chrome = v },
                         speed = speed,
                         looping = looping,
                         // Сама везёт ролик ТОЛЬКО открытая страница: соседние
@@ -219,7 +232,6 @@ fun MediaViewerHost(
             LaunchedEffect(pager.currentPage) { chrome = true }
 
             val cur = feed.getOrNull(pager.currentPage) ?: return@Box
-            var menu by remember { mutableStateOf(false) }
 
             // ВЕСЬ ИНТЕРФЕЙС ПРОСМОТРА — СТРОГО ВНУТРИ ВИДИМОЙ ОБЛАСТИ.
             //
@@ -256,12 +268,12 @@ fun MediaViewerHost(
 
                 // КТО ПРИСЛАЛ — СВЕРХУ, как у ролика во весь экран: в
                 // просмотре от переписки ничего не остаётся, и без этого
-                // непонятно, чей это снимок. Справа место под «⋮» и крестик.
+                // непонятно, чей это снимок. Справа место под поворот, «⋮» и крестик.
                 Column(
                     Modifier
                         .align(Alignment.TopStart)
                         .fillMaxWidth()
-                        .padding(start = 16.dp, end = 118.dp, top = 14.dp),
+                        .padding(start = 16.dp, end = 170.dp, top = 14.dp),
                 ) {
                     if (cur.sender.isNotBlank()) {
                         Text(
@@ -287,6 +299,11 @@ fun MediaViewerHost(
                         .align(Alignment.TopEnd)
                         .padding(8.dp),
                 ) {
+                    // Поворот — смотреть горизонтальное во весь экран, как кино.
+                    RoundButton(
+                        Icons.Default.ScreenRotation,
+                        if (rotate.landscape) "Обычный режим" else "Альбомный режим",
+                    ) { rotate.toggle() }
                     Box {
                         RoundButton(Icons.Default.MoreVert, "Ещё") { menu = true }
                         androidx.compose.material3.DropdownMenu(
@@ -570,6 +587,8 @@ private fun VideoPage(
     scopeKind: Scope,
     transferKey: String,
     onToggleChrome: () -> Unit,
+    /** Плеер показал или спрятал свои кнопки. */
+    onControlsChange: (Boolean) -> Unit = {},
     speed: Float = 1f,
     looping: Boolean = false,
     /** Эта страница сейчас на экране (а не соседняя, собранная про запас). */
@@ -638,9 +657,10 @@ private fun VideoPage(
                     barLift = barLift,
                     speed = speed,
                     looping = looping,
-                    // Стрелки и подписи просмотра НЕ прячем вместе с кнопками
-                    // плеера: иначе у открытого ролика не было видно, чем
-                    // перейти к соседнему.
+                    // Интерфейс просмотра уходит и возвращается вместе с
+                    // кнопками плеера. Слушаем только открытую страницу:
+                    // соседние собраны про запас и тоже «показывают» кнопки.
+                    onControlsChange = { if (isCurrent) onControlsChange(it) },
                 )
             }
         } else {
