@@ -34,6 +34,20 @@ fun FullScreenDialogWindow() {
         // состояния: только так верх окна совпадает с верхом экрана.
         window.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        // И В ОБЛАСТЬ ВЫРЕЗА КАМЕРЫ ТОЖЕ. Без этого в альбомной ориентации
+        // окно начиналось правее выреза, а шириной оставалось во весь экран:
+        // слева просвечивала переписка, а правый край с кнопками уезжал за
+        // экран. От выреза отступает уже сама разметка.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            val attrs = window.attributes
+            val mode = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R)
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            else WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            if (attrs.layoutInDisplayCutoutMode != mode) {
+                attrs.layoutInDisplayCutoutMode = mode
+                window.attributes = attrs
+            }
+        }
         // Системные панели — прозрачные поверх чёрного фона просмотра.
         @Suppress("DEPRECATION")
         run {

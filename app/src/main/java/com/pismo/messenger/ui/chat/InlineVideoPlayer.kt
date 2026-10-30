@@ -23,6 +23,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -734,7 +739,18 @@ internal fun VideoSurface(
                 // плеер рисуется под ней; фиксированный отступ снизу нужен
                 // всё равно — иначе ползунок липнет к самому краю экрана и
                 // тащить его пальцем невозможно, палец попадает в систему.
-                .then(if (insetBottom) Modifier.navigationBarsPadding() else Modifier)
+                // Сбоку — ещё и от выреза камеры: в альбомной ориентации он
+                // сбоку, и время ролика пряталось под ним.
+                .then(
+                    if (insetBottom) Modifier.windowInsetsPadding(
+                        androidx.compose.foundation.layout.WindowInsets.navigationBars
+                            .union(androidx.compose.foundation.layout.WindowInsets.displayCutout)
+                            .only(
+                                androidx.compose.foundation.layout.WindowInsetsSides.Horizontal +
+                                        androidx.compose.foundation.layout.WindowInsetsSides.Bottom
+                            )
+                    ) else Modifier
+                )
                 .padding(
                     start = 6.dp,
                     end = 6.dp,
@@ -1129,6 +1145,14 @@ fun FullscreenVideoHost(
     var chrome by remember(video.msgId) { mutableStateOf(true) }
     // Альбомный режим «для кино»; закрыли — ориентация вернулась прежней.
     val rotate = com.pismo.messenger.ui.components.rememberLandscapeToggle()
+    // На низком горизонтальном экране полосу времени и подпись держим у
+    // низа: поднятые под высокий экран, они вставали посреди кадра.
+    val landscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
+            android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val cutoutSides = Modifier.windowInsetsPadding(
+        androidx.compose.foundation.layout.WindowInsets.displayCutout
+            .only(androidx.compose.foundation.layout.WindowInsetsSides.Horizontal)
+    )
 
     fun close() {
         VideoPositions.put(video.msgId, livePos)
@@ -1160,6 +1184,7 @@ fun FullscreenVideoHost(
                 onPositionChange = { livePos = it },
                 onControlsChange = { chrome = it },
                 insetBottom = true,
+                barLift = if (landscape) 16.dp else null,
                 onFullscreen = null,
                 onSave = {
                     scope.launch {
@@ -1198,10 +1223,9 @@ fun FullscreenVideoHost(
                     modifier = Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
-                        // Справа место под крестик: он остаётся на виду
-                        // всегда, иначе из скрытого управления было бы не
-                        // выйти.
-                        .padding(start = 16.dp, end = 60.dp, top = 18.dp),
+                        .then(cutoutSides)
+                        // Справа место под поворот и крестик.
+                        .padding(start = 16.dp, end = 110.dp, top = 18.dp),
                 )
             }
 
@@ -1220,9 +1244,10 @@ fun FullscreenVideoHost(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
+                        .then(cutoutSides)
                         // Над полосой времени, и с запасом: вплотную они
                         // читаются как одна куча, а полоса сама приподнята.
-                        .padding(start = 16.dp, end = 16.dp, bottom = 168.dp),
+                        .padding(start = 16.dp, end = 16.dp, bottom = if (landscape) 64.dp else 168.dp),
                 )
             }
 
@@ -1240,6 +1265,7 @@ fun FullscreenVideoHost(
                 Row(
                     Modifier
                         .statusBarsPadding()
+                        .then(cutoutSides)
                         .padding(12.dp),
                 ) {
                     // Поворот — смотреть горизонтальное во весь экран.

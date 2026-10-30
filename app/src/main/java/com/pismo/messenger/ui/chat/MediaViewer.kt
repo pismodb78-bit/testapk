@@ -20,6 +20,9 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -179,12 +182,27 @@ fun MediaViewerHost(
         // Берём большее из системного значения и гарантированного минимума.
         val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
         val statusInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-        val bottomPad = maxOf(navInset, 48.dp) + 28.dp
+        // АЛЬБОМНАЯ ОРИЕНТАЦИЯ — СВОИ ОТСТУПЫ. Запасы снизу и сверху сделаны
+        // под высокий экран; на низком горизонтальном они съедали треть
+        // высоты, и полоса перемотки вставала посреди кадра. А слева и справа
+        // там вырез камеры и кнопки навигации — от них отступаем отдельно.
+        val landscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
+                android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        val sides = WindowInsets.displayCutout.union(WindowInsets.navigationBars)
+            .only(androidx.compose.foundation.layout.WindowInsetsSides.Horizontal)
+            .asPaddingValues()
+        val layoutDir = androidx.compose.ui.platform.LocalLayoutDirection.current
+        val sideStart = sides.calculateStartPadding(layoutDir)
+        val sideEnd = sides.calculateEndPadding(layoutDir)
+        val bottomPad = if (landscape) maxOf(navInset, 8.dp) + 6.dp else maxOf(navInset, 48.dp) + 28.dp
+        val topPad = if (landscape) maxOf(statusInset, 8.dp) else maxOf(statusInset, 28.dp)
         // Полоса времени ролика — над панелью: плеер сам отступает от
         // жестовой черты, поэтому её высоту из подъёма вычитаем.
         val videoBarLift: Dp =
-            if (panelHeight > 0.dp) (bottomPad + panelHeight + 10.dp - navInset).coerceAtLeast(120.dp)
-            else 176.dp
+            if (panelHeight > 0.dp)
+                (bottomPad + panelHeight + (if (landscape) 4.dp else 10.dp) - navInset)
+                    .coerceAtLeast(if (landscape) 48.dp else 120.dp)
+            else if (landscape) 64.dp else 176.dp
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             // КЛЮЧ СТРАНИЦЫ — НОМЕР СООБЩЕНИЯ.
             //
@@ -246,7 +264,9 @@ fun MediaViewerHost(
                 Modifier
                     .fillMaxSize()
                     .padding(
-                        top = maxOf(statusInset, 28.dp),
+                        start = sideStart,
+                        end = sideEnd,
+                        top = topPad,
                         bottom = bottomPad,
                     ),
             ) {
@@ -414,8 +434,49 @@ fun MediaViewerHost(
                         // Снизу запас: если отступ системной панели вдруг
                         // придёт нулевым, кнопки всё равно не лягут на самый
                         // край и останутся нажимаемыми.
-                        .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
+                        .padding(
+                            start = 14.dp, end = 14.dp,
+                            top = if (landscape) 4.dp else 10.dp,
+                            bottom = if (landscape) 4.dp else 10.dp,
+                        ),
                 ) {
+                    // На низком горизонтальном экране — одной строкой: подпись
+                    // и счётчик слева, кнопки справа. Столбиком панель
+                    // съедала полэкрана.
+                    if (landscape) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                if (cur.caption.isNotBlank()) {
+                                    Text(
+                                        cur.caption,
+                                        color = Color.White,
+                                        fontSize = 13.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                Text(
+                                    (if (cur.isVideo) "Видео " else "Фото ") +
+                                            "${pager.currentPage + 1} из ${feed.size}" +
+                                            (if (note.isNotBlank()) " · $note" else ""),
+                                    color = Color(0xCCFFFFFF),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                )
+                            }
+                            RoundButton(Icons.Default.Download, "Сохранить") {
+                                scope.launch {
+                                    note = "Сохранение…"
+                                    note = if (saveItem(context, cur, scopeKind)) "Сохранено"
+                                    else "Не удалось сохранить"
+                                }
+                            }
+                            RoundButton(Icons.Default.Share, "Поделиться") {
+                                scope.launch { shareItem(context, cur, scopeKind) }
+                            }
+                        }
+                    } else {
                     // ЧТО НАПИСАЛ — СНИЗУ, над счётчиком: у снимка, у ролика и
                     // у каждого кадра альбома (подпись у пачки одна на всех).
                     // Длинная обрывается на третьей строке — целиком она в
@@ -454,6 +515,7 @@ fun MediaViewerHost(
                         RoundButton(Icons.Default.Share, "Поделиться") {
                             scope.launch { shareItem(context, cur, scopeKind) }
                         }
+                    }
                     }
                 }
             }
